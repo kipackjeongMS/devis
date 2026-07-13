@@ -1,0 +1,12 @@
+{
+  "organizations": [
+    "msazure",
+    "msazuredev"
+  ],
+  "projects": {
+    "msazure": [
+      "Azure AppConfig"
+    ],
+    "msazuredev": []
+  }
+}

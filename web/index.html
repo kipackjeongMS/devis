@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ADO PR Ops</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">◆</span>
+        <span>PR Ops</span>
+      </div>
+      <div class="topbar-actions">
+        <button id="btnRefresh" class="icon-btn" title="Refresh">⟳</button>
+        <button id="btnSettings" class="icon-btn" title="Settings">⚙</button>
+      </div>
+    </header>
+
+    <div id="filterbar" class="filterbar" hidden>
+      <label class="filter-field">
+        <span class="filter-label">Org</span>
+        <select id="orgFilter" class="filter-select"></select>
+      </label>
+      <label class="filter-field">
+        <span class="filter-label">Project</span>
+        <select id="projectFilter" class="filter-select"></select>
+      </label>
+      <div id="assignFilter" class="seg" role="group" aria-label="Assignment">
+        <button type="button" class="seg-btn" data-assign="mine">Me</button>
+        <button type="button" class="seg-btn" data-assign="notmine">Not me</button>
+        <button type="button" class="seg-btn" data-assign="all">All</button>
+      </div>
+    </div>
+
+    <main id="view" class="view">
+      <div class="loading">Loading…</div>
+    </main>
+
+    <div id="toast" class="toast" hidden></div>
+
+    <script src="vendor/mermaid.min.js" defer></script>
+    <script src="app.js" type="module"></script>
+  </body>
+</html>

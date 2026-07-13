@@ -1,0 +1,14 @@
+# Dependencies
+node_modules/
+
+# Runtime state (SQLite review store)
+data/
+
+# Compiled backend output (src/*.mts -> root *.mjs)
+/*.mjs
+
+# Compiled frontend output (web/src/*.ts -> web/*.js)
+/web/*.js
+
+# Logs
+*.log
