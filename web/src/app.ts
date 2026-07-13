@@ -191,12 +191,46 @@ function renderSettings(): void {
   });
   wrap.appendChild(add);
 
+  // ---- PR review model selector ----
+  let selectedModel = state.config.reviewModel || "";
+  wrap.appendChild(el(`<h2 style="margin-top:24px">PR review model</h2>`));
+  wrap.appendChild(
+    el(
+      `<div class="desc">AI model used for background PR reviews. <b>Auto</b> lets Copilot pick. Models are discovered from the Copilot CLI.</div>`
+    )
+  );
+  const modelRow = el(`<div class="org-add"></div>`);
+  const modelSelect = el(`<select class="filter-select" style="flex:1"></select>`) as HTMLSelectElement;
+  modelSelect.innerHTML = `<option value="">Auto (let Copilot pick)</option>`;
+  modelSelect.value = "";
+  modelRow.appendChild(modelSelect);
+  const refreshModels = el(`<button class="btn sm" title="Re-probe models from CLI">⟳</button>`) as HTMLButtonElement;
+  modelRow.appendChild(refreshModels);
+  wrap.appendChild(modelRow);
+
+  // Populate models async (non-blocking)
+  const loadModels = async (refresh = false): Promise<void> => {
+    try {
+      const { models } = await getJSON(`/api/models${refresh ? "?refresh=1" : ""}`);
+      const opts = `<option value="">Auto (let Copilot pick)</option>` +
+        (models as string[]).map((m: string) => `<option value="${esc(m)}">${esc(m)}</option>`).join("");
+      modelSelect.innerHTML = opts;
+      modelSelect.value = selectedModel;
+    } catch { /* leave auto-only if probe fails */ }
+  };
+  loadModels();
+  modelSelect.addEventListener("change", () => { selectedModel = modelSelect.value; });
+  refreshModels.addEventListener("click", () => {
+    refreshModels.disabled = true;
+    loadModels(true).finally(() => { refreshModels.disabled = false; });
+  });
+
   const actions = el(`<div class="org-add" style="justify-content:flex-end"></div>`);
   const save = el(`<button class="btn">Save</button>`) as HTMLButtonElement;
   save.addEventListener("click", async () => {
     save.disabled = true;
     try {
-      state.config = await postJSON("/api/config", { organizations: orgs, projects });
+      state.config = await postJSON("/api/config", { organizations: orgs, projects, reviewModel: selectedModel });
       state.org = "all";
       state.project = "all";
       toast("Saved", "ok");

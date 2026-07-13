@@ -13,6 +13,9 @@ export interface Config {
     // Per-org list of projects to scope "all active PRs" to. Orgs absent here (or
     // with an empty list) fall back to the org-wide reviewer=me query.
     projects: Record<string, string[]>;
+    // AI model used for background PR reviews (e.g. "claude-opus-4.8"). Empty or
+    // "auto" means the Copilot CLI picks automatically.
+    reviewModel: string;
 }
 
 function normalizeProjects(organizations: string[], raw: unknown): Record<string, string[]> {
@@ -35,21 +38,23 @@ export async function readConfig(): Promise<Config> {
         if (!Array.isArray(c.organizations)) c.organizations = [];
         // Migrate legacy configs that predate the `projects` field.
         c.projects = normalizeProjects(c.organizations, c.projects);
+        if (typeof c.reviewModel !== "string") c.reviewModel = "";
         return c as Config;
     } catch {
         // First run: seed with the primary org.
-        const seed: Config = { organizations: ["msazure"], projects: {} };
+        const seed: Config = { organizations: ["msazure"], projects: {}, reviewModel: "" };
         await writeConfig(seed).catch(() => {});
         return seed;
     }
 }
 
-export async function writeConfig(cfg: { organizations?: unknown; projects?: unknown }): Promise<Config> {
+export async function writeConfig(cfg: { organizations?: unknown; projects?: unknown; reviewModel?: unknown }): Promise<Config> {
     const arr = Array.isArray(cfg.organizations) ? cfg.organizations : [];
     const organizations = [...new Set(arr.map((s) => String(s).trim()).filter(Boolean))];
     const clean: Config = {
         organizations,
         projects: normalizeProjects(organizations, cfg.projects),
+        reviewModel: typeof cfg.reviewModel === "string" ? cfg.reviewModel.trim() : "",
     };
     await writeFile(CONFIG_PATH, JSON.stringify(clean, null, 2), "utf8");
     return clean;

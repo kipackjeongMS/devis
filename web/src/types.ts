@@ -96,6 +96,7 @@ export interface Review {
 export interface Config {
   organizations: string[];
   projects: Record<string, string[]>;
+  reviewModel: string;
 }
 
 /** How the list is filtered by reviewer assignment. */

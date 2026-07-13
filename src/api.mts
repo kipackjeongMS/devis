@@ -16,6 +16,7 @@ import {
     type Pr,
 } from "./ado.mjs";
 import { getServiceGroupRollouts, getRolloutGrid } from "./ev2.mjs";
+import { getAvailableModels } from "./models.mjs";
 
 // The active CLI session, injected after joinSession resolves. The bridge
 // endpoint pushes prompts through it.
@@ -37,6 +38,12 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
         if (p === "/api/config" && req.method === "POST") {
             const body = await readBody(req);
             return sendJson(res, 200, await writeConfig(body));
+        }
+
+        // ---- available AI models for PR review ----
+        if (p === "/api/models" && req.method === "GET") {
+            const refresh = q.get("refresh") === "1";
+            return sendJson(res, 200, { models: await getAvailableModels(refresh) });
         }
 
         // ---- active PRs across all configured (org, project) scopes ----

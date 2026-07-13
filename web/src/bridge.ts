@@ -99,10 +99,15 @@ export async function sendPrToCopilot(pr: PR, detail: Detail): Promise<void> {
     refreshReviewPanel(pr, panelEl);
   }
 
+  const reviewModel = state.config.reviewModel || "";
+  const modelNote = reviewModel
+    ? ` Use model='${reviewModel}' for the forked session.`
+    : "";
+
   lines.push("");
   lines.push("---");
   lines.push("IMPORTANT: Run this review in the BACKGROUND — do NOT perform it in this chat.");
-  lines.push("1. Call `fork_session` (omit `to_event_id`, so it forks at the latest turn) to create a separate chat session that contains a copy of this conversation, including the full PR content above.");
+  lines.push("1. Call `fork_session` (omit `to_event_id`, so it forks at the latest turn) to create a separate chat session that contains a copy of this conversation, including the full PR content above." + modelNote);
   lines.push("2. Call `send_session_message` targeting that new forked session's ID with this exact message:");
   lines.push("   \"Please review the Azure DevOps PR above thoroughly using a multi-agent approach:");
   lines.push("   1. Write the semantic 'story' of this change: in plain English, what is this PR actually doing, why (the underlying problem/motivation), and how do the changed files work together to accomplish it? Narrate intent, not a line-by-line diff recap. FORMAT the story as concise, scannable Markdown bullet points (each bullet a single idea; no wall-of-text paragraphs). Where a code flow, control/data path, sequence of calls, or a structural/architectural relationship would aid comprehension, include a valid Mermaid diagram in a ```mermaid fenced code block (use `flowchart TD` for flows/structure, `sequenceDiagram` for interactions). Keep each diagram small (<=~12 nodes) and syntactically valid.");
