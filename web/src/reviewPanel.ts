@@ -1,5 +1,6 @@
 // The background-review result panel: fetches the stored review for a PR, keeps
-// the list badge in sync, polls while running, and renders story + findings.
+// the list badge in sync, polls while running, and renders the semantic story +
+// implementation summary. Findings are componentized as staged inline diff comments.
 import { getJSON } from "./api.js";
 import { el } from "./dom.js";
 import { esc, timeAgo } from "./util.js";
@@ -67,11 +68,20 @@ export async function refreshReviewPanel(pr: PR, panel: HTMLElement): Promise<vo
     s.innerHTML = renderMarkdown(review.story);
     body.appendChild(s);
   }
-  if (review.findings && review.findings.trim()) {
-    body.appendChild(el('<div class="rev-sub">Review findings</div>'));
-    const f = el('<div class="md"></div>');
-    f.innerHTML = renderMarkdown(review.findings);
-    body.appendChild(f);
+  // Findings are componentized: each renders as a STAGED inline comment in the
+  // diff below (with a per-comment Post button), not listed here.
+  const staged = (review.findingsList || []).filter((f) => f && !f.posted);
+  if (staged.length) {
+    const n = staged.length;
+    body.appendChild(
+      el(
+        '<div class="rev-staged-hint">✦ ' +
+          n +
+          " inline review comment" +
+          (n === 1 ? "" : "s") +
+          " staged in the diff below — expand a changed file to review and Post them.</div>"
+      )
+    );
   }
   panel.appendChild(header);
   panel.appendChild(body);

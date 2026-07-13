@@ -12,11 +12,14 @@ export function diffToText(diff: Diff | null | undefined): string {
   if (diff.tooLarge) return `(file too large to diff inline: ${diff.oldCount}→${diff.newCount} lines — see it in ADO)`;
   if (!diff.hunks) return "(no textual changes)";
   const out: string[] = [];
+  // Each line is prefixed with its anchor: R<n> = right/new side (use side='right'),
+  // L<n> = left/old side (use side='left'). This lets the reviewer anchor findings.
   diff.hunks.forEach((h, i) => {
-    if (i > 0) out.push("  ...");
+    if (i > 0) out.push("       ⋯");
     for (const ln of h) {
-      const s = ln.t === "add" ? "+" : ln.t === "del" ? "-" : " ";
-      out.push(s + ln.text);
+      if (ln.t === "add") out.push(`R${ln.nn}: + ${ln.text}`);
+      else if (ln.t === "del") out.push(`L${ln.o}: - ${ln.text}`);
+      else out.push(`R${ln.nn}:   ${ln.text}`);
     }
   });
   return out.join("\n") || "(no textual changes)";
@@ -64,6 +67,7 @@ export async function sendPrToCopilot(pr: PR, detail: Detail): Promise<void> {
 
   lines.push("");
   lines.push(`## Changed files (${detail.files.length}) with diffs`);
+  lines.push("Each diff line is prefixed with its anchor: `R<n>` = right/new side (side='right'), `L<n>` = left/old side (side='left'). Use these exact numbers + the exact file path when anchoring findings.");
   for (const f of detail.files) {
     lines.push("");
     lines.push(`### ${f.changeType}: ${f.path}`);
@@ -110,11 +114,11 @@ export async function sendPrToCopilot(pr: PR, detail: Detail): Promise<void> {
   lines.push("1. Call `fork_session` (omit `to_event_id`, so it forks at the latest turn) to create a separate chat session that contains a copy of this conversation, including the full PR content above." + modelNote);
   lines.push("2. Call `send_session_message` targeting that new forked session's ID with this exact message:");
   lines.push("   \"Please review the Azure DevOps PR above thoroughly using a multi-agent approach:");
-  lines.push("   1. Write the semantic 'story' of this change: in plain English, what is this PR actually doing, why (the underlying problem/motivation), and how do the changed files work together to accomplish it? Narrate intent, not a line-by-line diff recap. FORMAT the story as concise, scannable Markdown bullet points (each bullet a single idea; no wall-of-text paragraphs). Where a code flow, control/data path, sequence of calls, or a structural/architectural relationship would aid comprehension, include a valid Mermaid diagram in a ```mermaid fenced code block (use `flowchart TD` for flows/structure, `sequenceDiagram` for interactions). Keep each diagram small (<=~12 nodes) and syntactically valid.");
-  lines.push("   2. Dispatch one agent to review the PR in depth using the `code-review-and-quality` skill (correctness, readability, architecture, security, performance).");
-  lines.push("   3. Check whether related PRs or branches exist in this repo or other repos (e.g. a companion/dependent change, an earlier version of this PR, or a linked service). If any are found, cross-review this PR against them for consistency.");
-  lines.push("   4. IMPORTANT — when the review is complete, publish the result back to the ADO DevOps canvas so it renders there, by POSTing a JSON body to " + callbackUrl + " using your `powershell` tool. Shape: { prId, status, summary, story, findings }. Set status='done', summary=a <=140-char one-line verdict, story=the semantic story (Markdown: concise bullet points, may include ```mermaid diagrams), findings=the full review findings (Markdown formatted as concise, scannable bullet points grouped under short headings like Correctness / Security / Readability / Performance — NOT dense paragraphs; include a ```mermaid diagram for any code flow, sequence, or structural relationship worth visualizing). Build the JSON safely so newlines/quotes/backticks survive — e.g. `$body = @{ prId='" + pr.id + "'; status='done'; summary='…'; story=$storyText; findings=$findingsText } | ConvertTo-Json -Depth 6; Invoke-RestMethod -Uri '" + callbackUrl + "' -Method Post -ContentType 'application/json' -Body $body`. If the review fails, POST { prId:'" + pr.id + "', status:'error', error:'<message>' } instead.");
-  lines.push("   5. After publishing, present the semantic story and findings, then ask which of the flagged issues should actually be posted as comments on the PR. Do NOT post anything to Azure DevOps yet — wait for confirmation on which findings to include.\"");
+  lines.push("   1. Write the semantic 'story' of this change: in plain English, what is this PR actually doing, why (the underlying problem/motivation), and how do the changed files work together to accomplish it? Then add a SHORT '## What changed' implementation summary — just a few brief bullets (what changed / why / notable decisions). Keep the WHOLE story compact and scannable (Markdown bullets, no wall-of-text). Where a code flow, control/data path, sequence of calls, or a structural relationship aids comprehension, include a small valid Mermaid diagram in a ```mermaid fenced block (`flowchart TD` for flows/structure, `sequenceDiagram` for interactions; <=~12 nodes, syntactically valid). Do NOT list individual issues/findings in the story — those go ONLY in the structured findings array below.");
+  lines.push("   2. Dispatch one agent to review the PR in depth using the `code-review-and-quality` skill (correctness, readability, architecture, security, performance). Produce EVERY commentable item as a discrete structured finding anchored to a specific file + line — this includes not just bugs/security/correctness/perf/readability issues but ALSO nits, typos/misspellings, and indentation/style. Each finding needs: file (the EXACT path from '## Changed files' above), line (the R<n> or L<n> number shown on the relevant diff line), side ('right' for R / 'left' for L), optional endLine for a range, severity ('high'|'medium'|'low'|'nit'), and comment (a concise, actionable review comment — what's wrong and the suggested fix). Anchor to the changed line the comment is about.");
+  lines.push("   3. Check whether related PRs or branches exist in this repo or other repos (e.g. a companion/dependent change, an earlier version of this PR, or a linked service). If any are found, cross-review this PR against them for consistency and add any resulting findings to the array.");
+  lines.push("   4. IMPORTANT — when the review is complete, publish the result back to the ADO DevOps canvas so it renders there, by POSTing a JSON body to " + callbackUrl + " using your `powershell` tool. Shape: { prId, status, summary, story, findings }. Set status='done'; summary=a <=140-char one-line verdict; story=the semantic story + '## What changed' bullets (Markdown, may include ```mermaid); findings=a JSON ARRAY of finding objects { file, line, side, endLine?, severity, comment } — one per commentable item (issues AND nits/typos/indentation). Build it safely so newlines/quotes survive, e.g. `$findings = @(@{ file='/src/foo.ts'; line=42; side='right'; severity='nit'; comment='Typo: \"recieve\" -> \"receive\".' }, @{ file='/src/bar.ts'; line=88; side='right'; severity='high'; comment='Possible null deref when the list is empty.' }); $body = @{ prId='" + pr.id + "'; status='done'; summary='…'; story=$storyText; findings=$findings } | ConvertTo-Json -Depth 8; Invoke-RestMethod -Uri '" + callbackUrl + "' -Method Post -ContentType 'application/json' -Body $body`. Always emit findings as an ARRAY even if there is only one (wrap in @( )). If there are genuinely no commentable items, send findings=@(). If the review fails, POST { prId:'" + pr.id + "', status:'error', error:'<message>' } instead.");
+  lines.push("   5. Do NOT post anything to Azure DevOps. The canvas STAGES each finding as an inline comment in the PR diff, and the human posts the ones they want via a per-comment Post button. Your job ends at publishing the JSON to the canvas.\"");
   lines.push("3. Back in THIS chat, reply with ONLY a one-line acknowledgment (e.g. \"🔍 Started background review for PR #" + pr.id + "; results will appear in the canvas when done.\"). Do NOT narrate, summarize, or perform any part of the actual review here.");
   await bridge(lines.join("\n"), `PR #${pr.id} sent to Copilot (background)`);
 }

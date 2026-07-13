@@ -5,7 +5,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { SessionRef } from "@github/copilot-sdk/extension";
 import { sendJson, readBody } from "./http.mjs";
 import { readConfig, writeConfig } from "./config.mjs";
-import { ensureDb, getReview, listReviews, upsertReview } from "./store.mjs";
+import { ensureDb, getReview, listReviews, upsertReview, markFindingPosted } from "./store.mjs";
+import type { Finding } from "./store.mjs";
 import {
     listAssignedPRs,
     listActivePRs,
@@ -144,15 +145,28 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
             await ensureDb();
             return sendJson(res, 200, upsertReview(b));
         }
-        // Single PR's stored review (or null).
+        // Single PR's stored review (or null). Parse structured findings for the client.
         if (p === "/api/review-result" && req.method === "GET") {
             await ensureDb();
-            return sendJson(res, 200, { review: getReview(q.get("prId")!) });
+            return sendJson(res, 200, { review: shapeReview(getReview(q.get("prId")!)) });
         }
         // All stored reviews (compact — for list badges).
         if (p === "/api/review-results" && req.method === "GET") {
             await ensureDb();
             return sendJson(res, 200, { reviews: listReviews() });
+        }
+
+        // ---- post ONE staged finding as a real ADO thread, then persist it posted ----
+        // Reuses createThread; keeps staging local until the user clicks "Post".
+        if (p === "/api/review/post-finding" && req.method === "POST") {
+            const b = await readBody(req);
+            if (!b.content || !String(b.content).trim()) return sendJson(res, 400, { error: "empty comment" });
+            const created = await createThread(b.org, b.project, b.repoId, b.prId, {
+                filePath: b.filePath, line: b.line, endLine: b.endLine, side: b.side, content: b.content,
+            });
+            await ensureDb();
+            if (b.findingId != null) markFindingPosted(b.prId, String(b.findingId));
+            return sendJson(res, 200, created);
         }
 
         // ---- Ev2 rollouts: all service groups, status-enriched summaries ----
@@ -171,4 +185,21 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
     } catch (e) {
         return sendJson(res, 500, { error: (e as Error).message || String(e) });
     }
+}
+
+// Shape a stored review row for the client: parse structured findings out of the
+// findings_json column into a `findingsList` array; drop the raw JSON string.
+function shapeReview(row: ReturnType<typeof getReview>): Record<string, unknown> | null {
+    if (!row) return null;
+    const { findings_json, ...rest } = row;
+    let findingsList: Finding[] = [];
+    if (findings_json) {
+        try {
+            const parsed = JSON.parse(findings_json);
+            if (Array.isArray(parsed)) findingsList = parsed;
+        } catch {
+            /* ignore malformed json */
+        }
+    }
+    return { ...rest, findingsList };
 }

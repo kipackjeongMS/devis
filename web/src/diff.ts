@@ -3,9 +3,17 @@
 import { el } from "./dom.js";
 import { esc } from "./util.js";
 import { getJSON } from "./api.js";
+import { state } from "./state.js";
 import { highlightCode } from "./highlight.js";
-import { renderThread, buildComposerRow } from "./threads.js";
-import type { PR, Detail, FileChange, Diff, DiffLine, Thread } from "./types.js";
+import { renderThread, buildComposerRow, renderStagedFinding } from "./threads.js";
+import type { PR, Detail, FileChange, Diff, DiffLine, Thread, Finding } from "./types.js";
+
+/** Unposted, line-anchored findings for one file (staged inline comments). */
+function stagedForFile(pr: PR, filePath: string): Finding[] {
+  const review = state.reviews ? state.reviews[String(pr.id)] : undefined;
+  const list = (review && review.findingsList) || [];
+  return list.filter((f) => f && !f.posted && f.file === filePath);
+}
 
 export function chgClass(t: string | undefined): [string, string] {
   const s = (t || "").toLowerCase();
@@ -41,11 +49,20 @@ export function renderFile(pr: PR, detail: Detail, file: FileChange, threads: Th
         );
         body.innerHTML = "";
         file._diff = diff; // cache for bridge
+        const staged = stagedForFile(pr, file.path);
+        if (staged.length && !head.querySelector(".file-ai-dot")) {
+          head.querySelector(".file-path")!.after(
+            el(`<span class="file-ai-dot" title="${staged.length} staged AI comment(s)">✦ ${staged.length}</span>`)
+          );
+        }
         // File-level threads (no line) render above the diff; line threads render inline.
         const fileLevel = threads.filter((t) => t.line == null);
         const lineThreads = threads.filter((t) => t.line != null);
+        const stagedFile = staged.filter((f) => f.line == null);
+        const stagedLine = staged.filter((f) => f.line != null);
         for (const t of fileLevel) body.appendChild(renderThread(pr, t));
-        body.appendChild(renderDiff(pr, detail, file, diff, lineThreads));
+        for (const f of stagedFile) body.appendChild(renderStagedFinding(pr, file, f));
+        body.appendChild(renderDiff(pr, detail, file, diff, lineThreads, stagedLine));
       } catch (e: any) {
         body.innerHTML = '<div class="diff-note">Could not load diff: ' + esc(e.message) + "</div>";
       }
@@ -61,9 +78,11 @@ export function renderDiff(
   detail: Detail,
   file: FileChange,
   diff: Diff,
-  lineThreads?: Thread[]
+  lineThreads?: Thread[],
+  stagedLine?: Finding[]
 ): HTMLElement {
   lineThreads = lineThreads || [];
+  stagedLine = stagedLine || [];
   if (diff.tooLarge) {
     return el(
       `<div class="diff-note">File too large to render inline (${diff.oldCount}→${diff.newCount} lines). Open in ADO.</div>`
@@ -71,7 +90,7 @@ export function renderDiff(
   }
   const hunks = diff.hunks || [];
   const wrap = el(`<div class="diff-wrap"></div>`);
-  if (!hunks.length && !lineThreads.length) {
+  if (!hunks.length && !lineThreads.length && !stagedLine.length) {
     wrap.appendChild(el(`<div class="diff-note">No textual changes.</div>`));
     return wrap;
   }
@@ -155,6 +174,29 @@ export function renderDiff(
     (bubble.querySelector(".n") as HTMLElement).textContent = count > 1 ? String(count) : "";
   }
 
+  // Place a STAGED AI finding inline directly under its anchored row (always
+  // visible — not toggled behind a bubble), or in the orphan block if off-diff.
+  function insertStaged(finding: Finding): void {
+    const side = finding.side || "right";
+    const k = keyOf(side, finding.line!);
+    const tr = rowByKey.get(k);
+    if (!tr) {
+      if (!orphans.querySelector(".diff-orphans-title")) {
+        orphans.appendChild(el(`<div class="diff-orphans-title">Comments outside the shown diff</div>`));
+      }
+      orphans.appendChild(renderStagedFinding(pr, file, finding));
+      return;
+    }
+    const trow = document.createElement("tr");
+    trow.className = "staged-row";
+    trow.dataset.anchor = k;
+    const td = document.createElement("td");
+    td.colSpan = 5;
+    td.appendChild(renderStagedFinding(pr, file, finding));
+    trow.appendChild(td);
+    tr.after(trow);
+  }
+
   function clearCompose(): void {
     tbody.querySelectorAll(".cmt-compose").forEach((r) => r.remove());
   }
@@ -234,7 +276,9 @@ export function renderDiff(
     (row.querySelector("textarea") as HTMLTextAreaElement).focus();
   });
 
-  // Initial paint of existing line-anchored threads.
+  // Initial paint: staged AI findings first (directly under the line), then
+  // existing ADO threads (which stack below and behind a bubble toggle).
+  for (const f of stagedLine) insertStaged(f);
   for (const t of lineThreads) insertThread(t);
 
   return wrap;

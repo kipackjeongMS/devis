@@ -13,6 +13,22 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, "data");
 const DB_PATH = join(DATA_DIR, "reviews.db");
 
+/**
+ * One structured, line-anchored review finding — rendered as a STAGED inline
+ * comment in the diff (never auto-posted). `id`/`posted` are managed server-side.
+ */
+export interface Finding {
+    id?: string;
+    file?: string | null;
+    line?: number | null;
+    endLine?: number | null;
+    side?: string | null; // "left" | "right"
+    severity?: string | null; // "high" | "medium" | "low" | "nit"
+    title?: string | null;
+    comment: string;
+    posted?: boolean;
+}
+
 /** A stored review row (one per PR). String columns are null until written. */
 export interface ReviewRow {
     pr_id: string;
@@ -24,6 +40,7 @@ export interface ReviewRow {
     summary: string | null;
     story: string | null;
     findings: string | null;
+    findings_json: string | null;
     error: string | null;
     created_at: string | null;
     updated_at: string | null;
@@ -42,7 +59,10 @@ export interface ReviewInput {
     status?: string | null;
     summary?: string | null;
     story?: string | null;
-    findings?: string | null;
+    // Legacy: freeform markdown. Structured: an array of anchored Findings
+    // (or a single Finding object — PowerShell's ConvertTo-Json can collapse a
+    // one-element array into a bare object).
+    findings?: string | Finding | Finding[] | null;
     error?: string | null;
 }
 
@@ -68,6 +88,11 @@ export async function ensureDb(): Promise<DatabaseSync> {
             updated_at TEXT
         );
     `);
+    // Migration: structured, line-anchored findings (staged inline comments).
+    const cols = db.prepare("PRAGMA table_info(reviews)").all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === "findings_json")) {
+        db.exec("ALTER TABLE reviews ADD COLUMN findings_json TEXT");
+    }
     return db;
 }
 
@@ -94,13 +119,46 @@ export function listReviews(): ReviewListItem[] {
 // Merge-then-replace so a partial write (e.g. the canvas marking status='running')
 // never clobbers fields a later write (the agent's story/findings) has yet to add,
 // and vice-versa. Only keys present & non-null in `r` overwrite existing values.
-type MergeKey = "org" | "project" | "repo" | "title" | "summary" | "story" | "findings" | "error";
+type MergeKey = "org" | "project" | "repo" | "title" | "summary" | "story" | "error";
+
+/** Assign stable ids + defaults so each finding can be staged/posted independently. */
+function normalizeFindings(list: Finding[]): Finding[] {
+    return list
+        .filter((f) => f && typeof f.comment === "string" && f.comment.trim() !== "")
+        .map((f, i) => ({
+            id: f.id != null && String(f.id).trim() !== "" ? String(f.id) : "f" + i,
+            file: f.file ?? null,
+            line: f.line ?? null,
+            endLine: f.endLine ?? null,
+            side: f.side ?? (f.line != null ? "right" : null),
+            severity: f.severity ?? null,
+            title: f.title ?? null,
+            comment: f.comment,
+            posted: !!f.posted,
+        }));
+}
 
 export function upsertReview(r: ReviewInput): ReviewRow {
     const now = new Date().toISOString();
     const prId = String(r.prId);
     const ex: Partial<ReviewRow> = getReview(prId) || {};
     const pick = (k: MergeKey): string | null => (r[k] != null ? r[k]! : ex[k] != null ? ex[k]! : null);
+
+    // Findings can arrive as structured (array -> findings_json) or legacy markdown
+    // (string -> findings). A structured write supersedes; absent input preserves.
+    let findings: string | null = ex.findings != null ? ex.findings : null;
+    let findingsJson: string | null = ex.findings_json != null ? ex.findings_json : null;
+    if (Array.isArray(r.findings)) {
+        findingsJson = JSON.stringify(normalizeFindings(r.findings));
+        findings = null;
+    } else if (r.findings && typeof r.findings === "object") {
+        // Single Finding object (PowerShell one-element array collapse) -> wrap.
+        findingsJson = JSON.stringify(normalizeFindings([r.findings]));
+        findings = null;
+    } else if (typeof r.findings === "string" && r.findings.trim() !== "") {
+        findings = r.findings;
+    }
+
     const row: ReviewRow = {
         pr_id: prId,
         org: pick("org"),
@@ -110,7 +168,8 @@ export function upsertReview(r: ReviewInput): ReviewRow {
         status: r.status != null ? r.status : ex.status != null ? ex.status : "pending",
         summary: pick("summary"),
         story: pick("story"),
-        findings: pick("findings"),
+        findings,
+        findings_json: findingsJson,
         error: pick("error"),
         created_at: ex.created_at != null ? ex.created_at : now,
         updated_at: now,
@@ -118,12 +177,37 @@ export function upsertReview(r: ReviewInput): ReviewRow {
     requireDb()
         .prepare(
             `INSERT OR REPLACE INTO reviews
-             (pr_id, org, project, repo, title, status, summary, story, findings, error, created_at, updated_at)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+             (pr_id, org, project, repo, title, status, summary, story, findings, findings_json, error, created_at, updated_at)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         )
         .run(
             row.pr_id, row.org, row.project, row.repo, row.title, row.status,
-            row.summary, row.story, row.findings, row.error, row.created_at, row.updated_at,
+            row.summary, row.story, row.findings, row.findings_json, row.error, row.created_at, row.updated_at,
         );
     return row;
+}
+
+/** Mark one staged finding as posted (survives the next review re-render/poll). */
+export function markFindingPosted(prId: string | number, findingId: string): Finding[] {
+    const row = getReview(prId);
+    if (!row || !row.findings_json) return [];
+    let list: Finding[];
+    try {
+        list = JSON.parse(row.findings_json) as Finding[];
+    } catch {
+        return [];
+    }
+    let changed = false;
+    for (const f of list) {
+        if (f.id === String(findingId)) {
+            f.posted = true;
+            changed = true;
+        }
+    }
+    if (changed) {
+        requireDb()
+            .prepare("UPDATE reviews SET findings_json = ?, updated_at = ? WHERE pr_id = ?")
+            .run(JSON.stringify(list), new Date().toISOString(), String(prId));
+    }
+    return list;
 }

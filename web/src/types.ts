@@ -77,6 +77,19 @@ export interface Diff {
   _error?: string;
 }
 
+/** A structured, line-anchored review finding — staged as an inline comment. */
+export interface Finding {
+  id: string;
+  file?: string | null;
+  line?: number | null;
+  endLine?: number | null;
+  side?: string | null; // "left" | "right"
+  severity?: string | null; // "high" | "medium" | "low" | "nit"
+  title?: string | null;
+  comment: string;
+  posted?: boolean;
+}
+
 /** A stored background-review result (GET /api/review-result[s]). */
 export interface Review {
   pr_id?: string;
@@ -84,6 +97,7 @@ export interface Review {
   summary?: string;
   story?: string;
   findings?: string;
+  findingsList?: Finding[];
   error?: string;
   updated_at?: string;
   org?: string;

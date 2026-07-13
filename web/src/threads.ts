@@ -3,7 +3,7 @@ import { el } from "./dom.js";
 import { esc, timeAgo } from "./util.js";
 import { postJSON } from "./api.js";
 import { toast } from "./toast.js";
-import type { PR, FileChange, Thread, Comment } from "./types.js";
+import type { PR, FileChange, Thread, Comment, Finding } from "./types.js";
 
 /** Inline composer row for a brand-new line-anchored thread/range (ADO write on submit). */
 export function buildComposerRow(
@@ -153,4 +153,82 @@ export function renderComment(c: Comment): HTMLElement {
        <div class="cmt-body">${esc(c.content)}</div>
      </div>`
   );
+}
+
+/**
+ * A STAGED AI review finding: a local-only inline comment card with a severity
+ * badge and a "Post to ADO" button. Posting creates a real thread (createThread)
+ * and swaps the card for it; nothing hits ADO until the user clicks Post.
+ */
+export function renderStagedFinding(
+  pr: PR,
+  file: FileChange,
+  finding: Finding,
+  onPosted?: (created: Thread) => void
+): HTMLElement {
+  const box = el(`<div class="thread staged"></div>`);
+  const sev = String(finding.severity || "note").toLowerCase();
+  const base = (file.path.split("/").pop() || file.path);
+  const where =
+    finding.line != null
+      ? `${base}:${finding.line}${finding.endLine && finding.endLine > finding.line ? "–" + finding.endLine : ""}`
+      : base;
+  const header = el(
+    `<div class="thread-loc staged-loc">
+       <span class="sev-badge sev-${esc(sev)}">${esc(sev)}</span>
+       <span class="thread-where">${esc(where)}</span>
+       <span class="staged-tag">AI · staged</span>
+     </div>`
+  );
+  const body = el(`<div class="thread-body"></div>`);
+  const parts = [
+    '<div class="comment ai">',
+    '<div class="cmt-head"><span class="cmt-author">Copilot review</span></div>',
+    finding.title ? `<div class="cmt-title">${esc(finding.title)}</div>` : "",
+    `<div class="cmt-body">${esc(finding.comment)}</div>`,
+    "</div>",
+  ];
+  body.appendChild(el(parts.join("")));
+
+  const actions = el(
+    `<div class="staged-actions">
+       <button class="btn sm post">Post to ADO</button>
+       <button class="btn ghost sm dismiss">Dismiss</button>
+     </div>`
+  );
+  const postBtn = actions.querySelector(".post") as HTMLButtonElement;
+  const dismissBtn = actions.querySelector(".dismiss") as HTMLButtonElement;
+  dismissBtn.addEventListener("click", () => box.remove());
+  postBtn.addEventListener("click", async () => {
+    if (postBtn.disabled) return;
+    postBtn.disabled = true;
+    postBtn.textContent = "Posting…";
+    try {
+      const created: Thread = await postJSON("/api/review/post-finding", {
+        org: pr.org,
+        project: pr.project,
+        repoId: pr.repoId,
+        prId: pr.id,
+        findingId: finding.id,
+        filePath: file.path,
+        line: finding.line,
+        endLine: finding.endLine,
+        side: finding.side || "right",
+        content: finding.comment,
+      });
+      finding.posted = true;
+      toast("Comment posted to ADO", "ok");
+      box.replaceWith(renderThread(pr, created));
+      if (typeof onPosted === "function") onPosted(created);
+    } catch (e: any) {
+      toast("Post failed: " + e.message, "err");
+      postBtn.disabled = false;
+      postBtn.textContent = "Post to ADO";
+    }
+  });
+  body.appendChild(actions);
+
+  box.appendChild(header);
+  box.appendChild(body);
+  return box;
 }
