@@ -610,3 +610,34 @@ tr.staged-row .thread.staged { margin: 4px 0 0; }
 .region-chip.st-b-run  { border-left-color: var(--accent); }
 .region-chip.st-b-prog { border-left-color: var(--draft); }
 .region-chip.st-b-none { border-left-color: var(--border); opacity: .72; }
+
+/* ── PR detail slide-over modal ─────────────────────────────────────────── */
+body.modal-open { overflow: hidden; }
+.modal-overlay {
+  position: fixed; inset: 0; z-index: 100;
+  background: rgba(1, 4, 9, 0);
+  transition: background .24s ease;
+  display: flex; justify-content: flex-end;
+}
+.modal-overlay.open { background: rgba(1, 4, 9, .55); }
+.modal-panel {
+  width: 100%; height: 100%;
+  background: var(--bg);
+  border-left: 1px solid var(--border);
+  box-shadow: -12px 0 34px rgba(1, 4, 9, .5);
+  padding: 14px; overflow-y: auto; outline: none;
+  transform: translateX(100%);
+  transition: transform .26s cubic-bezier(.22, .61, .36, 1);
+}
+.modal-overlay.open .modal-panel { transform: translateX(0); }
+.detail-modal { min-height: 100%; }
+.backbar-actions { display: flex; align-items: center; gap: 8px; }
+.modal-close {
+  background: var(--bg-elev); border: 1px solid var(--border); color: var(--text-dim);
+  border-radius: var(--radius-sm); width: 28px; height: 28px; line-height: 1;
+  font-size: 13px; cursor: pointer; transition: background .12s, color .12s, border-color .12s;
+}
+.modal-close:hover { background: var(--bg-elev2); color: var(--text); border-color: var(--accent-dim); }
+@media (prefers-reduced-motion: reduce) {
+  .modal-overlay, .modal-panel { transition: none; }
+}

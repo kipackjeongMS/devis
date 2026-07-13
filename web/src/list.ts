@@ -1,9 +1,6 @@
 // The PR list: a review badge per PR plus the repo-grouped, collapsible card list.
-//
-// NOTE: list <-> detail form an intentional runtime cycle (a card click calls
-// openDetail; renderDetail's back button calls renderList). References are only
-// invoked from event handlers, never at module-eval time, so the ES module cycle
-// resolves safely.
+// A card click opens the PR detail in a slide-over modal (see detail.ts); the list
+// stays mounted underneath, so it needs no re-render when the modal closes.
 import { el, view } from "./dom.js";
 import { esc, timeAgo } from "./util.js";
 import { state, stopReviewPoll } from "./state.js";

@@ -1,7 +1,6 @@
 // The Copilot bridge: turns a PR + its diffs + comments into a background-review
 // prompt and sends it into the CLI session via POST /api/bridge.
 import { getJSON, postJSON } from "./api.js";
-import { view } from "./dom.js";
 import { toast } from "./toast.js";
 import { state } from "./state.js";
 import { refreshReviewPanel } from "./reviewPanel.js";
@@ -97,8 +96,8 @@ export async function sendPrToCopilot(pr: PR, detail: Detail): Promise<void> {
     status: "running",
   }).catch(() => {});
   if (state.reviews) state.reviews[String(pr.id)] = { pr_id: String(pr.id), status: "running" };
-  // If this PR's detail panel is on screen, show the running state right away.
-  const panelEl = view.querySelector(".rev-panel") as HTMLElement | null;
+  // If this PR's detail modal is on screen, show the running state right away.
+  const panelEl = document.querySelector(".rev-panel") as HTMLElement | null;
   if (panelEl && state.current && state.current.pr && String(state.current.pr.id) === String(pr.id)) {
     refreshReviewPanel(pr, panelEl);
   }

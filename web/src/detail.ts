@@ -1,11 +1,8 @@
-// PR detail view: loads a PR's detail payload and renders header, review panel,
-// description, discussion threads, and the changed-files list.
-//
-// NOTE: detail <-> list form an intentional runtime cycle (renderDetail's back
-// button calls renderList; a list card click calls openDetail). The references
-// are only invoked from event handlers, never at module-eval time, so the ES
-// module cycle resolves safely (function bindings are hoisted/live).
-import { el, view, renderError } from "./dom.js";
+// PR detail view: loads a PR's detail payload and renders it inside a slide-over
+// modal (header, review panel, description, discussion threads, changed files).
+// The list stays mounted underneath, so closing the modal returns to it with its
+// scroll position intact.
+import { el } from "./dom.js";
 import { esc } from "./util.js";
 import { state, stopReviewPoll } from "./state.js";
 import { getJSON } from "./api.js";
@@ -15,12 +12,21 @@ import { renderThread } from "./threads.js";
 import { renderFile } from "./diff.js";
 import { refreshReviewPanel } from "./reviewPanel.js";
 import { sendPrToCopilot } from "./bridge.js";
-import { renderList } from "./list.js";
+import { openModal, closeModal } from "./modal.js";
 import type { PR, Detail, Thread } from "./types.js";
+
+// Closing the detail modal: stop the review poll and drop the current selection.
+function onDetailClose(): void {
+  stopReviewPoll();
+  state.current = undefined;
+}
 
 export async function openDetail(pr: PR): Promise<void> {
   stopReviewPoll();
-  view.innerHTML = '<div class="loading"><span class="spinner"></span> Loading PR #' + pr.id + "…</div>";
+  const container = el(
+    `<div class="detail-modal"><div class="loading"><span class="spinner"></span> Loading PR #${pr.id}…</div></div>`
+  );
+  openModal(container, { onClose: onDetailClose });
   let detail: Detail;
   try {
     detail = await getJSON(
@@ -28,19 +34,23 @@ export async function openDetail(pr: PR): Promise<void> {
         `&repoId=${encodeURIComponent(pr.repoId)}&id=${pr.id}`
     );
   } catch (e: any) {
-    return renderError("Failed to load PR: " + e.message);
+    if (!container.isConnected) return; // modal was closed/replaced mid-fetch
+    container.innerHTML = `<div class="empty">Failed to load PR: ${esc(e.message)}</div>`;
+    return;
   }
-  renderDetail(pr, detail);
+  if (!container.isConnected) return; // modal was closed/replaced mid-fetch
+  buildDetail(container, pr, detail);
 }
 
-export function renderDetail(pr: PR, detail: Detail): void {
+// Render a fully-loaded PR into a slide-over modal.
+function buildDetail(container: HTMLElement, pr: PR, detail: Detail): void {
   state.current = { pr, detail };
-  view.innerHTML = "";
+  container.innerHTML = "";
 
   const head = el(`<div class="detail-head"></div>`);
   const back = el(`<div class="backbar"></div>`);
   const backBtn = el(`<button class="back-btn">← Pull requests</button>`);
-  backBtn.addEventListener("click", renderList);
+  backBtn.addEventListener("click", () => closeModal());
   const sendAll = el(`<button class="btn sm">Review PR with Copilot</button>`) as HTMLButtonElement;
   sendAll.addEventListener("click", async () => {
     if (sendAll.disabled) return;
@@ -54,8 +64,13 @@ export function renderDetail(pr: PR, detail: Detail): void {
       sendAll.textContent = orig;
     }
   });
+  const rightGroup = el(`<div class="backbar-actions"></div>`);
+  const closeBtn = el(`<button class="modal-close" title="Close (Esc)" aria-label="Close">✕</button>`);
+  closeBtn.addEventListener("click", () => closeModal());
+  rightGroup.appendChild(sendAll);
+  rightGroup.appendChild(closeBtn);
   back.appendChild(backBtn);
-  back.appendChild(sendAll);
+  back.appendChild(rightGroup);
   head.appendChild(back);
 
   head.appendChild(el(`<div class="detail-title">${esc(pr.title)}</div>`));
@@ -67,31 +82,31 @@ export function renderDetail(pr: PR, detail: Detail): void {
   link.addEventListener("click", () => window.open(pr.url, "_blank"));
   sub.appendChild(link);
   head.appendChild(sub);
-  view.appendChild(head);
+  container.appendChild(head);
 
   // Background-review result panel (populated async; polls while running).
   const revPanel = el(`<div class="rev-panel" hidden></div>`);
-  view.appendChild(revPanel);
+  container.appendChild(revPanel);
   refreshReviewPanel(pr, revPanel);
 
   // PR description rendered as a lightweight markdown preview.
   if (detail.description && detail.description.trim()) {
-    view.appendChild(el(`<div class="section-title">Description</div>`));
+    container.appendChild(el(`<div class="section-title">Description</div>`));
     const desc = el(`<div class="pr-desc md"></div>`);
     desc.innerHTML = renderMarkdown(detail.description);
-    view.appendChild(desc);
+    container.appendChild(desc);
     renderMermaid(desc);
   }
 
   // General (non-file) threads
   const general = detail.threads.filter((t) => !t.filePath);
   if (general.length) {
-    view.appendChild(el(`<div class="section-title">Discussion</div>`));
-    for (const t of general) view.appendChild(renderThread(pr, t));
+    container.appendChild(el(`<div class="section-title">Discussion</div>`));
+    for (const t of general) container.appendChild(renderThread(pr, t));
   }
 
   // Files
-  view.appendChild(el(`<div class="section-title">Changed files (${detail.files.length})</div>`));
+  container.appendChild(el(`<div class="section-title">Changed files (${detail.files.length})</div>`));
   const threadsByFile = new Map<string, Thread[]>();
   for (const t of detail.threads) {
     if (!t.filePath) continue;
@@ -99,6 +114,6 @@ export function renderDetail(pr: PR, detail: Detail): void {
     threadsByFile.get(t.filePath)!.push(t);
   }
   for (const f of detail.files) {
-    view.appendChild(renderFile(pr, detail, f, threadsByFile.get(f.path) || []));
+    container.appendChild(renderFile(pr, detail, f, threadsByFile.get(f.path) || []));
   }
 }
