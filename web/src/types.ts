@@ -111,3 +111,46 @@ export interface AppState {
   reviews: Record<string, Review>;
   current?: { pr: PR; detail: Detail };
 }
+
+// ---- Ev2 rollouts ("Release Dashboard") ----
+
+/** One rollout summary as returned by GET /api/ev2/rollouts. */
+export interface RolloutSummary {
+  serviceGroup: string;
+  id: string;
+  status: string;
+  startTime: string | null;
+  buildVersion: string | null;
+  environment: string | null;
+  url: string;
+}
+
+/** A service group and its recent rollouts. */
+export interface ServiceGroupRollouts {
+  name: string;
+  rollouts: RolloutSummary[];
+}
+
+/** One region's status inside a rollout's stage grid. */
+export interface RegionInfo {
+  name: string;
+  status: string;
+  startTime: string | null;
+  endTime: string | null;
+}
+
+/** One rollout stage (a group of regions). */
+export interface StageInfo {
+  name: string;
+  regions: RegionInfo[];
+}
+
+/** The lazily-loaded stage/region grid for a rollout (GET /api/ev2/rollout). */
+export interface RolloutGrid {
+  id: string;
+  status: string;
+  buildVersion: string | null;
+  environment: string | null;
+  url: string;
+  stages: StageInfo[];
+}

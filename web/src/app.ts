@@ -7,6 +7,7 @@ import { getJSON, postJSON } from "./api.js";
 import { state, loadReviews } from "./state.js";
 import { toast } from "./toast.js";
 import { renderList } from "./list.js";
+import { renderRollouts } from "./rollouts.js";
 import type { Assignment } from "./types.js";
 
 // ---------- boot ----------
@@ -219,12 +220,41 @@ function renderSettings(): void {
   view.appendChild(wrap);
 }
 
+// ---------- top-level view switch (Pull requests <-> Rollouts) ----------
+type ViewName = "prs" | "rollouts";
+let currentView: ViewName = "prs";
+
+function setView(v: ViewName): void {
+  currentView = v;
+  for (const btn of document.querySelectorAll<HTMLButtonElement>(".nav-btn")) {
+    btn.classList.toggle("active", btn.dataset.view === v);
+  }
+  const settingsBtn = $("#btnSettings") as HTMLButtonElement;
+  if (v === "rollouts") {
+    filterbar.hidden = true;
+    settingsBtn.style.display = "none";
+    renderRollouts();
+  } else {
+    settingsBtn.style.display = "";
+    if ((state.config.organizations || []).length) {
+      filterbar.hidden = false;
+      renderList();
+    } else {
+      renderSettings();
+    }
+  }
+}
+
 // ---------- events ----------
 $("#btnSettings").addEventListener("click", renderSettings);
 $("#btnRefresh").addEventListener("click", () => {
+  if (currentView === "rollouts") return void renderRollouts();
   if ((state.config.organizations || []).length) loadPRs();
   else boot();
 });
+for (const btn of document.querySelectorAll<HTMLButtonElement>(".nav-btn")) {
+  btn.addEventListener("click", () => setView((btn.dataset.view as ViewName) || "prs"));
+}
 orgFilter.addEventListener("change", () => {
   state.org = orgFilter.value;
   state.project = "all";

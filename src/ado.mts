@@ -2,9 +2,9 @@
 // Auth: local user's credential via `az account get-access-token` (no PAT).
 // Dependency-free: node built-ins only.
 
-import { execFile } from "node:child_process";
 import https from "node:https";
 import type { IncomingHttpHeaders, OutgoingHttpHeaders } from "node:http";
+import { getAzToken } from "./azauth.mjs";
 
 const ADO_RESOURCE = "499b84ac-1321-427f-aa17-267ca6975798"; // Azure DevOps app id
 const API = "api-version=7.1";
@@ -95,62 +95,9 @@ export interface CreateThreadInput {
 }
 
 // ---------------------------------------------------------------------------
-// Token acquisition (cached until shortly before expiry)
+// Token acquisition — delegated to the shared az-login helper (azauth.mts)
 // ---------------------------------------------------------------------------
-interface TokenCache {
-    value: string;
-    expEpochMs: number;
-}
-
-interface AzTokenResult {
-    value: string;
-    expiresOn: string;
-}
-
-let _token: TokenCache | null = null;
-
-function azToken(): Promise<AzTokenResult> {
-    return new Promise((resolve, reject) => {
-        // `az` is a .cmd shim on Windows; run through the shell so it resolves.
-        const isWin = process.platform === "win32";
-        const cmd = isWin ? "az.cmd" : "az";
-        execFile(
-            cmd,
-            [
-                "account",
-                "get-access-token",
-                "--resource",
-                ADO_RESOURCE,
-                "--output",
-                "json",
-            ],
-            { shell: isWin, windowsHide: true, maxBuffer: 4 * 1024 * 1024 },
-            (err, stdout, stderr) => {
-                if (err) {
-                    reject(new Error(`az token failed: ${stderr || err.message}`));
-                    return;
-                }
-                try {
-                    const j = JSON.parse(stdout);
-                    resolve({ value: j.accessToken, expiresOn: j.expiresOn });
-                } catch (e) {
-                    reject(new Error(`az token parse failed: ${(e as Error).message}`));
-                }
-            },
-        );
-    });
-}
-
-async function getToken(): Promise<string> {
-    const now = Date.now();
-    if (_token && _token.expEpochMs - 120000 > now) return _token.value;
-    const t = await azToken();
-    // expiresOn is a local-time string like "2025-01-01 12:00:00.000000"; be lenient.
-    let exp = Date.parse(t.expiresOn);
-    if (Number.isNaN(exp)) exp = now + 45 * 60 * 1000; // fallback 45m
-    _token = { value: t.value, expEpochMs: exp };
-    return _token.value;
-}
+const getToken = (): Promise<string> => getAzToken(ADO_RESOURCE);
 
 // ---------------------------------------------------------------------------
 // HTTP helpers

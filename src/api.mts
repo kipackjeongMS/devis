@@ -15,6 +15,7 @@ import {
     createThread,
     type Pr,
 } from "./ado.mjs";
+import { getServiceGroupRollouts, getRolloutGrid } from "./ev2.mjs";
 
 // The active CLI session, injected after joinSession resolves. The bridge
 // endpoint pushes prompts through it.
@@ -145,6 +146,18 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
         if (p === "/api/review-results" && req.method === "GET") {
             await ensureDb();
             return sendJson(res, 200, { reviews: listReviews() });
+        }
+
+        // ---- Ev2 rollouts: all service groups, status-enriched summaries ----
+        // Lightweight "Release Dashboard" — auth via the same az login as ADO.
+        if (p === "/api/ev2/rollouts" && req.method === "GET") {
+            return sendJson(res, 200, await getServiceGroupRollouts());
+        }
+
+        // ---- Ev2 rollout: lazy per-rollout stage/region grid (heavy embed detail) ----
+        if (p === "/api/ev2/rollout" && req.method === "GET") {
+            const grid = await getRolloutGrid(q.get("serviceGroup")!, q.get("id")!);
+            return sendJson(res, 200, grid);
         }
 
         return sendJson(res, 404, { error: "no such endpoint" });
