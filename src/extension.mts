@@ -53,7 +53,7 @@ const session = await joinSession({
     canvases: [
         createCanvas({
             id: "ado-pr-ops",
-            displayName: "ADO PR Ops",
+            displayName: "ADO DevOps",
             description:
                 "Active Azure DevOps pull requests assigned to you — grouped by repo, with inline diffs, comments, replies, and a bridge into this Copilot session.",
             actions: [
@@ -66,7 +66,7 @@ const session = await joinSession({
             ],
             open: async () => {
                 const entry = await ensureServer();
-                return { title: "ADO PR Ops", url: entry.url };
+                return { title: "ADO DevOps", url: entry.url };
             },
             // Shared server is intentionally left running across instance closes;
             // it is cheap (loopback, idle) and reused by the next open.

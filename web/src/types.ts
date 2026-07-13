@@ -1,4 +1,4 @@
-// Shared data shapes for the ADO PR Ops canvas frontend.
+// Shared data shapes for the ADO DevOps canvas frontend.
 // These mirror the JSON returned by the extension's backend API (see src/api.mts).
 
 /** A pull request as returned by GET /api/prs (one list item). */
