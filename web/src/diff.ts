@@ -6,6 +6,8 @@ import { getJSON } from "./api.js";
 import { state } from "./state.js";
 import { highlightCode } from "./highlight.js";
 import { renderThread, buildComposerRow, renderStagedFinding } from "./threads.js";
+import { installSelectionToolbar } from "./selection.js";
+import { openAskModal } from "./ask.js";
 import type { PR, Detail, FileChange, Diff, DiffLine, Thread, Finding } from "./types.js";
 
 /** Unposted, line-anchored findings for one file (staged inline comments). */
@@ -117,7 +119,7 @@ export function renderDiff(
         rowByKey.set(keyOf(cside, cline!), tr);
       }
       tr.innerHTML =
-        `<td class="gutter">${canComment ? '<button class="cmt-add" tabindex="-1" title="Comment on this line (shift-click another + to comment on a range)">+</button>' : ""}</td>` +
+        `<td class="gutter"></td>` +
         `<td class="ln">${ln.o || ""}</td>` +
         `<td class="ln">${ln.nn || ""}</td>` +
         `<td class="sign">${sign}</td>` +
@@ -211,69 +213,47 @@ export function renderDiff(
     }
   }
 
-  const sel: { anchor: { line: number; side: string } | null } = { anchor: null }; // pending range start
-
-  // One delegated listener drives bubbles + "+" gutter buttons (cheap, no per-row handlers).
-  tbody.addEventListener("click", (e: MouseEvent) => {
-    const target = e.target as HTMLElement;
-    // Toggle existing threads on a commented line.
-    const bubble = target.closest(".cmt-bubble");
-    if (bubble) {
-      const tr = bubble.closest("tr") as HTMLElement;
-      const k = keyOf(tr.dataset.side!, tr.dataset.line!);
-      let hidden = false;
-      tbody.querySelectorAll(`tr.thread-row[data-anchor="${k}"]`).forEach((r) => {
-        r.classList.toggle("hidden");
-        hidden = r.classList.contains("hidden");
-      });
-      bubble.classList.toggle("off", hidden);
-      return;
-    }
-
-    const btn = target.closest(".cmt-add");
-    if (!btn) return;
-    const tr = btn.closest("tr") as HTMLElement | null;
-    if (!tr || !tr.dataset.line) return;
-    const line = Number(tr.dataset.line);
-    const side = tr.dataset.side!;
-
+  // Open the inline comment composer for a line/range (invoked from the
+  // selection toolbar's 💬 action).
+  function openComposer(side: string, start: number, end: number): void {
+    clearCompose();
+    highlight(side, start, end);
+    const endTr = rowByKey.get(keyOf(side, end)) || rowByKey.get(keyOf(side, start));
+    if (!endTr) return;
     const onDone = (created: Thread) => {
       clearHighlight();
-      sel.anchor = null;
       insertThread(created);
     };
-    const onCancel = () => {
-      clearHighlight();
-      sel.anchor = null;
-    };
-
-    // Shift-click completes a range from a previously anchored "+" on the same side.
-    if (e.shiftKey && sel.anchor && sel.anchor.side === side && sel.anchor.line !== line) {
-      const start = Math.min(sel.anchor.line, line);
-      const end = Math.max(sel.anchor.line, line);
-      clearCompose();
-      highlight(side, start, end);
-      const endTr = rowByKey.get(keyOf(side, end)) || tr;
-      const row = buildComposerRow(pr, file, start, end, side, onDone, onCancel);
-      endTr.after(row);
-      (row.querySelector("textarea") as HTMLTextAreaElement).focus();
-      return;
-    }
-
-    // Plain click: toggle a single-line composer and set the range anchor.
-    const nx = tr.nextElementSibling;
-    if (nx && nx.classList.contains("cmt-compose")) {
-      nx.remove();
-      clearHighlight();
-      sel.anchor = null;
-      return;
-    }
-    clearCompose();
-    sel.anchor = { line, side };
-    highlight(side, line, line);
-    const row = buildComposerRow(pr, file, line, line, side, onDone, onCancel);
-    tr.after(row);
+    const onCancel = () => clearHighlight();
+    const row = buildComposerRow(pr, file, start, end, side, onDone, onCancel);
+    endTr.after(row);
     (row.querySelector("textarea") as HTMLTextAreaElement).focus();
+  }
+
+  // Delegated: toggle a line's existing threads via its comment bubble.
+  tbody.addEventListener("click", (e: MouseEvent) => {
+    const bubble = (e.target as HTMLElement).closest(".cmt-bubble");
+    if (!bubble) return;
+    const tr = bubble.closest("tr") as HTMLElement;
+    const k = keyOf(tr.dataset.side!, tr.dataset.line!);
+    let hidden = false;
+    tbody.querySelectorAll(`tr.thread-row[data-anchor="${k}"]`).forEach((r) => {
+      r.classList.toggle("hidden");
+      hidden = r.classList.contains("hidden");
+    });
+    bubble.classList.toggle("off", hidden);
+  });
+
+  // Highlight text in the diff to reveal a ? (ask Copilot) / 💬 (comment) toolbar.
+  installSelectionToolbar(tbody, {
+    onComment: (s) => {
+      window.getSelection()?.removeAllRanges();
+      openComposer(s.anchor.side, s.anchor.startLine, s.anchor.endLine);
+    },
+    onAsk: (s) => {
+      window.getSelection()?.removeAllRanges();
+      openAskModal(pr, file, s);
+    },
   });
 
   // Initial paint: staged AI findings first (directly under the line), then

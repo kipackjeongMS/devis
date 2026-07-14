@@ -27,6 +27,25 @@ export function setSession(s: SessionRef | null): void {
     sessionRef = s;
 }
 
+// ---- "Ask Copilot about this selection" round-trip -------------------------
+// session.send() is fire-and-forget (the model answers in the chat), so to show
+// the answer back in the canvas modal we register a pending ask, tell the agent
+// to POST its answer to /api/ask-result, and let the modal poll for it. Asks are
+// ephemeral (one session, in-process) — an in-memory map is enough; no DB.
+interface AskEntry {
+    status: "pending" | "done" | "error";
+    answer?: string;
+    error?: string;
+    ts: number;
+}
+const asks = new Map<string, AskEntry>();
+const ASK_TTL_MS = 10 * 60 * 1000;
+
+function pruneAsks(): void {
+    const cutoff = Date.now() - ASK_TTL_MS;
+    for (const [id, e] of asks) if (e.ts < cutoff) asks.delete(id);
+}
+
 export async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
     const p = url.pathname;
     const q = url.searchParams;
@@ -132,6 +151,38 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
             }
             await sessionRef.send({ prompt: String(b.prompt) });
             return sendJson(res, 200, { ok: true });
+        }
+
+        // ---- "Ask Copilot" about a diff selection: register + send ----
+        if (p === "/api/ask" && req.method === "POST") {
+            const b = await readBody(req);
+            const askId = b.askId != null ? String(b.askId).trim() : "";
+            if (!askId) return sendJson(res, 400, { error: "askId required" });
+            if (!b.prompt || !String(b.prompt).trim()) return sendJson(res, 400, { error: "empty prompt" });
+            if (!sessionRef || typeof sessionRef.send !== "function") {
+                return sendJson(res, 503, { error: "session not available" });
+            }
+            pruneAsks();
+            asks.set(askId, { status: "pending", ts: Date.now() });
+            await sessionRef.send({ prompt: String(b.prompt) });
+            return sendJson(res, 200, { ok: true });
+        }
+        // The agent POSTs its answer here; the modal reads it back.
+        if (p === "/api/ask-result" && req.method === "POST") {
+            const b = await readBody(req);
+            const askId = b.askId != null ? String(b.askId).trim() : "";
+            if (!askId) return sendJson(res, 400, { error: "askId required" });
+            const entry: AskEntry = b.error
+                ? { status: "error", error: String(b.error), ts: Date.now() }
+                : { status: "done", answer: String(b.answer ?? ""), ts: Date.now() };
+            asks.set(askId, entry);
+            return sendJson(res, 200, { ok: true });
+        }
+        // The modal polls this until the answer (or error) arrives.
+        if (p === "/api/ask-result" && req.method === "GET") {
+            const askId = (q.get("askId") || "").trim();
+            const entry = askId ? asks.get(askId) : undefined;
+            return sendJson(res, 200, entry || { status: "pending" });
         }
 
         // ---- review results (extension's own SQLite store) ----

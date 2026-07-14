@@ -672,3 +672,65 @@ body.modal-open { overflow: hidden; }
 @media (prefers-reduced-motion: reduce) {
   .modal-overlay, .modal-panel { transition: none; }
 }
+
+/* ---- Diff selection toolbar (? Ask Copilot / 💬 comment) ---- */
+.sel-toolbar {
+  position: fixed; z-index: 120; display: flex; gap: 2px;
+  padding: 3px; background: var(--bg-elev2);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  box-shadow: 0 4px 16px rgba(1, 4, 9, .5);
+}
+.sel-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 26px; height: 26px; padding: 0 6px;
+  background: transparent; border: none; border-radius: var(--radius-sm);
+  color: var(--text-dim); font-size: 13px; cursor: pointer;
+  transition: background .12s, color .12s;
+}
+.sel-btn:hover { background: var(--bg-elev); color: var(--text); }
+.sel-ask { font-weight: 700; color: var(--accent); }
+.sel-ask:hover { color: #fff; background: var(--accent-dim); }
+
+/* ---- Ask Copilot dialog (stacks above the PR-detail modal) ---- */
+.ask-overlay {
+  position: fixed; inset: 0; z-index: 130;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(1, 4, 9, .55); padding: 24px;
+}
+.ask-dialog {
+  display: flex; flex-direction: column; gap: 10px;
+  width: 100%; max-width: 540px; max-height: 78vh; overflow: auto;
+  padding: 16px; background: var(--bg-elev);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: 0 12px 40px rgba(1, 4, 9, .6);
+}
+.ask-dialog:focus { outline: none; }
+.ask-head { display: flex; align-items: center; gap: 8px; }
+.ask-title { font-size: 14px; font-weight: 600; }
+.ask-loc { color: var(--text-faint); font-size: 12px; }
+.ask-close {
+  margin-left: auto; background: transparent; border: none;
+  color: var(--text-faint); font-size: 13px; cursor: pointer; line-height: 1;
+}
+.ask-close:hover { color: var(--text); }
+.ask-snippet {
+  margin: 0; max-height: 160px; overflow: auto;
+  padding: 8px 10px; background: var(--bg); border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm); font-size: 12px; line-height: 1.5;
+  color: var(--text-dim); white-space: pre; tab-size: 2;
+}
+.ask-q {
+  width: 100%; box-sizing: border-box; resize: vertical;
+  padding: 8px 10px; background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  font: inherit; font-size: 13px;
+}
+.ask-q:focus { outline: none; border-color: var(--accent-dim); }
+.ask-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.ask-answer {
+  padding: 10px 12px; background: var(--bg-elev2);
+  border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
+  font-size: 12.5px; line-height: 1.5;
+}
+.ask-answer.loading-ans { color: var(--text-dim); }
+.ask-answer.err-ans { color: var(--del-line); border-color: var(--del-line); }
