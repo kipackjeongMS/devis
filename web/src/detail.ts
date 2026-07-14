@@ -13,6 +13,7 @@ import { renderFile } from "./diff.js";
 import { refreshReviewPanel } from "./reviewPanel.js";
 import { sendPrToCopilot } from "./bridge.js";
 import { openModal, closeModal } from "./modal.js";
+import { requestNotifyPermission } from "./notifyWatch.js";
 import type { PR, Detail, Thread } from "./types.js";
 
 // Closing the detail modal: stop the review poll and drop the current selection.
@@ -54,6 +55,7 @@ function buildDetail(container: HTMLElement, pr: PR, detail: Detail): void {
   const sendAll = el(`<button class="btn sm">Review PR with Copilot</button>`) as HTMLButtonElement;
   sendAll.addEventListener("click", async () => {
     if (sendAll.disabled) return;
+    requestNotifyPermission(); // within the user gesture, so the host honors it
     sendAll.disabled = true;
     const orig = sendAll.textContent;
     sendAll.textContent = "Reviewing…";

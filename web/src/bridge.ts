@@ -4,6 +4,8 @@ import { getJSON, postJSON } from "./api.js";
 import { toast } from "./toast.js";
 import { state } from "./state.js";
 import { refreshReviewPanel } from "./reviewPanel.js";
+import { markTriggered } from "./notify.js";
+import { startNotifyWatch } from "./notifyWatch.js";
 import type { PR, Detail, FileChange, Diff, Thread } from "./types.js";
 
 export function diffToText(diff: Diff | null | undefined): string {
@@ -96,6 +98,10 @@ export async function sendPrToCopilot(pr: PR, detail: Detail): Promise<void> {
     status: "running",
   }).catch(() => {});
   if (state.reviews) state.reviews[String(pr.id)] = { pr_id: String(pr.id), status: "running" };
+  // Watch for this review's completion so we can notify when it finishes (see
+  // notifyWatch). Only this session watches the reviews it launched.
+  markTriggered(String(pr.id));
+  startNotifyWatch();
   // If this PR's detail modal is on screen, show the running state right away.
   const panelEl = document.querySelector(".rev-panel") as HTMLElement | null;
   if (panelEl && state.current && state.current.pr && String(state.current.pr.id) === String(pr.id)) {
