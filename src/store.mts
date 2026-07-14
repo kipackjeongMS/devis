@@ -42,12 +42,15 @@ export interface ReviewRow {
     findings: string | null;
     findings_json: string | null;
     error: string | null;
+    // 1 when the user has removed this PR from Copilot's Plate. Cleared (0) when a
+    // fresh review starts, so a re-review re-surfaces it.
+    dismissed: number;
     created_at: string | null;
     updated_at: string | null;
 }
 
 /** Compact row used for list badges. */
-export type ReviewListItem = Pick<ReviewRow, "pr_id" | "status" | "summary" | "updated_at">;
+export type ReviewListItem = Pick<ReviewRow, "pr_id" | "status" | "summary" | "dismissed" | "updated_at">;
 
 /** The POST payload an agent (or the canvas) writes; only `prId` is required. */
 export interface ReviewInput {
@@ -93,6 +96,10 @@ export async function ensureDb(): Promise<DatabaseSync> {
     if (!cols.some((c) => c.name === "findings_json")) {
         db.exec("ALTER TABLE reviews ADD COLUMN findings_json TEXT");
     }
+    // Migration: user-driven Plate lifecycle (removed-from-Plate flag).
+    if (!cols.some((c) => c.name === "dismissed")) {
+        db.exec("ALTER TABLE reviews ADD COLUMN dismissed INTEGER NOT NULL DEFAULT 0");
+    }
     return db;
 }
 
@@ -112,8 +119,22 @@ export function getReview(prId: string | number): ReviewRow | null {
 
 export function listReviews(): ReviewListItem[] {
     return requireDb()
-        .prepare("SELECT pr_id, status, summary, updated_at FROM reviews ORDER BY updated_at DESC")
+        .prepare("SELECT pr_id, status, summary, dismissed, updated_at FROM reviews ORDER BY updated_at DESC")
         .all() as unknown as ReviewListItem[];
+}
+
+/**
+ * Set (or clear) the "removed from Copilot's Plate" flag for one or more PRs.
+ * User-driven: the Plate lifecycle is defined by the user, not automatically.
+ */
+export function setDismissed(prIds: Array<string | number>, dismissed: boolean): number {
+    const ids = prIds.map(String).filter((s) => s.trim() !== "");
+    if (!ids.length) return 0;
+    const placeholders = ids.map(() => "?").join(",");
+    const info = requireDb()
+        .prepare(`UPDATE reviews SET dismissed = ?, updated_at = ? WHERE pr_id IN (${placeholders})`)
+        .run(dismissed ? 1 : 0, new Date().toISOString(), ...ids);
+    return Number(info.changes ?? 0);
 }
 
 // Merge-then-replace so a partial write (e.g. the canvas marking status='running')
@@ -171,18 +192,21 @@ export function upsertReview(r: ReviewInput): ReviewRow {
         findings,
         findings_json: findingsJson,
         error: pick("error"),
+        // A fresh review (status flips to "running") re-surfaces a previously
+        // dismissed PR on the Plate; otherwise the user's choice is preserved.
+        dismissed: r.status === "running" ? 0 : (ex.dismissed ?? 0),
         created_at: ex.created_at != null ? ex.created_at : now,
         updated_at: now,
     };
     requireDb()
         .prepare(
             `INSERT OR REPLACE INTO reviews
-             (pr_id, org, project, repo, title, status, summary, story, findings, findings_json, error, created_at, updated_at)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+             (pr_id, org, project, repo, title, status, summary, story, findings, findings_json, error, dismissed, created_at, updated_at)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         )
         .run(
             row.pr_id, row.org, row.project, row.repo, row.title, row.status,
-            row.summary, row.story, row.findings, row.findings_json, row.error, row.created_at, row.updated_at,
+            row.summary, row.story, row.findings, row.findings_json, row.error, row.dismissed, row.created_at, row.updated_at,
         );
     return row;
 }

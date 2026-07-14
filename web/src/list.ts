@@ -5,6 +5,8 @@ import { el, view } from "./dom.js";
 import { esc, timeAgo } from "./util.js";
 import { state, stopReviewPoll } from "./state.js";
 import { openDetail } from "./detail.js";
+import { postJSON } from "./api.js";
+import { toast } from "./toast.js";
 import type { PR } from "./types.js";
 
 // A small status pill for a PR's background-review state, or "" when none.
@@ -17,27 +19,46 @@ export function reviewBadge(prId: number | string): string {
   return "";
 }
 
-// Client-side filter chain: org -> project -> assignment. Kept separate from
-// renderList so the app module can reuse it for counts if needed.
-export function applyFilters(prs: PR[]): PR[] {
+// The filter chain is split in two on purpose:
+//   scopeFilter      — org + project only. Applies to EVERYTHING, including the Plate.
+//   assignmentFilter — Me / Not me. Applies ONLY to the main list, never the Plate,
+//                      so Copilot's Plate is every in-review/reviewed PR in scope
+//                      regardless of who it's assigned to.
+export function scopeFilter(prs: PR[]): PR[] {
   let out = state.org === "all" ? prs : prs.filter((p) => p.org === state.org);
   if (state.project !== "all") out = out.filter((p) => p.project === state.project);
-  if (state.assignment === "mine") out = out.filter((p) => p.mine);
-  else if (state.assignment === "notmine") out = out.filter((p) => !p.mine);
   return out;
 }
 
-// A PR is "on Copilot's Plate" when it has a background review that is
-// currently running (in-review) or already done (reviewed).
-function isOnPlate(pr: PR): boolean {
-  const r = state.reviews[String(pr.id)];
-  return !!r && (r.status === "running" || r.status === "done");
+export function assignmentFilter(prs: PR[]): PR[] {
+  if (state.assignment === "mine") return prs.filter((p) => p.mine);
+  if (state.assignment === "notmine") return prs.filter((p) => !p.mine);
+  return prs;
 }
 
+// Full main-list filter: scope + assignment. Kept for any external callers.
+export function applyFilters(prs: PR[]): PR[] {
+  return assignmentFilter(scopeFilter(prs));
+}
+
+// A PR is "on Copilot's Plate" when it has a background review that is currently
+// running (in-review) or already done (reviewed) AND the user hasn't removed it.
+function isOnPlate(pr: PR): boolean {
+  const r = state.reviews[String(pr.id)];
+  return !!r && !r.dismissed && (r.status === "running" || r.status === "done");
+}
+
+// PRs currently checked on the Plate (by string PR id). Cleared on every render.
+const plateSel = new Set<string>();
+
 // One clickable PR card. Shared by the Plate section and the main repo list.
-function prCard(p: PR): HTMLElement {
+// When `selectable` (Plate only), a checkbox lets the user multi-select cards to
+// remove them from the Plate; clicking the checkbox must not open the detail modal.
+function prCard(p: PR, selectable = false): HTMLElement {
+  const id = String(p.id);
   const card = el(
-    `<div class="pr-card">
+    `<div class="pr-card${selectable ? " selectable" : ""}${selectable && plateSel.has(id) ? " selected" : ""}">
+       ${selectable ? `<input type="checkbox" class="plate-sel" aria-label="Select PR ${p.id}">` : ""}
        <div class="pr-title">${esc(p.title)}</div>
        <div class="pr-meta">
          <span class="id">#${p.id}</span>
@@ -50,12 +71,27 @@ function prCard(p: PR): HTMLElement {
      </div>`
   );
   card.addEventListener("click", () => openDetail(p));
+  if (selectable) {
+    const cb = card.querySelector<HTMLInputElement>(".plate-sel")!;
+    cb.checked = plateSel.has(id);
+    cb.addEventListener("click", (e) => e.stopPropagation());
+    cb.addEventListener("change", () => {
+      if (cb.checked) {
+        plateSel.add(id);
+        card.classList.add("selected");
+      } else {
+        plateSel.delete(id);
+        card.classList.remove("selected");
+      }
+      syncPlateBar();
+    });
+  }
   return card;
 }
 
 // Group PRs by org/project/repo and append a collapsible repo group per repo
 // into `container`. `collapsed` sets the initial fold state of each group.
-function renderRepoGroups(prs: PR[], container: HTMLElement, collapsed: boolean): void {
+function renderRepoGroups(prs: PR[], container: HTMLElement, collapsed: boolean, selectable = false): void {
   const groups = new Map<string, { repo: string; project: string; list: PR[] }>();
   for (const p of prs) {
     const key = p.org + " / " + p.project + " / " + p.repo;
@@ -74,16 +110,64 @@ function renderRepoGroups(prs: PR[], container: HTMLElement, collapsed: boolean)
     head.addEventListener("click", () => wrap.classList.toggle("collapsed"));
     wrap.appendChild(head);
     const listWrap = el(`<div class="repo-list"></div>`);
-    for (const p of g.list) listWrap.appendChild(prCard(p));
+    for (const p of g.list) listWrap.appendChild(prCard(p, selectable));
     wrap.appendChild(listWrap);
     container.appendChild(wrap);
   }
 }
 
+// --- Plate action bar (multi-select removal) --------------------------------
+
+// Reflect the current selection count into the Plate action bar.
+function syncPlateBar(): void {
+  const actions = view.querySelector<HTMLElement>(".plate-actions");
+  if (!actions) return;
+  const n = plateSel.size;
+  const remove = actions.querySelector<HTMLButtonElement>(".plate-remove")!;
+  const clear = actions.querySelector<HTMLButtonElement>(".plate-clear")!;
+  const hint = actions.querySelector<HTMLElement>(".plate-hint")!;
+  remove.disabled = n === 0;
+  remove.textContent = n ? `Remove from Plate (${n})` : "Remove from Plate";
+  clear.hidden = n === 0;
+  hint.hidden = n > 0;
+}
+
+// Persist the removal server-side, mark the reviews dismissed locally, re-render.
+async function removeSelected(): Promise<void> {
+  const ids = [...plateSel];
+  if (!ids.length) return;
+  try {
+    await postJSON("/api/review/dismiss", { prIds: ids, dismissed: true });
+    for (const id of ids) {
+      const r = state.reviews[id];
+      if (r) r.dismissed = 1;
+    }
+    plateSel.clear();
+    toast(`Removed ${ids.length} PR${ids.length > 1 ? "s" : ""} from the Plate`, "ok");
+    renderList();
+  } catch {
+    toast("Couldn't update the Plate — please try again.", "err");
+  }
+}
+
+// Clear the current selection without removing anything.
+function clearSelection(): void {
+  plateSel.clear();
+  view.querySelectorAll(".pr-card.selected").forEach((c) => c.classList.remove("selected"));
+  view.querySelectorAll<HTMLInputElement>(".plate-sel").forEach((c) => (c.checked = false));
+  syncPlateBar();
+}
+
 export function renderList(): void {
   stopReviewPoll();
-  const prs = applyFilters(state.prs);
-  if (!prs.length) {
+  plateSel.clear();
+
+  // Plate obeys scope only (org/project); the main list also obeys assignment.
+  const scoped = scopeFilter(state.prs);
+  const plate = scoped.filter(isOnPlate);
+  const rest = assignmentFilter(scoped).filter((p) => !isOnPlate(p));
+
+  if (!plate.length && !rest.length) {
     const msg =
       state.assignment === "mine"
         ? "No pull requests assigned to you."
@@ -97,11 +181,6 @@ export function renderList(): void {
     return;
   }
 
-  // Copilot's Plate (reviewed / in-review) is pulled out of the main list so a
-  // PR shows in exactly one place.
-  const plate = prs.filter(isOnPlate);
-  const rest = prs.filter((p) => !isOnPlate(p));
-
   view.innerHTML = "";
 
   if (plate.length) {
@@ -113,11 +192,24 @@ export function renderList(): void {
     );
     head.addEventListener("click", () => sec.classList.toggle("collapsed"));
     sec.appendChild(head);
+
     const body = el(`<div class="plate-body"></div>`);
-    renderRepoGroups(plate, body, false);
+    // Action bar first, so multi-select removal is discoverable above the cards.
+    const actions = el(
+      `<div class="plate-actions">` +
+        `<span class="plate-hint">Select PRs to remove them from your Plate.</span>` +
+        `<button class="btn ghost sm plate-clear" hidden>Clear</button>` +
+        `<button class="btn sm plate-remove" disabled>Remove from Plate</button>` +
+        `</div>`
+    );
+    actions.querySelector<HTMLButtonElement>(".plate-remove")!.addEventListener("click", removeSelected);
+    actions.querySelector<HTMLButtonElement>(".plate-clear")!.addEventListener("click", clearSelection);
+    body.appendChild(actions);
+
+    renderRepoGroups(plate, body, false, true);
     sec.appendChild(body);
     view.appendChild(sec);
   }
 
-  renderRepoGroups(rest, view, true);
+  renderRepoGroups(rest, view, true, false);
 }

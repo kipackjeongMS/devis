@@ -5,7 +5,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { SessionRef } from "@github/copilot-sdk/extension";
 import { sendJson, readBody } from "./http.mjs";
 import { readConfig, writeConfig } from "./config.mjs";
-import { ensureDb, getReview, listReviews, upsertReview, markFindingPosted } from "./store.mjs";
+import { ensureDb, getReview, listReviews, upsertReview, markFindingPosted, setDismissed } from "./store.mjs";
 import type { Finding } from "./store.mjs";
 import {
     listAssignedPRs,
@@ -205,6 +205,17 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
         if (p === "/api/review-results" && req.method === "GET") {
             await ensureDb();
             return sendJson(res, 200, { reviews: listReviews() });
+        }
+        // User-driven Plate lifecycle: remove (dismiss) or restore PRs on Copilot's Plate.
+        // Body: { prIds: (string|number)[], dismissed?: boolean } — dismissed defaults to true.
+        if (p === "/api/review/dismiss" && req.method === "POST") {
+            const b = await readBody(req);
+            const prIds = Array.isArray(b.prIds) ? b.prIds : [];
+            if (!prIds.length) return sendJson(res, 400, { error: "prIds required" });
+            const dismissed = b.dismissed === undefined ? true : !!b.dismissed;
+            await ensureDb();
+            const changed = setDismissed(prIds, dismissed);
+            return sendJson(res, 200, { ok: true, dismissed, changed });
         }
 
         // ---- post ONE staged finding as a real ADO thread, then persist it posted ----

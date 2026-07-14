@@ -99,6 +99,8 @@ export interface Review {
   findings?: string;
   findingsList?: Finding[];
   error?: string;
+  /** 1 when the user removed this PR from Copilot's Plate. */
+  dismissed?: number;
   updated_at?: string;
   org?: string;
   project?: string;
