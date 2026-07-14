@@ -4,6 +4,9 @@ node_modules/
 # Runtime state (SQLite review store)
 data/
 
+# User-local config (orgs/projects/selected model) — never commit; seeded on first run
+config.json
+
 # Compiled backend output (src/*.mts -> root *.mjs)
 /*.mjs
 
