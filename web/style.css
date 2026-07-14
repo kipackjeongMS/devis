@@ -146,6 +146,27 @@ body { display: flex; flex-direction: column; }
 }
 .repo-head .proj { color: var(--text-faint); font-weight: 500; text-transform: none; letter-spacing: 0; }
 
+/* ---- Copilot's Plate (reviewed / in-review) ---- */
+.plate-group { margin-bottom: 22px; }
+.plate-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 2px 10px;
+  color: var(--text-dim);
+  font-size: 13px; font-weight: 700; letter-spacing: .3px;
+  cursor: pointer; user-select: none;
+  border-bottom: 1px solid var(--border-soft);
+}
+.plate-head:hover { color: var(--text); }
+.plate-group:not(.collapsed) > .plate-head .repo-chev { transform: rotate(90deg); }
+.plate-group.collapsed .plate-body { display: none; }
+.plate-name { flex: 0 1 auto; }
+.plate-head .count {
+  background: var(--bg-elev2); border: 1px solid var(--border);
+  border-radius: 20px; padding: 1px 8px; font-size: 11px; color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.plate-body { padding-top: 12px; }
+
 .pr-card {
   background: var(--bg-elev);
   border: 1px solid var(--border-soft);
