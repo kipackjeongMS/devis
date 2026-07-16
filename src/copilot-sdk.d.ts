@@ -39,9 +39,25 @@ declare module "@github/copilot-sdk/extension" {
 
     export function createCanvas(def: CanvasDefinition): Canvas;
 
-    /** The live session; `send` pushes a prompt into the Copilot CLI conversation. */
+    /**
+     * A code selection attached to a message — carries its own `text` so the
+     * host doesn't need to read `filePath` off disk (useful for PR diffs from
+     * repos that aren't checked out locally). Lines/characters are 0-based.
+     */
+    export interface SelectionAttachment {
+        type: "selection";
+        filePath: string;
+        displayName: string;
+        selection?: {
+            start: { line: number; character: number };
+            end: { line: number; character: number };
+        };
+        text?: string;
+    }
+
+    /** The live session; `send` pushes a prompt (with optional attachments) into the Copilot CLI conversation. */
     export interface SessionRef {
-        send: (msg: { prompt: string }) => Promise<void>;
+        send: (msg: { prompt: string; attachments?: SelectionAttachment[] }) => Promise<void>;
     }
 
     export interface JoinSessionOptions {

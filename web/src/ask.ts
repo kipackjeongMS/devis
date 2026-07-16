@@ -21,6 +21,8 @@ function newAskId(): string {
   return Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
 }
 
+// The selected code travels as a `selection` attachment (see buildAskAttachment)
+// instead of being inlined here, so the prompt just references it.
 function buildAskPrompt(
   pr: PR,
   file: FileChange,
@@ -35,12 +37,7 @@ function buildAskPrompt(
     `The user is asking a question about a specific part of Azure DevOps PR #${pr.id} ("${pr.title}").`,
     ``,
     `File: ${file.path}`,
-    `Lines: ${loc} (${side} side)`,
-    ``,
-    `Selected code:`,
-    "```",
-    sel.snippet,
-    "```",
+    `Lines: ${loc} (${side} side) — see the attached code selection for the exact snippet.`,
     ``,
     `Question: ${question}`,
     ``,
@@ -58,6 +55,27 @@ function buildAskPrompt(
       askId +
       "', error:'<reason>' } instead. Keep any chat reply to a one-line acknowledgment — the answer belongs in the canvas.",
   ].join("\n");
+}
+
+// Builds the SDK "selection" attachment carrying the snippet as inline `text`
+// (rather than `type: "file"` + `path`) since PR files are repo-relative ADO
+// paths that generally don't exist on the local session's disk.
+function buildAskAttachment(file: FileChange, sel: DiffSelection) {
+  const { startLine, endLine } = sel.anchor;
+  const lines = sel.snippet.split("\n");
+  const lastLineLen = lines[lines.length - 1]?.length || 0;
+  const base = file.path.split("/").pop() || file.path;
+  const loc = endLine > startLine ? `${startLine}-${endLine}` : `${startLine}`;
+  return {
+    type: "selection" as const,
+    filePath: file.path,
+    displayName: `${base}:${loc}`,
+    selection: {
+      start: { line: Math.max(0, startLine - 1), character: 0 },
+      end: { line: Math.max(0, endLine - 1), character: lastLineLen },
+    },
+    text: sel.snippet,
+  };
 }
 
 export function openAskModal(pr: PR, file: FileChange, sel: DiffSelection): void {
@@ -116,7 +134,11 @@ export function openAskModal(pr: PR, file: FileChange, sel: DiffSelection): void
     answer.className = "ask-answer loading-ans";
     answer.innerHTML = '<span class="spinner"></span> Asking Copilot…';
     try {
-      await postJSON("/api/ask", { askId, prompt: buildAskPrompt(pr, file, sel, question, askId, callbackUrl) });
+      await postJSON("/api/ask", {
+        askId,
+        prompt: buildAskPrompt(pr, file, sel, question, askId, callbackUrl),
+        attachments: [buildAskAttachment(file, sel)],
+      });
     } catch (e: any) {
       answer.className = "ask-answer err-ans";
       answer.textContent = "Failed to send: " + e.message;

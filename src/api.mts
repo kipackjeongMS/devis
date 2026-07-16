@@ -164,7 +164,10 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
             }
             pruneAsks();
             asks.set(askId, { status: "pending", ts: Date.now() });
-            await sessionRef.send({ prompt: String(b.prompt) });
+            await sessionRef.send({
+                prompt: String(b.prompt),
+                attachments: Array.isArray(b.attachments) ? b.attachments : undefined,
+            });
             return sendJson(res, 200, { ok: true });
         }
         // The agent POSTs its answer here; the modal reads it back.
