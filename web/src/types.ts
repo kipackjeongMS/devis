@@ -1,6 +1,16 @@
 // Shared data shapes for the ADO DevOps canvas frontend.
 // These mirror the JSON returned by the extension's backend API (see src/api.mts).
 
+/** One reviewer's standing on a PR. `vote`: 10 approved · 5 approved w/ suggestions
+ *  · 0 no vote · -5 waiting for author · -10 rejected. */
+export interface Reviewer {
+  id: string;
+  name: string;
+  vote: number;
+  isRequired: boolean;
+  isContainer: boolean; // true = group/team entry, not an individual
+}
+
 /** A pull request as returned by GET /api/prs (one list item). */
 export interface PR {
   id: number;
@@ -15,6 +25,9 @@ export interface PR {
   author: string;
   created: string;
   isDraft: boolean;
+  status?: string; // active | completed | abandoned
+  reviewers?: Reviewer[];
+  myVote?: number; // current user's own vote (0 when not an individual reviewer)
   url: string;
 }
 
@@ -58,6 +71,11 @@ export interface Detail {
   files: FileChange[];
   threads: Thread[];
   commits: Commits;
+  status?: string; // active | completed | abandoned
+  isDraft?: boolean;
+  reviewers?: Reviewer[];
+  myVote?: number; // current user's own vote (0 when not an individual reviewer)
+  iCommented?: boolean; // current user left at least one (non-system) comment
 }
 
 /** One line in a computed diff hunk. */

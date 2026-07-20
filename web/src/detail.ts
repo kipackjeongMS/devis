@@ -15,6 +15,7 @@ import { sendPrToCopilot } from "./bridge.js";
 import { openModal, closeModal } from "./modal.js";
 import { requestNotifyPermission } from "./notifyWatch.js";
 import type { PR, Detail, Thread } from "./types.js";
+import { statusBadge, voteBadge, myActionBadge } from "./prStatus.js";
 
 // Closing the detail modal: stop the review poll and drop the current selection.
 function onDetailClose(): void {
@@ -78,6 +79,12 @@ function buildDetail(container: HTMLElement, pr: PR, detail: Detail): void {
   head.appendChild(el(`<div class="detail-title">${esc(pr.title)}</div>`));
   const sub = el(`<div class="detail-sub"></div>`);
   sub.appendChild(el(`<span class="id">#${pr.id}</span>`));
+  // Lifecycle status comes from the freshly-loaded detail (authoritative), falling
+  // back to the list payload's isDraft for the brief moment before detail arrives.
+  const st = statusBadge({ status: detail.status, isDraft: detail.isDraft ?? pr.isDraft });
+  if (st.cls !== "st-unknown") {
+    sub.appendChild(el(`<span class="st-badge ${st.cls}">${st.label}</span>`));
+  }
   sub.appendChild(el(`<span>${esc(pr.repo)} · ${esc(pr.project)}</span>`));
   sub.appendChild(el(`<span><code>${esc(pr.sourceRef)}</code> → <code>${esc(pr.targetRef)}</code></span>`));
   const link = el(`<button class="link-btn">Open in ADO ↗</button>`);
@@ -85,6 +92,10 @@ function buildDetail(container: HTMLElement, pr: PR, detail: Detail): void {
   sub.appendChild(link);
   head.appendChild(sub);
   container.appendChild(head);
+
+  // Reviewer strip: my own action first, then each named reviewer with their vote.
+  const strip = buildReviewerStrip(detail);
+  if (strip) container.appendChild(strip);
 
   // Background-review result panel (populated async; polls while running).
   const revPanel = el(`<div class="rev-panel" hidden></div>`);
@@ -118,4 +129,33 @@ function buildDetail(container: HTMLElement, pr: PR, detail: Detail): void {
   for (const f of detail.files) {
     container.appendChild(renderFile(pr, detail, f, threadsByFile.get(f.path) || []));
   }
+}
+
+// The reviewer strip under the header: the current user's own action first (which
+// can include "💬 Commented"), then every individual reviewer with their vote.
+// Group/team reviewers (isContainer) are filtered out; those who cast a real vote
+// sort ahead of no-vote reviewers. Returns null only when there is nothing to show.
+function buildReviewerStrip(detail: Detail): HTMLElement | null {
+  const all = (detail.reviewers || []).filter((r) => !r.isContainer);
+  const voted = all.filter((r) => r.vote !== 0).sort((a, b) => b.vote - a.vote);
+  const noVote = all.filter((r) => r.vote === 0);
+  const ordered = [...voted, ...noVote];
+
+  const mine = myActionBadge(detail.myVote || 0, detail.iCommented);
+  if (!mine && ordered.length === 0) {
+    return el(`<div class="reviewer-strip"><span class="rev-none">No reviewers yet</span></div>`);
+  }
+
+  const strip = el(`<div class="reviewer-strip"></div>`);
+  if (mine) {
+    strip.appendChild(el(`<span class="my-act ${mine.cls}">${mine.icon} ${mine.label}</span>`));
+  }
+  for (const r of ordered) {
+    const v = voteBadge(r.vote);
+    const req = r.isRequired ? '<span class="rev-req" title="Required reviewer">*</span>' : "";
+    strip.appendChild(
+      el(`<span class="reviewer ${v.cls}" title="${esc(v.label)}">${v.icon} ${esc(r.name)}${req}</span>`)
+    );
+  }
+  return strip;
 }

@@ -198,6 +198,53 @@ body { display: flex; flex-direction: column; }
 .branch code { background: var(--bg-elev2); padding: 1px 6px; border-radius: 4px; color: var(--text-dim); font-size: 11px; }
 .badge-draft { color: var(--draft); border: 1px solid var(--draft); border-radius: 4px; padding: 0 6px; font-size: 11px; }
 
+/* ---------- PR lifecycle status + reviewer votes ---------- */
+/* Status pill: Draft/Published in the list, plus Completed/Abandoned in detail. */
+.st-badge {
+  display: inline-flex; align-items: center;
+  border-radius: 4px; padding: 0 6px; font-size: 11px; line-height: 18px;
+  border: 1px solid transparent; white-space: nowrap; font-weight: 500;
+}
+.st-draft { color: var(--draft); border-color: var(--draft); }
+.st-published { color: var(--text-dim); border-color: var(--border-soft); }
+.st-completed { color: var(--add-line); border-color: var(--add-line); }
+.st-abandoned { color: var(--del-line); border-color: var(--del-line); }
+.st-unknown { color: var(--text-faint); border-color: var(--border-soft); }
+
+/* The current user's own action chip ("You approved" / "💬 You commented"). */
+.my-act {
+  display: inline-flex; align-items: center; gap: 3px;
+  border-radius: 4px; padding: 0 6px; font-size: 11px; line-height: 18px;
+  border: 1px solid transparent; white-space: nowrap; font-weight: 500;
+}
+
+/* Vote colors, shared by the my-action chip, the tally, and named reviewers. */
+.vote-approved { color: var(--add-line); border-color: var(--add-line); }
+.vote-rejected { color: var(--del-line); border-color: var(--del-line); }
+.vote-waiting { color: var(--draft); border-color: var(--draft); }
+.vote-commented { color: var(--accent); border-color: var(--accent-dim); }
+.vote-none { color: var(--text-faint); border-color: var(--border-soft); }
+
+/* Compact reviewer tally in the list (e.g. ✓2 ✗1 ⏳1). */
+.rev-tally { display: inline-flex; align-items: center; gap: 6px; }
+.rev-tally .tally { font-variant-numeric: tabular-nums; }
+.rev-tally .vote-approved { color: var(--add-line); }
+.rev-tally .vote-rejected { color: var(--del-line); }
+.rev-tally .vote-waiting { color: var(--draft); }
+
+/* Named reviewer strip under the detail header. */
+.reviewer-strip {
+  display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center;
+  margin: 2px 0 12px; font-size: 12px;
+}
+.reviewer-strip .reviewer {
+  display: inline-flex; align-items: center; gap: 4px;
+  border: 1px solid transparent; border-radius: 4px; padding: 1px 7px;
+  background: var(--bg-elev2); white-space: nowrap;
+}
+.reviewer-strip .rev-req { color: var(--del-line); font-weight: 700; }
+.reviewer-strip .rev-none { color: var(--text-faint); }
+
 /* Plate multi-select: a checkbox tucked at the card's left edge. */
 .pr-card.selectable { position: relative; padding-left: 38px; }
 .pr-card.selectable > .plate-sel {

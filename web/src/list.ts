@@ -8,6 +8,7 @@ import { openDetail } from "./detail.js";
 import { postJSON } from "./api.js";
 import { toast } from "./toast.js";
 import type { PR } from "./types.js";
+import { statusBadge, myActionBadge, reviewerTally } from "./prStatus.js";
 
 // A small status pill for a PR's background-review state, or "" when none.
 export function reviewBadge(prId: number | string): string {
@@ -51,6 +52,23 @@ function isOnPlate(pr: PR): boolean {
 // PRs currently checked on the Plate (by string PR id). Cleared on every render.
 const plateSel = new Set<string>();
 
+// The status pill + my-action chip + compact reviewer tally shown in a card's meta
+// row. Fields are optional so older cached payloads degrade gracefully.
+function metaBadges(p: PR): string {
+  const parts: string[] = [];
+  const st = statusBadge(p);
+  if (st.cls !== "st-unknown") parts.push(`<span class="st-badge ${st.cls}">${st.label}</span>`);
+  const my = myActionBadge(p.myVote || 0);
+  if (my) parts.push(`<span class="my-act ${my.cls}">${my.icon} ${my.label}</span>`);
+  const t = reviewerTally(p.reviewers || []);
+  const tallies: string[] = [];
+  if (t.approved) tallies.push(`<span class="tally vote-approved">✓${t.approved}</span>`);
+  if (t.rejected) tallies.push(`<span class="tally vote-rejected">✗${t.rejected}</span>`);
+  if (t.waiting) tallies.push(`<span class="tally vote-waiting">⏳${t.waiting}</span>`);
+  if (tallies.length) parts.push(`<span class="rev-tally">${tallies.join("")}</span>`);
+  return parts.join("");
+}
+
 // One clickable PR card. Shared by the Plate section and the main repo list.
 // When `selectable` (Plate only), a checkbox lets the user multi-select cards to
 // remove them from the Plate; clicking the checkbox must not open the detail modal.
@@ -62,7 +80,7 @@ function prCard(p: PR, selectable = false): HTMLElement {
        <div class="pr-title">${esc(p.title)}</div>
        <div class="pr-meta">
          <span class="id">#${p.id}</span>
-         ${p.isDraft ? '<span class="badge-draft">Draft</span>' : ""}
+         ${metaBadges(p)}
          ${reviewBadge(p.id)}
          <span class="branch"><code>${esc(p.sourceRef)}</code>→<code>${esc(p.targetRef)}</code></span>
          <span>by ${esc(p.author)}</span>

@@ -17,6 +17,16 @@ export interface Me {
     name: string;
 }
 
+// One reviewer's standing on a PR. `vote` follows ADO's scale:
+//   10 approved · 5 approved with suggestions · 0 no vote · -5 waiting · -10 rejected
+export interface Reviewer {
+    id: string;
+    name: string;
+    vote: number;
+    isRequired: boolean;
+    isContainer: boolean; // true = a group/team entry, not an individual
+}
+
 export interface Pr {
     org: string;
     id: number;
@@ -29,6 +39,9 @@ export interface Pr {
     authorId: string | undefined;
     created: string;
     isDraft: boolean | undefined;
+    status: string | undefined; // active | completed | abandoned
+    reviewers: Reviewer[];
+    myVote: number; // current user's own vote (0 when not an individual reviewer)
     sourceRef: string;
     targetRef: string;
     url: string;
@@ -68,6 +81,11 @@ export interface PrDetail {
     files: FileEntry[];
     threads: Thread[];
     commits: Commits;
+    status: string | undefined; // active | completed | abandoned
+    isDraft: boolean | undefined;
+    reviewers: Reviewer[];
+    myVote: number; // current user's own vote (0 when not an individual reviewer)
+    iCommented: boolean; // current user left at least one (non-system) comment
 }
 
 export interface DiffOp {
@@ -199,8 +217,27 @@ export async function getMe(org: string): Promise<Me> {
     return me;
 }
 
+// Normalize the reviewer list off a raw ADO PR record.
+function mapReviewers(pr: any): Reviewer[] {
+    return ((pr.reviewers || []) as any[]).map((r) => ({
+        id: r.id,
+        name: r.displayName || "unknown",
+        vote: typeof r.vote === "number" ? r.vote : 0,
+        isRequired: !!r.isRequired,
+        isContainer: !!r.isContainer,
+    }));
+}
+
+// The current user's own vote, matched by id (0 when not an individual reviewer).
+function myVoteOf(reviewers: Reviewer[], meId: string | undefined): number {
+    if (!meId) return 0;
+    const mine = reviewers.find((r) => r.id === meId);
+    return mine ? mine.vote : 0;
+}
+
 // Shape one raw ADO PR record into our Pr, tagging whether it is assigned to me.
-function mapPr(org: string, pr: any, mine: boolean): Pr {
+function mapPr(org: string, pr: any, mine: boolean, meId: string | undefined): Pr {
+    const reviewers = mapReviewers(pr);
     return {
         org,
         id: pr.pullRequestId,
@@ -213,6 +250,9 @@ function mapPr(org: string, pr: any, mine: boolean): Pr {
         authorId: pr.createdBy?.id,
         created: pr.creationDate,
         isDraft: pr.isDraft,
+        status: pr.status,
+        reviewers,
+        myVote: myVoteOf(reviewers, meId),
         sourceRef: (pr.sourceRefName || "").replace("refs/heads/", ""),
         targetRef: (pr.targetRefName || "").replace("refs/heads/", ""),
         url: `${orgBase(org)}/${enc(pr.repository?.project?.name || "")}/_git/${enc(
@@ -230,7 +270,7 @@ export async function listAssignedPRs(org: string): Promise<Pr[]> {
         `?searchCriteria.reviewerId=${me.id}` +
         `&searchCriteria.status=active&$top=200&${API}`;
     const data = await adoJson("GET", url);
-    return ((data.value || []) as any[]).map((pr) => mapPr(org, pr, true));
+    return ((data.value || []) as any[]).map((pr) => mapPr(org, pr, true, me.id));
 }
 
 // All active PRs in one (org, project), each tagged `mine` when the current user
@@ -247,21 +287,30 @@ export async function listActivePRs(org: string, project: string): Promise<Pr[]>
     ]);
     const mineIds = new Set(((mineData.value || []) as any[]).map((pr) => pr.pullRequestId));
     return ((allData.value || []) as any[]).map((pr) =>
-        mapPr(org, pr, mineIds.has(pr.pullRequestId)),
+        mapPr(org, pr, mineIds.has(pr.pullRequestId), me.id),
     );
 }
 
 // PR detail: changed files (latest iteration) + threads (comments). Diffs are lazy.
 export async function getPrDetail(org: string, project: string, repoId: string, prId: string | number): Promise<PrDetail> {
     const base = `${repoBase(org, project, repoId)}/pullRequests/${prId}`;
-    // PR object (for the description) fetched in parallel with iterations.
-    const [prObj, iters] = await Promise.all([
+    // Identity + PR object (description, status, reviewers) + iterations, in parallel.
+    const [me, prObj, iters] = await Promise.all([
+        getMe(org),
         adoJson("GET", `${base}?${API}`).catch(() => null),
         adoJson("GET", `${base}/iterations?${API}`),
     ]);
     const description = (prObj && prObj.description) || "";
+    const reviewers = prObj ? mapReviewers(prObj) : [];
+    const status: string | undefined = prObj?.status;
+    const isDraft: boolean | undefined = prObj?.isDraft;
+    const myVote = myVoteOf(reviewers, me.id);
     const last = (iters.value || [])[iters.value.length - 1];
-    if (!last) return { description, files: [], threads: [], commits: {} };
+    if (!last)
+        return {
+            description, files: [], threads: [], commits: {},
+            status, isDraft, reviewers, myVote, iCommented: false,
+        };
     const src = last.sourceRefCommit?.commitId;
     const mbase = last.commonRefCommit?.commitId;
 
@@ -274,6 +323,12 @@ export async function getPrDetail(org: string, project: string, repoId: string, 
         .map((c) => ({ path: c.item.path, changeType: c.changeType }));
 
     const threadsData = await adoJson("GET", `${base}/threads?${API}`);
+    // "I commented" = the current user authored at least one non-system comment.
+    const iCommented = ((threadsData.value || []) as any[]).some((t) =>
+        ((t.comments || []) as any[]).some(
+            (c) => c.commentType !== "system" && c.author?.id === me.id,
+        ),
+    );
     const threads: Thread[] = ((threadsData.value || []) as any[])
         .map((t) => normalizeThread(t))
         .filter((t) => t.comments.length > 0);
@@ -283,6 +338,11 @@ export async function getPrDetail(org: string, project: string, repoId: string, 
         files,
         threads,
         commits: { source: src, base: mbase, iteration: last.id },
+        status,
+        isDraft,
+        reviewers,
+        myVote,
+        iCommented,
     };
 }
 
