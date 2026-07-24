@@ -749,6 +749,10 @@ body.modal-open { overflow: hidden; }
   border: 1px solid var(--border); border-radius: var(--radius-sm);
   box-shadow: 0 4px 16px rgba(1, 4, 9, .5);
 }
+/* The `display: flex` above is an author rule and overrides the UA
+   `[hidden] { display: none }`, so hiding via the hidden attribute needs
+   this explicit author-level rule to actually take effect. */
+.sel-toolbar[hidden] { display: none; }
 .sel-btn {
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 26px; height: 26px; padding: 0 6px;
