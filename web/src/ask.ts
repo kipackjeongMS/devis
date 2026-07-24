@@ -9,7 +9,7 @@ import { postJSON, getJSON } from "./api.js";
 import { toast } from "./toast.js";
 import { renderMarkdown } from "./markdown.js";
 import { renderMermaid } from "./mermaid.js";
-import type { PR, FileChange } from "./types.js";
+import type { PR, FileChange, Finding } from "./types.js";
 import type { DiffSelection } from "./selection.js";
 
 const POLL_MS = 2000;
@@ -19,6 +19,27 @@ function newAskId(): string {
   const c = (globalThis as any).crypto;
   if (c && typeof c.randomUUID === "function") return c.randomUUID();
   return Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
+}
+
+// Shared trailing instructions: how the agent publishes its answer back to the
+// canvas (POST { askId, answer } to the callback URL) so the poller can pick it
+// up. Reused verbatim by both the ask and elaborate prompts.
+function callbackInstructions(askId: string, callbackUrl: string): string {
+  return (
+    "Answer this question concisely and directly in Markdown (you may use a small " +
+    "```mermaid fenced diagram if it genuinely aids understanding). When done, publish your " +
+    `answer back to the ADO DevOps canvas by POSTing JSON to ${callbackUrl} using your ` +
+    "`powershell` tool. Shape: { askId, answer } — set askId='" +
+    askId +
+    "' and answer=<your Markdown answer>. Build it safely so newlines/quotes survive, e.g. " +
+    "`$body = @{ askId='" +
+    askId +
+    "'; answer=$answerText } | ConvertTo-Json -Depth 6; Invoke-RestMethod -Uri '" +
+    callbackUrl +
+    "' -Method Post -ContentType 'application/json' -Body $body`. If you cannot answer, POST { askId:'" +
+    askId +
+    "', error:'<reason>' } instead. Keep any chat reply to a one-line acknowledgment — the answer belongs in the canvas."
+  );
 }
 
 // The selected code travels as a `selection` attachment (see buildAskAttachment)
@@ -41,19 +62,42 @@ function buildAskPrompt(
     ``,
     `Question: ${question}`,
     ``,
-    `Answer this question concisely and directly in Markdown (you may use a small ` +
-      "```mermaid fenced diagram if it genuinely aids understanding). When done, publish your " +
-      `answer back to the ADO DevOps canvas by POSTing JSON to ${callbackUrl} using your ` +
-      "`powershell` tool. Shape: { askId, answer } — set askId='" +
-      askId +
-      "' and answer=<your Markdown answer>. Build it safely so newlines/quotes survive, e.g. " +
-      "`$body = @{ askId='" +
-      askId +
-      "'; answer=$answerText } | ConvertTo-Json -Depth 6; Invoke-RestMethod -Uri '" +
-      callbackUrl +
-      "' -Method Post -ContentType 'application/json' -Body $body`. If you cannot answer, POST { askId:'" +
-      askId +
-      "', error:'<reason>' } instead. Keep any chat reply to a one-line acknowledgment — the answer belongs in the canvas.",
+    callbackInstructions(askId, callbackUrl),
+  ].join("\n");
+}
+
+// Prompt for the Elaborate flow: hands the agent the staged AI comment and its
+// location, asks for a deeper explanation, then the shared callback block.
+function buildElaboratePrompt(
+  pr: PR,
+  file: FileChange,
+  finding: Finding,
+  question: string,
+  askId: string,
+  callbackUrl: string
+): string {
+  const loc =
+    finding.line != null
+      ? finding.endLine && finding.endLine > finding.line
+        ? `${finding.line}–${finding.endLine}`
+        : `${finding.line}`
+      : "n/a";
+  const side = finding.side || "right";
+  const commentLines = finding.title
+    ? [`Title: ${finding.title}`, finding.comment]
+    : [finding.comment];
+  return [
+    `The user wants a deeper explanation of an AI-generated code review comment on Azure DevOps PR #${pr.id} ("${pr.title}").`,
+    ``,
+    `File: ${file.path}`,
+    `Location: lines ${loc} (${side} side)`,
+    ``,
+    `The staged review comment was:`,
+    ...commentLines,
+    ``,
+    `The user's follow-up: ${question}`,
+    ``,
+    callbackInstructions(askId, callbackUrl),
   ].join("\n");
 }
 
@@ -78,24 +122,36 @@ function buildAskAttachment(file: FileChange, sel: DiffSelection) {
   };
 }
 
-export function openAskModal(pr: PR, file: FileChange, sel: DiffSelection): void {
-  const { side, startLine, endLine } = sel.anchor;
-  const loc = endLine > startLine ? `${startLine}–${endLine}` : `${startLine}`;
-  const base = file.path.split("/").pop() || file.path;
+interface AskOptions {
+  title: string; // header title (e.g. "Ask Copilot" / "Elaborate")
+  loc: string; // header location text (e.g. "file.md:3 · right")
+  context: string; // the code/comment shown in the context block
+  contextClass?: string; // extra class on the context block (e.g. "prose")
+  placeholder: string; // textarea placeholder
+  initialQuestion?: string; // prefilled (and selected) question text
+  sendLabel: string; // send button label
+  buildPrompt: (question: string, askId: string, callbackUrl: string) => string;
+  attachments?: unknown[]; // SDK attachments to send with the prompt
+}
 
+// The shared Ask/Elaborate dialog: a snippet-or-comment context block, a question
+// box, and a polled Copilot answer rendered in place. The two exported entry
+// points below configure it via AskOptions; the polling/close machinery is
+// identical across both.
+function openAsk(opts: AskOptions): void {
   const overlay = el(`<div class="ask-overlay"></div>`);
   const dialog = el(`<div class="ask-dialog" role="dialog" aria-modal="true" tabindex="-1"></div>`);
   dialog.innerHTML =
     `<div class="ask-head">` +
-    `<span class="ask-title">Ask Copilot</span>` +
-    `<span class="ask-loc">${esc(base)}:${esc(loc)} · ${esc(side)}</span>` +
+    `<span class="ask-title">${esc(opts.title)}</span>` +
+    `<span class="ask-loc">${esc(opts.loc)}</span>` +
     `<button class="ask-close" title="Close (Esc)" aria-label="Close">✕</button>` +
     `</div>` +
-    `<pre class="ask-snippet"><code>${esc(sel.snippet)}</code></pre>` +
-    `<textarea class="ask-q" rows="3" placeholder="Ask a question about this code…"></textarea>` +
+    `<pre class="ask-snippet${opts.contextClass ? " " + opts.contextClass : ""}"><code>${esc(opts.context)}</code></pre>` +
+    `<textarea class="ask-q" rows="3" placeholder="${esc(opts.placeholder)}"></textarea>` +
     `<div class="ask-actions">` +
     `<button class="btn ghost sm ask-cancel">Cancel</button>` +
-    `<button class="btn sm ask-send">Ask Copilot</button>` +
+    `<button class="btn sm ask-send">${esc(opts.sendLabel)}</button>` +
     `</div>` +
     `<div class="ask-answer" hidden></div>`;
   overlay.appendChild(dialog);
@@ -106,6 +162,7 @@ export function openAskModal(pr: PR, file: FileChange, sel: DiffSelection): void
   const cancelBtn = dialog.querySelector(".ask-cancel") as HTMLButtonElement;
   const closeBtn = dialog.querySelector(".ask-close") as HTMLButtonElement;
   const answer = dialog.querySelector(".ask-answer") as HTMLElement;
+  if (opts.initialQuestion) ta.value = opts.initialQuestion;
 
   let closed = false;
   function close(): void {
@@ -136,8 +193,8 @@ export function openAskModal(pr: PR, file: FileChange, sel: DiffSelection): void
     try {
       await postJSON("/api/ask", {
         askId,
-        prompt: buildAskPrompt(pr, file, sel, question, askId, callbackUrl),
-        attachments: [buildAskAttachment(file, sel)],
+        prompt: opts.buildPrompt(question, askId, callbackUrl),
+        attachments: opts.attachments ?? [],
       });
     } catch (e: any) {
       answer.className = "ask-answer err-ans";
@@ -170,14 +227,14 @@ export function openAskModal(pr: PR, file: FileChange, sel: DiffSelection): void
       if (res.status === "error") {
         answer.className = "ask-answer err-ans";
         answer.textContent = "Copilot couldn't answer: " + (res.error || "unknown error");
-        resetInput("Ask Copilot");
+        resetInput(opts.sendLabel);
         return;
       }
     }
     if (closed) return;
     answer.className = "ask-answer err-ans";
     answer.textContent = "Copilot didn't respond in time. It may still reply in the chat.";
-    resetInput("Ask Copilot");
+    resetInput(opts.sendLabel);
   }
 
   function resetInput(label: string): void {
@@ -192,4 +249,45 @@ export function openAskModal(pr: PR, file: FileChange, sel: DiffSelection): void
   });
   dialog.focus();
   ta.focus();
+  if (opts.initialQuestion) ta.select();
+}
+
+// "Ask Copilot about this selection": seeded from a diff text selection, sending
+// the snippet as a `selection` attachment.
+export function openAskModal(pr: PR, file: FileChange, sel: DiffSelection): void {
+  const { side, startLine, endLine } = sel.anchor;
+  const loc = endLine > startLine ? `${startLine}–${endLine}` : `${startLine}`;
+  const base = file.path.split("/").pop() || file.path;
+  openAsk({
+    title: "Ask Copilot",
+    loc: `${base}:${loc} · ${side}`,
+    context: sel.snippet,
+    placeholder: "Ask a question about this code…",
+    sendLabel: "Ask Copilot",
+    buildPrompt: (q, id, url) => buildAskPrompt(pr, file, sel, q, id, url),
+    attachments: [buildAskAttachment(file, sel)],
+  });
+}
+
+// "Elaborate": dive deeper into a staged AI review finding. Seeded with the AI
+// comment and a prefilled follow-up so a single send yields a fuller explanation.
+export function openElaborateModal(pr: PR, file: FileChange, finding: Finding): void {
+  const base = file.path.split("/").pop() || file.path;
+  const loc =
+    finding.line != null
+      ? `${finding.line}${finding.endLine && finding.endLine > finding.line ? "–" + finding.endLine : ""}`
+      : base;
+  const side = finding.side || "right";
+  const context = (finding.title ? finding.title + "\n\n" : "") + finding.comment;
+  openAsk({
+    title: "Elaborate",
+    loc: `${base}:${loc} · ${side}`,
+    context,
+    contextClass: "prose",
+    placeholder: "Ask a follow-up, or just send for a deeper explanation…",
+    initialQuestion:
+      "Explain this review comment in more detail — what it means, why it matters, and how to address it.",
+    sendLabel: "Ask Copilot",
+    buildPrompt: (q, id, url) => buildElaboratePrompt(pr, file, finding, q, id, url),
+  });
 }

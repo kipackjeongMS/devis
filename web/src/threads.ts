@@ -4,6 +4,7 @@ import { esc, timeAgo } from "./util.js";
 import { postJSON } from "./api.js";
 import { toast } from "./toast.js";
 import type { PR, FileChange, Thread, Comment, Finding } from "./types.js";
+import { openElaborateModal } from "./ask.js";
 
 /** Inline composer row for a brand-new line-anchored thread/range (ADO write on submit). */
 export function buildComposerRow(
@@ -193,11 +194,14 @@ export function renderStagedFinding(
   const actions = el(
     `<div class="staged-actions">
        <button class="btn sm post">Post to ADO</button>
+       <button class="btn ghost sm elaborate">Elaborate</button>
        <button class="btn ghost sm dismiss">Dismiss</button>
      </div>`
   );
   const postBtn = actions.querySelector(".post") as HTMLButtonElement;
+  const elaborateBtn = actions.querySelector(".elaborate") as HTMLButtonElement;
   const dismissBtn = actions.querySelector(".dismiss") as HTMLButtonElement;
+  elaborateBtn.addEventListener("click", () => openElaborateModal(pr, file, finding));
   dismissBtn.addEventListener("click", () => box.remove());
   postBtn.addEventListener("click", async () => {
     if (postBtn.disabled) return;
