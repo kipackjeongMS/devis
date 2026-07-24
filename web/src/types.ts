@@ -15,6 +15,7 @@ export interface Reviewer {
 export interface PR {
   id: number;
   mine: boolean;
+  authoredByMe?: boolean; // I created this PR
   title: string;
   org: string;
   project: string;

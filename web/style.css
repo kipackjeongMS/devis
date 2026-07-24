@@ -211,6 +211,13 @@ body { display: flex; flex-direction: column; }
 .st-abandoned { color: var(--del-line); border-color: var(--del-line); }
 .st-unknown { color: var(--text-faint); border-color: var(--border-soft); }
 
+/* PR-you-authored chip (folded into the "Me" filter alongside reviewer PRs). */
+.authored-badge {
+  display: inline-flex; align-items: center; gap: 3px;
+  border-radius: 4px; padding: 0 6px; font-size: 11px; line-height: 18px;
+  border: 1px solid var(--accent-dim); color: var(--accent); white-space: nowrap; font-weight: 500;
+}
+
 /* The current user's own action chip ("You approved" / "💬 You commented"). */
 .my-act {
   display: inline-flex; align-items: center; gap: 3px;

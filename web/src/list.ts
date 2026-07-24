@@ -56,6 +56,7 @@ const plateSel = new Set<string>();
 // row. Fields are optional so older cached payloads degrade gracefully.
 function metaBadges(p: PR): string {
   const parts: string[] = [];
+  if (p.authoredByMe) parts.push(`<span class="authored-badge">👤 Author</span>`);
   const st = statusBadge(p);
   if (st.cls !== "st-unknown") parts.push(`<span class="st-badge ${st.cls}">${st.label}</span>`);
   const my = myActionBadge(p.myVote || 0);

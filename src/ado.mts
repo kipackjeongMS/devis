@@ -31,6 +31,7 @@ export interface Pr {
     org: string;
     id: number;
     mine: boolean;
+    authoredByMe: boolean; // I created this PR (a stronger signal than a reviewer match)
     title: string;
     project: string | undefined;
     repo: string | undefined;
@@ -235,13 +236,16 @@ function myVoteOf(reviewers: Reviewer[], meId: string | undefined): number {
     return mine ? mine.vote : 0;
 }
 
-// Shape one raw ADO PR record into our Pr, tagging whether it is assigned to me.
+// Shape one raw ADO PR record into our Pr, tagging whether it is assigned to me
+// and whether I authored it (folded into `mine` so both count as "Me" in the UI).
 function mapPr(org: string, pr: any, mine: boolean, meId: string | undefined): Pr {
     const reviewers = mapReviewers(pr);
+    const authoredByMe = !!meId && pr.createdBy?.id === meId;
     return {
         org,
         id: pr.pullRequestId,
-        mine,
+        mine: mine || authoredByMe,
+        authoredByMe,
         title: pr.title,
         project: pr.repository?.project?.name,
         repo: pr.repository?.name,
@@ -261,22 +265,32 @@ function mapPr(org: string, pr: any, mine: boolean, meId: string | undefined): P
     };
 }
 
-// All active PRs where the current user is a reviewer, for one org (single call).
-// Every result is `mine` by construction.
+// All active PRs where the current user is a reviewer OR the author, for one org
+// (two parallel calls, merged and deduped — a PR can match both).
 export async function listAssignedPRs(org: string): Promise<Pr[]> {
     const me = await getMe(org);
-    const url =
-        `${orgBase(org)}/_apis/git/pullrequests` +
-        `?searchCriteria.reviewerId=${me.id}` +
-        `&searchCriteria.status=active&$top=200&${API}`;
-    const data = await adoJson("GET", url);
-    return ((data.value || []) as any[]).map((pr) => mapPr(org, pr, true, me.id));
+    const base = `${orgBase(org)}/_apis/git/pullrequests`;
+    const q = `searchCriteria.status=active&$top=200&${API}`;
+    const [reviewerData, authoredData] = await Promise.all([
+        adoJson("GET", `${base}?searchCriteria.reviewerId=${me.id}&${q}`),
+        adoJson("GET", `${base}?searchCriteria.creatorId=${me.id}&${q}`),
+    ]);
+    const reviewerIds = new Set(
+        ((reviewerData.value || []) as any[]).map((pr) => pr.pullRequestId),
+    );
+    const byId = new Map<number, any>();
+    for (const pr of (reviewerData.value || []) as any[]) byId.set(pr.pullRequestId, pr);
+    for (const pr of (authoredData.value || []) as any[]) byId.set(pr.pullRequestId, pr);
+    return [...byId.values()].map((pr) =>
+        mapPr(org, pr, reviewerIds.has(pr.pullRequestId), me.id),
+    );
 }
 
 // All active PRs in one (org, project), each tagged `mine` when the current user
-// is a reviewer. Two parallel project-scoped calls: the full active set, plus the
-// reviewer=me subset (ADO expands group/team reviewers server-side, so a PR
-// assigned to me via a group is still correctly flagged `mine`).
+// is a reviewer OR the author. Two parallel project-scoped calls: the full active
+// set, plus the reviewer=me subset (ADO expands group/team reviewers server-side,
+// so a PR assigned to me via a group is still correctly flagged `mine`) — the
+// full set already contains PRs I authored, so mapPr folds those in too.
 export async function listActivePRs(org: string, project: string): Promise<Pr[]> {
     const me = await getMe(org);
     const base = `${orgBase(org)}/${enc(project)}/_apis/git/pullrequests`;
