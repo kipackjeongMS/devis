@@ -60,10 +60,19 @@ interface ToolbarOpts {
 }
 let toolbar: HTMLElement | null = null;
 let current: { sel: DiffSelection; opts: ToolbarOpts } | null = null;
+let trackedTbody: HTMLElement | null = null; // diff body the shown toolbar is anchored within
+let rafId = 0; // active tracking-loop handle (0 = not running)
+let tbW = 0; // cached toolbar size (content is fixed, so measure once)
+let tbH = 0;
 
 function hideToolbar(): void {
   if (toolbar) toolbar.hidden = true;
   current = null;
+  trackedTbody = null;
+  if (rafId) {
+    cancelAnimationFrame(rafId);
+    rafId = 0;
+  }
 }
 
 function ensureToolbar(): HTMLElement {
@@ -89,7 +98,8 @@ function ensureToolbar(): HTMLElement {
   document.body.appendChild(tb);
   toolbar = tb;
 
-  // Dismiss on outside-mousedown, scroll (capture — scroll doesn't bubble), Esc.
+  // Dismiss on outside-mousedown, focus-out, selection loss, or Esc. Scrolling
+  // is NOT a dismiss — the tracking loop re-pins the toolbar to the selection.
   document.addEventListener(
     "mousedown",
     (e) => {
@@ -97,37 +107,100 @@ function ensureToolbar(): HTMLElement {
     },
     true
   );
-  document.addEventListener("scroll", () => hideToolbar(), true);
+  window.addEventListener("blur", () => hideToolbar());
+  document.addEventListener("selectionchange", () => {
+    if (!current || !trackedTbody || !toolbar || toolbar.hidden) return;
+    const s = window.getSelection();
+    if (!s || s.isCollapsed || s.rangeCount === 0 || !s.getRangeAt(0).intersectsNode(trackedTbody)) hideToolbar();
+  });
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") hideToolbar();
   });
   return tb;
 }
 
+// The viewport rect of the end of the current selection, if it still falls
+// inside `tbody`. Uses the last client rect (end of the highlight) so the
+// toolbar lands where the user finished selecting; null when there's nothing
+// usable to anchor to.
+function selectionRect(tbody: HTMLElement): DOMRect | null {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null;
+  const range = selection.getRangeAt(0);
+  if (!range.intersectsNode(tbody)) return null;
+  const rects = range.getClientRects();
+  if (rects.length) return rects[rects.length - 1]!;
+  const box = range.getBoundingClientRect();
+  return box.width || box.height ? box : null;
+}
+
+// True once the anchor has scrolled fully outside the viewport.
+function outOfView(rect: DOMRect): boolean {
+  return rect.bottom < 0 || rect.top > window.innerHeight || rect.right < 0 || rect.left > window.innerWidth;
+}
+
+// Anchor the toolbar just below-right of the selection's end, flipping above /
+// clamping to the viewport when there's no room.
 function positionToolbar(rect: DOMRect): void {
   const tb = ensureToolbar();
-  tb.hidden = false; // must be laid out before measuring
+  tb.hidden = false; // must be visible before measuring
+  if (!tbW) {
+    tbW = tb.offsetWidth;
+    tbH = tb.offsetHeight;
+  }
   const gap = 8;
-  const w = tb.offsetWidth;
-  const h = tb.offsetHeight;
-  let top = rect.top - h - gap;
-  if (top < 4) top = rect.bottom + gap; // flip below if no room above
-  let left = rect.left + rect.width / 2 - w / 2;
-  left = Math.max(4, Math.min(left, window.innerWidth - w - 4));
+  let left = rect.right + gap;
+  let top = rect.bottom + gap;
+  if (top + tbH + 4 > window.innerHeight) top = rect.top - tbH - gap; // flip above if no room below
+  left = Math.max(4, Math.min(left, window.innerWidth - tbW - 4));
+  top = Math.max(4, top);
   tb.style.top = top + "px";
   tb.style.left = left + "px";
 }
 
-// Show the toolbar whenever the user finishes a selection inside `tbody`.
+// Re-pin the toolbar to the live selection each frame so it stays glued to the
+// highlight through any scroll (inner container, window, or host). Self-cancels
+// when the selection is gone or scrolled out of view. rAF is scroll-source
+// agnostic, so it works no matter which element actually scrolled.
+function startTracking(): void {
+  if (rafId) cancelAnimationFrame(rafId);
+  const loop = (): void => {
+    if (!current || !trackedTbody || !toolbar || toolbar.hidden) {
+      rafId = 0;
+      return;
+    }
+    // Ground-truth focus-out: dismiss the moment the webview loses focus (host
+    // chrome, another canvas, another window, devtools) — catches the cases the
+    // window `blur` event misses in this embed.
+    if (!document.hasFocus()) {
+      hideToolbar();
+      return;
+    }
+    const rect = selectionRect(trackedTbody);
+    if (!rect || outOfView(rect)) {
+      hideToolbar();
+      return;
+    }
+    positionToolbar(rect);
+    rafId = requestAnimationFrame(loop);
+  };
+  rafId = requestAnimationFrame(loop);
+}
+
+// Show the toolbar whenever the user finishes a selection inside `tbody`, then
+// keep it glued to the highlight via the tracking loop.
 export function installSelectionToolbar(tbody: HTMLElement, opts: ToolbarOpts): void {
   tbody.addEventListener("mouseup", () => {
     // Defer so the browser has finalized the selection.
     setTimeout(() => {
       const sel = getDiffSelection(tbody);
       if (!sel) return hideToolbar();
-      const range = window.getSelection()!.getRangeAt(0);
+      const rect = selectionRect(tbody);
+      if (!rect) return hideToolbar();
       current = { sel, opts };
-      positionToolbar(range.getBoundingClientRect());
+      trackedTbody = tbody;
+      positionToolbar(rect);
+      startTracking();
     }, 0);
   });
 }

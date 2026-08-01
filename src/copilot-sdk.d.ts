@@ -3,9 +3,12 @@
 // when it loads the compiled `extension.mjs`; it is NOT installed from npm, so we
 // describe just the surface this extension uses.
 declare module "@github/copilot-sdk/extension" {
+    export type CanvasJsonSchema = Record<string, unknown>;
+
     /** Context handed to a canvas action handler. */
     export interface CanvasActionContext {
         instanceId: string;
+        input?: Record<string, unknown>;
         [key: string]: unknown;
     }
 
@@ -13,7 +16,14 @@ declare module "@github/copilot-sdk/extension" {
     export interface CanvasAction {
         name: string;
         description?: string;
+        inputSchema?: CanvasJsonSchema;
         handler: (ctx: CanvasActionContext) => Promise<unknown> | unknown;
+    }
+
+    export interface CanvasOpenContext {
+        instanceId: string;
+        input?: Record<string, unknown>;
+        [key: string]: unknown;
     }
 
     /** What a canvas `open` handler returns: the panel title and the URL to load. */
@@ -27,9 +37,10 @@ declare module "@github/copilot-sdk/extension" {
         id: string;
         displayName: string;
         description?: string;
+        inputSchema?: CanvasJsonSchema;
         actions?: CanvasAction[];
-        open: () => Promise<CanvasOpenResult> | CanvasOpenResult;
-        onClose?: () => Promise<void> | void;
+        open: (ctx: CanvasOpenContext) => Promise<CanvasOpenResult> | CanvasOpenResult;
+        onClose?: (ctx: CanvasOpenContext) => Promise<void> | void;
     }
 
     /** Opaque canvas handle returned by `createCanvas`. */

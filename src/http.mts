@@ -56,6 +56,10 @@ export async function serveStatic(
         res.writeHead(200, {
             "Content-Type": MIME[ext] || "application/octet-stream",
             "Content-Length": data.length,
+            // Loopback dev server: never let the webview cache assets. Ephemeral
+            // ports can be reused across extension reloads, so a cached app.js
+            // under the same origin would otherwise mask freshly deployed code.
+            "Cache-Control": "no-store, must-revalidate",
         });
         res.end(data);
     } catch {

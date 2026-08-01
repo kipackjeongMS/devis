@@ -4,7 +4,7 @@ import { getJSON } from "./api.js";
 import type { AppState, Review } from "./types.js";
 
 export const state: AppState = {
-  config: { organizations: [], projects: {}, reviewModel: "" },
+  config: { organizations: [], projects: {}, reviewModel: "", reviewsDir: "" },
   prs: [],
   org: "all",
   project: "all",

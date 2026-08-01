@@ -5,17 +5,22 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { SessionRef } from "@github/copilot-sdk/extension";
 import { sendJson, readBody } from "./http.mjs";
 import { readConfig, writeConfig } from "./config.mjs";
-import { ensureDb, getReview, listReviews, upsertReview, markFindingPosted, setDismissed } from "./store.mjs";
+import { ensureDb, getReview, listReviews, upsertReview, publishReviewRun, expireStaleReviews, markFindingPosted, setDismissed, listPlateDismissals, setPlateDismissed, listNotifications, unreadCount, markNotificationsRead, markAllNotificationsRead } from "./store.mjs";
 import type { Finding } from "./store.mjs";
+import { writeReviewMarkdown } from "./reviews-md.mjs";
+import { scanInbox } from "./inbox.mjs";
+import { rephraseComment } from "./rephrase.mjs";
 import {
     listAssignedPRs,
     listActivePRs,
+    getPrSummary,
     getPrDetail,
     getFileDiff,
     postReply,
     createThread,
     type Pr,
 } from "./ado.mjs";
+import { parsePrCanvasTarget } from "./canvas-target.mjs";
 import { getServiceGroupRollouts, getRolloutGrid } from "./ev2.mjs";
 import { getAvailableModels } from "./models.mjs";
 
@@ -26,6 +31,16 @@ let sessionRef: SessionRef | null = null;
 export function setSession(s: SessionRef | null): void {
     sessionRef = s;
 }
+
+// Identifies this server's process instance. The loopback server binds an
+// ephemeral port fresh on every extension (re)start, but a webview panel
+// caches the URL from whenever it was opened. If the extension process gets
+// reloaded, old panels are left pointing at a dead/stale port. Rather than
+// let that surface as a confusing raw 404 ("no such endpoint") or network
+// error, the webview pings this route at boot and again on failures to tell
+// "genuine app error" apart from "I'm talking to a server instance that no
+// longer matches the one I loaded against" — see web/src/api.ts.
+const STARTED_AT = Date.now();
 
 // ---- "Ask Copilot about this selection" round-trip -------------------------
 // session.send() is fire-and-forget (the model answers in the chat), so to show
@@ -49,8 +64,14 @@ function pruneAsks(): void {
 export async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
     const p = url.pathname;
     const q = url.searchParams;
+    console.error(`[api] ${req.method} ${p}`);
 
     try {
+        // ---- server identity (stale-connection detection, see STARTED_AT above) ----
+        if (p === "/api/ping" && req.method === "GET") {
+            return sendJson(res, 200, { pid: process.pid, startedAt: STARTED_AT });
+        }
+
         // ---- config ----
         if (p === "/api/config" && req.method === "GET") {
             return sendJson(res, 200, await readConfig());
@@ -72,6 +93,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
         // Filtering by org/project/assignment happens client-side.
         if (p === "/api/prs" && req.method === "GET") {
             const cfg = await readConfig();
+            const refreshActivity = q.get("refresh") === "1";
             const prs: Pr[] = [];
             const errors: string[] = [];
             const tasks: Promise<void>[] = [];
@@ -82,7 +104,11 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
                         tasks.push(
                             (async () => {
                                 try {
-                                    prs.push(...(await listActivePRs(org, project)));
+                                    const found = await listActivePRs(org, project, refreshActivity);
+                                    prs.push(...found);
+                                    for (const pr of found) {
+                                        if (pr.activityError) errors.push(`${org}/${project}: ${pr.activityError}`);
+                                    }
                                 } catch (e) {
                                     errors.push(`${org}/${project}: ${(e as Error).message}`);
                                 }
@@ -93,7 +119,11 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
                     tasks.push(
                         (async () => {
                             try {
-                                prs.push(...(await listAssignedPRs(org)));
+                                const found = await listAssignedPRs(org, refreshActivity);
+                                prs.push(...found);
+                                for (const pr of found) {
+                                    if (pr.activityError) errors.push(`${org}: ${pr.activityError}`);
+                                }
                             } catch (e) {
                                 errors.push(`${org}: ${(e as Error).message}`);
                             }
@@ -102,8 +132,31 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
                 }
             }
             await Promise.all(tasks);
+            await ensureDb();
+            const dismissed = listPlateDismissals();
+            for (const pr of prs) pr.plateDismissed = dismissed.has(String(pr.id));
             prs.sort((a, b) => new Date(b.created).getTime() - new Date(a.created).getTime());
             return sendJson(res, 200, { prs, errors });
+        }
+
+        // ---- resolve one PR summary for a canvas deep-link ----
+        if (p === "/api/pr-summary" && req.method === "GET") {
+            let target;
+            try {
+                target = parsePrCanvasTarget({
+                    org: q.get("org"),
+                    project: q.get("project"),
+                    repoId: q.get("repoId"),
+                    prId: q.get("prId"),
+                });
+            } catch (e) {
+                return sendJson(res, 400, { error: (e as Error).message });
+            }
+            if (!target) return sendJson(res, 400, { error: "PR target required" });
+            const pr = await getPrSummary(target.org, target.project, target.repoId, target.prId);
+            await ensureDb();
+            pr.plateDismissed = listPlateDismissals().has(String(pr.id));
+            return sendJson(res, 200, { pr });
         }
 
         // ---- one PR's detail (files + threads + commits) ----
@@ -197,19 +250,48 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
                 return sendJson(res, 400, { error: "prId required" });
             }
             await ensureDb();
-            return sendJson(res, 200, upsertReview(b));
+            const status = b.status == null ? "" : String(b.status);
+            const current = getReview(b.prId);
+            if (
+                (status === "done" || status === "error") &&
+                current?.run_id &&
+                (!b.runId || String(b.runId) !== current.run_id)
+            ) {
+                return sendJson(res, 409, { error: "stale review run" });
+            }
+            const merged =
+                (status === "done" || status === "error") && b.runId
+                    ? publishReviewRun({ ...b, runId: String(b.runId) })
+                    : upsertReview(b);
+            return sendJson(res, 200, merged);
+        }
+        // On-demand: write the stored review to the configured markdown folder.
+        // Saving is opt-in (a "Save as .md" button in the canvas), so this returns
+        // a precise outcome the UI can surface (saved+path / disabled / empty).
+        if (p === "/api/review-md" && req.method === "POST") {
+            const b = await readBody(req);
+            if (b.prId == null || String(b.prId).trim() === "") {
+                return sendJson(res, 400, { error: "prId required" });
+            }
+            await ensureDb();
+            const row = getReview(b.prId);
+            if (!row) return sendJson(res, 404, { error: "no review for this PR" });
+            const result = await writeReviewMarkdown(row);
+            return sendJson(res, 200, result);
         }
         // Single PR's stored review (or null). Parse structured findings for the client.
         if (p === "/api/review-result" && req.method === "GET") {
             await ensureDb();
+            expireStaleReviews();
             return sendJson(res, 200, { review: shapeReview(getReview(q.get("prId")!)) });
         }
         // All stored reviews (compact — for list badges).
         if (p === "/api/review-results" && req.method === "GET") {
             await ensureDb();
+            expireStaleReviews();
             return sendJson(res, 200, { reviews: listReviews() });
         }
-        // User-driven Plate lifecycle: remove (dismiss) or restore PRs on Copilot's Plate.
+        // User-driven My Plate lifecycle: remove (dismiss) or restore any PR.
         // Body: { prIds: (string|number)[], dismissed?: boolean } — dismissed defaults to true.
         if (p === "/api/review/dismiss" && req.method === "POST") {
             const b = await readBody(req);
@@ -217,7 +299,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
             if (!prIds.length) return sendJson(res, 400, { error: "prIds required" });
             const dismissed = b.dismissed === undefined ? true : !!b.dismissed;
             await ensureDb();
-            const changed = setDismissed(prIds, dismissed);
+            const changed = setPlateDismissed(prIds, dismissed);
+            setDismissed(prIds, dismissed); // keep legacy review rows in sync
             return sendJson(res, 200, { ok: true, dismissed, changed });
         }
 
@@ -232,6 +315,39 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
             await ensureDb();
             if (b.findingId != null) markFindingPosted(b.prId, String(b.findingId));
             return sendJson(res, 200, created);
+        }
+
+        // ---- humanize a staged finding into a natural comment (headless copilot -p) ----
+        // No chat session is created; the subprocess runs in print mode and returns text.
+        if (p === "/api/rephrase" && req.method === "POST") {
+            const b = await readBody(req);
+            if (!b.comment || !String(b.comment).trim()) return sendJson(res, 400, { error: "empty comment" });
+            const text = await rephraseComment({
+                comment: String(b.comment),
+                title: b.title ? String(b.title) : undefined,
+                model: b.model ? String(b.model) : undefined,
+            });
+            return sendJson(res, 200, { text });
+        }
+
+        // ---- notification inbox (peer comments/replies on my authored PRs) ----
+        // GET lists the persisted feed; POST /poll runs a scan (ADO fetch + diff +
+        // dedup) and returns the refreshed feed; POST /read marks items read.
+        if (p === "/api/inbox" && req.method === "GET") {
+            await ensureDb();
+            return sendJson(res, 200, { items: listNotifications(), unread: unreadCount() });
+        }
+        if (p === "/api/inbox/poll" && req.method === "POST") {
+            await ensureDb();
+            const { inserted } = await scanInbox();
+            return sendJson(res, 200, { items: listNotifications(), unread: unreadCount(), inserted });
+        }
+        if (p === "/api/inbox/read" && req.method === "POST") {
+            await ensureDb();
+            const b = await readBody(req);
+            if (b && b.all) markAllNotificationsRead();
+            else if (b && Array.isArray(b.ids)) markNotificationsRead(b.ids.map(String));
+            return sendJson(res, 200, { unread: unreadCount() });
         }
 
         // ---- Ev2 rollouts: all service groups, status-enriched summaries ----

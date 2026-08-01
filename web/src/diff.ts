@@ -8,6 +8,7 @@ import { highlightCode } from "./highlight.js";
 import { renderThread, buildComposerRow, renderStagedFinding } from "./threads.js";
 import { installSelectionToolbar } from "./selection.js";
 import { openAskModal } from "./ask.js";
+import type { RevealableFile } from "./reveal.js";
 import type { PR, Detail, FileChange, Diff, DiffLine, Thread, Finding } from "./types.js";
 
 /** Unposted, line-anchored findings for one file (staged inline comments). */
@@ -26,7 +27,8 @@ export function chgClass(t: string | undefined): [string, string] {
 
 export function renderFile(pr: PR, detail: Detail, file: FileChange, threads: Thread[]): HTMLElement {
   const [cls, label] = chgClass(file.changeType);
-  const box = el(`<div class="file"></div>`);
+  const box = el<RevealableFile>(`<div class="file"></div>`);
+  box.dataset.path = file.path; // lookup key for revealFinding()
   const head = el(
     `<div class="file-head">
        <span class="file-chev">▶</span>
@@ -36,40 +38,52 @@ export function renderFile(pr: PR, detail: Detail, file: FileChange, threads: Th
      </div>`
   );
   const body = el(`<div class="file-body"></div>`);
-  let loaded = false;
-  head.addEventListener("click", async () => {
-    box.classList.toggle("open");
-    if (box.classList.contains("open") && !loaded) {
-      loaded = true;
-      body.innerHTML = '<div class="diff-note"><span class="spinner"></span> Loading diff…</div>';
-      try {
-        const diff = await getJSON(
-          `/api/diff?org=${encodeURIComponent(pr.org)}&project=${encodeURIComponent(pr.project)}` +
-            `&repoId=${encodeURIComponent(pr.repoId)}&path=${encodeURIComponent(file.path)}` +
-            `&src=${detail.commits.source || ""}&base=${detail.commits.base || ""}` +
-            `&changeType=${encodeURIComponent(file.changeType)}`
+
+  async function loadDiff(): Promise<void> {
+    body.innerHTML = '<div class="diff-note"><span class="spinner"></span> Loading diff…</div>';
+    try {
+      const diff = await getJSON(
+        `/api/diff?org=${encodeURIComponent(pr.org)}&project=${encodeURIComponent(pr.project)}` +
+          `&repoId=${encodeURIComponent(pr.repoId)}&path=${encodeURIComponent(file.path)}` +
+          `&src=${detail.commits.source || ""}&base=${detail.commits.base || ""}` +
+          `&changeType=${encodeURIComponent(file.changeType)}`
+      );
+      body.innerHTML = "";
+      file._diff = diff; // cache for bridge
+      const staged = stagedForFile(pr, file.path);
+      if (staged.length && !head.querySelector(".file-ai-dot")) {
+        head.querySelector(".file-path")!.after(
+          el(`<span class="file-ai-dot" title="${staged.length} staged AI comment(s)">✦ ${staged.length}</span>`)
         );
-        body.innerHTML = "";
-        file._diff = diff; // cache for bridge
-        const staged = stagedForFile(pr, file.path);
-        if (staged.length && !head.querySelector(".file-ai-dot")) {
-          head.querySelector(".file-path")!.after(
-            el(`<span class="file-ai-dot" title="${staged.length} staged AI comment(s)">✦ ${staged.length}</span>`)
-          );
-        }
-        // File-level threads (no line) render above the diff; line threads render inline.
-        const fileLevel = threads.filter((t) => t.line == null);
-        const lineThreads = threads.filter((t) => t.line != null);
-        const stagedFile = staged.filter((f) => f.line == null);
-        const stagedLine = staged.filter((f) => f.line != null);
-        for (const t of fileLevel) body.appendChild(renderThread(pr, t));
-        for (const f of stagedFile) body.appendChild(renderStagedFinding(pr, file, f));
-        body.appendChild(renderDiff(pr, detail, file, diff, lineThreads, stagedLine));
-      } catch (e: any) {
-        body.innerHTML = '<div class="diff-note">Could not load diff: ' + esc(e.message) + "</div>";
       }
+      // File-level threads (no line) render above the diff; line threads render inline.
+      const fileLevel = threads.filter((t) => t.line == null);
+      const lineThreads = threads.filter((t) => t.line != null);
+      const stagedFile = staged.filter((f) => f.line == null);
+      const stagedLine = staged.filter((f) => f.line != null);
+      for (const t of fileLevel) body.appendChild(renderThread(pr, t));
+      for (const f of stagedFile) body.appendChild(renderStagedFinding(pr, file, f));
+      body.appendChild(renderDiff(pr, detail, file, diff, lineThreads, stagedLine));
+    } catch (e: any) {
+      body.innerHTML = '<div class="diff-note">Could not load diff: ' + esc(e.message) + "</div>";
     }
+  }
+
+  // One shared in-flight load, so opening from the header and from a severity
+  // light can't kick off two fetches for the same file.
+  let loading: Promise<void> | null = null;
+  const ensureLoaded = (): Promise<void> => (loading ||= loadDiff());
+
+  head.addEventListener("click", () => {
+    box.classList.toggle("open");
+    if (box.classList.contains("open")) void ensureLoaded();
   });
+
+  box._ensureOpen = async () => {
+    box.classList.add("open");
+    await ensureLoaded();
+  };
+
   box.appendChild(head);
   box.appendChild(body);
   return box;

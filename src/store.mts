@@ -23,7 +23,7 @@ export interface Finding {
     line?: number | null;
     endLine?: number | null;
     side?: string | null; // "left" | "right"
-    severity?: string | null; // "high" | "medium" | "low" | "nit"
+    severity?: string | null; // "critical" | "high" | "medium" | "low" | "nit"
     title?: string | null;
     comment: string;
     posted?: boolean;
@@ -42,7 +42,9 @@ export interface ReviewRow {
     findings: string | null;
     findings_json: string | null;
     error: string | null;
-    // 1 when the user has removed this PR from Copilot's Plate. Cleared (0) when a
+    run_id: string | null;
+    // Legacy mirror of the My Plate preference. Kept for stored-review compatibility.
+    // A fresh review clears both this field and the dedicated preference row.
     // fresh review starts, so a re-review re-surfaces it.
     dismissed: number;
     created_at: string | null;
@@ -67,40 +69,106 @@ export interface ReviewInput {
     // one-element array into a bare object).
     findings?: string | Finding | Finding[] | null;
     error?: string | null;
+    runId?: string | null;
 }
 
 let db: DatabaseSync | null = null;
+let dbInit: Promise<DatabaseSync> | null = null;
 
 export async function ensureDb(): Promise<DatabaseSync> {
     if (db) return db;
+    if (dbInit) return dbInit;
+    dbInit = initializeDb();
+    try {
+        return await dbInit;
+    } catch (e) {
+        dbInit = null;
+        throw e;
+    }
+}
+
+async function initializeDb(): Promise<DatabaseSync> {
     await mkdir(DATA_DIR, { recursive: true });
-    db = new DatabaseSync(DB_PATH);
-    db.exec(`
-        CREATE TABLE IF NOT EXISTS reviews (
-            pr_id      TEXT PRIMARY KEY,
-            org        TEXT,
-            project    TEXT,
-            repo       TEXT,
-            title      TEXT,
-            status     TEXT NOT NULL DEFAULT 'pending',
-            summary    TEXT,
-            story      TEXT,
-            findings   TEXT,
-            error      TEXT,
-            created_at TEXT,
-            updated_at TEXT
-        );
-    `);
-    // Migration: structured, line-anchored findings (staged inline comments).
-    const cols = db.prepare("PRAGMA table_info(reviews)").all() as Array<{ name: string }>;
-    if (!cols.some((c) => c.name === "findings_json")) {
-        db.exec("ALTER TABLE reviews ADD COLUMN findings_json TEXT");
+    const connection = new DatabaseSync(DB_PATH);
+    connection.exec("PRAGMA busy_timeout = 5000");
+    connection.prepare("PRAGMA journal_mode = WAL").get();
+    connection.exec("BEGIN IMMEDIATE");
+    try {
+        connection.exec(`
+            CREATE TABLE IF NOT EXISTS reviews (
+                pr_id      TEXT PRIMARY KEY,
+                org        TEXT,
+                project    TEXT,
+                repo       TEXT,
+                title      TEXT,
+                status     TEXT NOT NULL DEFAULT 'pending',
+                summary    TEXT,
+                story      TEXT,
+                findings   TEXT,
+                error      TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+        `);
+        // Re-check under the write lock so parallel extension processes cannot
+        // both attempt the same ALTER TABLE migration.
+        const cols = connection.prepare("PRAGMA table_info(reviews)").all() as Array<{ name: string }>;
+        if (!cols.some((c) => c.name === "findings_json")) {
+            connection.exec("ALTER TABLE reviews ADD COLUMN findings_json TEXT");
+        }
+        if (!cols.some((c) => c.name === "dismissed")) {
+            connection.exec("ALTER TABLE reviews ADD COLUMN dismissed INTEGER NOT NULL DEFAULT 0");
+        }
+        if (!cols.some((c) => c.name === "run_id")) {
+            connection.exec("ALTER TABLE reviews ADD COLUMN run_id TEXT");
+        }
+        // My Plate can now contain activity-only PRs with no Copilot review row,
+        // so dismissal state has its own table. Preserve existing user choices.
+        connection.exec(`
+            CREATE TABLE IF NOT EXISTS plate_preferences (
+                pr_id      TEXT PRIMARY KEY,
+                dismissed INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT
+            );
+            INSERT OR IGNORE INTO plate_preferences (pr_id, dismissed, updated_at)
+            SELECT pr_id, 1, updated_at FROM reviews WHERE dismissed = 1;
+        `);
+        // Notification inbox: deduped, persisted ADO events.
+        connection.exec(`
+            CREATE TABLE IF NOT EXISTS notifications (
+                id         TEXT PRIMARY KEY,
+                kind       TEXT NOT NULL,
+                pr_id      TEXT,
+                org        TEXT,
+                project    TEXT,
+                repo       TEXT,
+                repo_id    TEXT,
+                title      TEXT,
+                actor      TEXT,
+                summary    TEXT,
+                snippet    TEXT,
+                url        TEXT,
+                unread     INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT,
+                read_at    TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications(created_at DESC);
+            CREATE TABLE IF NOT EXISTS inbox_meta (
+                key   TEXT PRIMARY KEY,
+                value TEXT
+            );
+        `);
+        connection.exec("COMMIT");
+        db = connection;
+        return connection;
+    } catch (e) {
+        try {
+            connection.exec("ROLLBACK");
+        } finally {
+            connection.close();
+        }
+        throw e;
     }
-    // Migration: user-driven Plate lifecycle (removed-from-Plate flag).
-    if (!cols.some((c) => c.name === "dismissed")) {
-        db.exec("ALTER TABLE reviews ADD COLUMN dismissed INTEGER NOT NULL DEFAULT 0");
-    }
-    return db;
 }
 
 // getReview / listReviews / upsertReview assume ensureDb() has already run.
@@ -123,9 +191,24 @@ export function listReviews(): ReviewListItem[] {
         .all() as unknown as ReviewListItem[];
 }
 
+/** Convert abandoned running reviews into an explicit recoverable error state. */
+export function expireStaleReviews(maxAgeMs = 2 * 60 * 60 * 1000): number {
+    const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
+    const now = new Date().toISOString();
+    const info = requireDb()
+        .prepare(
+            `UPDATE reviews
+             SET status = 'error',
+                 error = 'Background review did not complete before the timeout.',
+                 updated_at = ?
+             WHERE status = 'running' AND updated_at < ?`,
+        )
+        .run(now, cutoff);
+    return Number(info.changes ?? 0);
+}
+
 /**
- * Set (or clear) the "removed from Copilot's Plate" flag for one or more PRs.
- * User-driven: the Plate lifecycle is defined by the user, not automatically.
+ * Set (or clear) the legacy review-row dismissal flag for one or more PRs.
  */
 export function setDismissed(prIds: Array<string | number>, dismissed: boolean): number {
     const ids = prIds.map(String).filter((s) => s.trim() !== "");
@@ -135,6 +218,32 @@ export function setDismissed(prIds: Array<string | number>, dismissed: boolean):
         .prepare(`UPDATE reviews SET dismissed = ?, updated_at = ? WHERE pr_id IN (${placeholders})`)
         .run(dismissed ? 1 : 0, new Date().toISOString(), ...ids);
     return Number(info.changes ?? 0);
+}
+
+/** Every PR currently hidden from My Plate, including activity-only PRs. */
+export function listPlateDismissals(): Set<string> {
+    const rows = requireDb()
+        .prepare("SELECT pr_id FROM plate_preferences WHERE dismissed = 1")
+        .all() as Array<{ pr_id: string }>;
+    return new Set(rows.map((row) => row.pr_id));
+}
+
+/** Persist a My Plate removal even when the PR has no background-review row. */
+export function setPlateDismissed(prIds: Array<string | number>, dismissed: boolean): number {
+    const ids = prIds.map(String).filter((s) => s.trim() !== "");
+    if (!ids.length) return 0;
+    const stmt = requireDb().prepare(
+        `INSERT INTO plate_preferences (pr_id, dismissed, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(pr_id) DO UPDATE SET dismissed = excluded.dismissed, updated_at = excluded.updated_at`,
+    );
+    const now = new Date().toISOString();
+    let changed = 0;
+    for (const id of ids) {
+        const info = stmt.run(id, dismissed ? 1 : 0, now);
+        changed += Number(info.changes ?? 0);
+    }
+    return changed;
 }
 
 // Merge-then-replace so a partial write (e.g. the canvas marking status='running')
@@ -192,8 +301,9 @@ export function upsertReview(r: ReviewInput): ReviewRow {
         findings,
         findings_json: findingsJson,
         error: pick("error"),
+        run_id: r.runId != null ? r.runId : ex.run_id != null ? ex.run_id : null,
         // A fresh review (status flips to "running") re-surfaces a previously
-        // dismissed PR on the Plate; otherwise the user's choice is preserved.
+        // dismissed PR in My Plate; otherwise the user's choice is preserved.
         dismissed: r.status === "running" ? 0 : (ex.dismissed ?? 0),
         created_at: ex.created_at != null ? ex.created_at : now,
         updated_at: now,
@@ -201,14 +311,25 @@ export function upsertReview(r: ReviewInput): ReviewRow {
     requireDb()
         .prepare(
             `INSERT OR REPLACE INTO reviews
-             (pr_id, org, project, repo, title, status, summary, story, findings, findings_json, error, dismissed, created_at, updated_at)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+             (pr_id, org, project, repo, title, status, summary, story, findings, findings_json, error, run_id, dismissed, created_at, updated_at)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         )
         .run(
             row.pr_id, row.org, row.project, row.repo, row.title, row.status,
-            row.summary, row.story, row.findings, row.findings_json, row.error, row.dismissed, row.created_at, row.updated_at,
+            row.summary, row.story, row.findings, row.findings_json, row.error, row.run_id,
+            row.dismissed, row.created_at, row.updated_at,
         );
+    if (r.status === "running") setPlateDismissed([prId], false);
     return row;
+}
+
+/** Complete only the currently-active launch, preventing stale child overwrites. */
+export function publishReviewRun(r: ReviewInput & { runId: string }): ReviewRow {
+    const current = getReview(r.prId);
+    if (current?.run_id && current.run_id !== r.runId) {
+        throw new Error("This review run is stale and can no longer publish");
+    }
+    return upsertReview(r);
 }
 
 /** Mark one staged finding as posted (survives the next review re-render/poll). */
@@ -234,4 +355,108 @@ export function markFindingPosted(prId: string | number, findingId: string): Fin
             .run(JSON.stringify(list), new Date().toISOString(), String(prId));
     }
     return list;
+}
+
+// ---------------------------------------------------------------------------
+// Notification inbox
+// ---------------------------------------------------------------------------
+
+/** A stored notification row (one ADO event; `id` is a stable, dedup-safe key). */
+export interface NotificationRow {
+    id: string;
+    kind: string; // "comment" | "reply"
+    pr_id: string | null;
+    org: string | null;
+    project: string | null;
+    repo: string | null;
+    repo_id: string | null;
+    title: string | null;
+    actor: string | null;
+    summary: string | null;
+    snippet: string | null;
+    url: string | null;
+    unread: number;
+    created_at: string | null;
+    read_at: string | null;
+}
+
+/** The write payload for one derived event. `id` MUST be stable so re-polling
+ *  the same ADO event is a no-op (INSERT OR IGNORE). */
+export interface NotificationInput {
+    id: string;
+    kind: string;
+    prId?: string | number | null;
+    org?: string | null;
+    project?: string | null;
+    repo?: string | null;
+    repoId?: string | null;
+    title?: string | null;
+    actor?: string | null;
+    summary?: string | null;
+    snippet?: string | null;
+    url?: string | null;
+    createdAt?: string | null;
+}
+
+/** Insert events, ignoring any whose id already exists. Returns rows added. */
+export function insertNotifications(list: NotificationInput[]): number {
+    const stmt = requireDb().prepare(
+        `INSERT OR IGNORE INTO notifications
+         (id, kind, pr_id, org, project, repo, repo_id, title, actor, summary, snippet, url, unread, created_at, read_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1,?,NULL)`,
+    );
+    let n = 0;
+    for (const x of list) {
+        const info = stmt.run(
+            x.id, x.kind,
+            x.prId != null ? String(x.prId) : null,
+            x.org ?? null, x.project ?? null, x.repo ?? null, x.repoId ?? null, x.title ?? null,
+            x.actor ?? null, x.summary ?? null, x.snippet ?? null, x.url ?? null,
+            x.createdAt ?? new Date().toISOString(),
+        );
+        n += Number(info.changes ?? 0);
+    }
+    return n;
+}
+
+export function listNotifications(limit = 50): NotificationRow[] {
+    return requireDb()
+        .prepare("SELECT * FROM notifications ORDER BY created_at DESC LIMIT ?")
+        .all(limit) as unknown as NotificationRow[];
+}
+
+export function unreadCount(): number {
+    const row = requireDb()
+        .prepare("SELECT COUNT(*) AS n FROM notifications WHERE unread = 1")
+        .get() as { n: number } | undefined;
+    return Number(row?.n ?? 0);
+}
+
+export function markNotificationsRead(ids: string[]): number {
+    const clean = ids.map(String).filter((s) => s.trim() !== "");
+    if (!clean.length) return 0;
+    const ph = clean.map(() => "?").join(",");
+    const info = requireDb()
+        .prepare(`UPDATE notifications SET unread = 0, read_at = ? WHERE id IN (${ph}) AND unread = 1`)
+        .run(new Date().toISOString(), ...clean);
+    return Number(info.changes ?? 0);
+}
+
+export function markAllNotificationsRead(): number {
+    const info = requireDb()
+        .prepare("UPDATE notifications SET unread = 0, read_at = ? WHERE unread = 1")
+        .run(new Date().toISOString());
+    return Number(info.changes ?? 0);
+}
+
+/** Small key/value store for inbox bookkeeping (e.g. the poll watermark). */
+export function getMeta(key: string): string | null {
+    const row = requireDb().prepare("SELECT value FROM inbox_meta WHERE key = ?").get(key) as
+        | { value: string }
+        | undefined;
+    return row ? row.value : null;
+}
+
+export function setMeta(key: string, value: string): void {
+    requireDb().prepare("INSERT OR REPLACE INTO inbox_meta (key, value) VALUES (?, ?)").run(key, value);
 }

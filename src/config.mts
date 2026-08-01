@@ -16,6 +16,10 @@ export interface Config {
     // AI model used for background PR reviews (e.g. "claude-opus-4.8"). Empty or
     // "auto" means the Copilot CLI picks automatically.
     reviewModel: string;
+    // Absolute folder where completed reviews are mirrored as markdown
+    // (<reviewsDir>/<RepoName>/<prId>-<title>.md). Empty disables the mirror.
+    // User-specific, so it is NOT seeded — configured via the settings UX.
+    reviewsDir: string;
 }
 
 function normalizeProjects(organizations: string[], raw: unknown): Record<string, string[]> {
@@ -39,22 +43,24 @@ export async function readConfig(): Promise<Config> {
         // Migrate legacy configs that predate the `projects` field.
         c.projects = normalizeProjects(c.organizations, c.projects);
         if (typeof c.reviewModel !== "string") c.reviewModel = "";
+        if (typeof c.reviewsDir !== "string") c.reviewsDir = "";
         return c as Config;
     } catch {
         // First run: seed with the primary org.
-        const seed: Config = { organizations: ["msazure"], projects: {}, reviewModel: "" };
+        const seed: Config = { organizations: ["msazure"], projects: {}, reviewModel: "", reviewsDir: "" };
         await writeConfig(seed).catch(() => {});
         return seed;
     }
 }
 
-export async function writeConfig(cfg: { organizations?: unknown; projects?: unknown; reviewModel?: unknown }): Promise<Config> {
+export async function writeConfig(cfg: { organizations?: unknown; projects?: unknown; reviewModel?: unknown; reviewsDir?: unknown }): Promise<Config> {
     const arr = Array.isArray(cfg.organizations) ? cfg.organizations : [];
     const organizations = [...new Set(arr.map((s) => String(s).trim()).filter(Boolean))];
     const clean: Config = {
         organizations,
         projects: normalizeProjects(organizations, cfg.projects),
         reviewModel: typeof cfg.reviewModel === "string" ? cfg.reviewModel.trim() : "",
+        reviewsDir: typeof cfg.reviewsDir === "string" ? cfg.reviewsDir.trim() : "",
     };
     await writeFile(CONFIG_PATH, JSON.stringify(clean, null, 2), "utf8");
     return clean;

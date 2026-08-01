@@ -29,6 +29,8 @@ export interface PR {
   status?: string; // active | completed | abandoned
   reviewers?: Reviewer[];
   myVote?: number; // current user's own vote (0 when not an individual reviewer)
+  iCommented?: boolean; // current user left at least one non-system comment
+  plateDismissed?: boolean; // user removed this PR from My Plate
   url: string;
 }
 
@@ -103,7 +105,7 @@ export interface Finding {
   line?: number | null;
   endLine?: number | null;
   side?: string | null; // "left" | "right"
-  severity?: string | null; // "high" | "medium" | "low" | "nit"
+  severity?: string | null; // "critical" | "high" | "medium" | "low" | "nit"
   title?: string | null;
   comment: string;
   posted?: boolean;
@@ -118,7 +120,8 @@ export interface Review {
   findings?: string;
   findingsList?: Finding[];
   error?: string;
-  /** 1 when the user removed this PR from Copilot's Plate. */
+  run_id?: string;
+  /** Legacy review-row mirror of the My Plate removal preference. */
   dismissed?: number;
   updated_at?: string;
   org?: string;
@@ -132,10 +135,30 @@ export interface Config {
   organizations: string[];
   projects: Record<string, string[]>;
   reviewModel: string;
+  reviewsDir: string;
 }
 
 /** How the list is filtered by reviewer assignment. */
 export type Assignment = "mine" | "notmine" | "all";
+
+/** One persisted inbox notification (mirrors NotificationRow in store.mts). */
+export interface Notification {
+  id: string;
+  kind: string; // "comment" | "reply"
+  pr_id: string | null;
+  org: string | null;
+  project: string | null;
+  repo: string | null;
+  repo_id: string | null;
+  title: string | null;
+  actor: string | null;
+  summary: string | null;
+  snippet: string | null;
+  url: string | null;
+  unread: number;
+  created_at: string | null;
+  read_at: string | null;
+}
 
 /** The single client-side app state singleton. */
 export interface AppState {

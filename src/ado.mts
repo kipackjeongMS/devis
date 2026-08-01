@@ -43,6 +43,9 @@ export interface Pr {
     status: string | undefined; // active | completed | abandoned
     reviewers: Reviewer[];
     myVote: number; // current user's own vote (0 when not an individual reviewer)
+    iCommented: boolean; // current user left at least one non-system comment
+    plateDismissed?: boolean; // populated by the API from the local preference store
+    activityError?: string; // surfaced by /api/prs without hiding the core PR list
     sourceRef: string;
     targetRef: string;
     url: string;
@@ -54,6 +57,17 @@ export interface ThreadComment {
     content: string;
     parentCommentId: number;
     published: string | undefined;
+}
+
+/** A flattened PR comment carrying the fields the inbox needs to derive events. */
+export interface InboxComment {
+    id: number;
+    authorId: string | undefined;
+    authorName: string;
+    content: string;
+    parentCommentId: number;
+    published: string | undefined;
+    commentType: string | undefined;
 }
 
 export interface Thread {
@@ -198,12 +212,14 @@ async function adoText(url: string): Promise<string | null> {
 const enc = encodeURIComponent;
 const orgBase = (org: string): string => `https://dev.azure.com/${enc(org)}`;
 const repoBase = (org: string, project: string, repoId: string): string =>
-    `${orgBase(org)}/${enc(project)}/_apis/git/repositories/${repoId}`;
+    `${orgBase(org)}/${enc(project)}/_apis/git/repositories/${enc(repoId)}`;
 
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 const _meCache = new Map<string, Me>(); // org -> { id, name }
+const COMMENT_ACTIVITY_TTL_MS = 60 * 1000;
+const _commentActivityCache = new Map<string, { value: boolean; expiresAt: number }>();
 
 export async function getMe(org: string): Promise<Me> {
     const cached = _meCache.get(org);
@@ -257,6 +273,7 @@ function mapPr(org: string, pr: any, mine: boolean, meId: string | undefined): P
         status: pr.status,
         reviewers,
         myVote: myVoteOf(reviewers, meId),
+        iCommented: false,
         sourceRef: (pr.sourceRefName || "").replace("refs/heads/", ""),
         targetRef: (pr.targetRefName || "").replace("refs/heads/", ""),
         url: `${orgBase(org)}/${enc(pr.repository?.project?.name || "")}/_git/${enc(
@@ -265,9 +282,45 @@ function mapPr(org: string, pr: any, mine: boolean, meId: string | undefined): P
     };
 }
 
+async function hasCommentedOnPr(pr: Pr, meId: string, refresh: boolean): Promise<boolean> {
+    if (!pr.project || !pr.repoId) return false;
+    const key = `${pr.org}\n${pr.project}\n${pr.repoId}\n${pr.id}\n${meId}`;
+    const cached = _commentActivityCache.get(key);
+    if (!refresh && cached && cached.expiresAt > Date.now()) return cached.value;
+
+    const base = `${repoBase(pr.org, pr.project, pr.repoId)}/pullRequests/${pr.id}`;
+    const data = await adoJson("GET", `${base}/threads?${API}`);
+    const value = ((data.value || []) as any[]).some((t) =>
+        ((t.comments || []) as any[]).some(
+            (c) => c.commentType !== "system" && c.author?.id === meId,
+        ),
+    );
+    _commentActivityCache.set(key, { value, expiresAt: Date.now() + COMMENT_ACTIVITY_TTL_MS });
+    return value;
+}
+
+async function addCommentActivity(prs: Pr[], meId: string, refresh: boolean): Promise<void> {
+    // A non-zero vote already qualifies the PR for My Plate, so only scan the
+    // remaining PRs. Keep the ADO fan-out bounded for large configured projects.
+    const pending = prs.filter((pr) => pr.myVote === 0);
+    let next = 0;
+    const worker = async (): Promise<void> => {
+        while (next < pending.length) {
+            const pr = pending[next++];
+            try {
+                pr.iCommented = await hasCommentedOnPr(pr, meId, refresh);
+            } catch (e) {
+                pr.activityError = `PR #${pr.id} comment activity: ${(e as Error).message}`;
+            }
+        }
+    };
+    const workerCount = Math.min(6, pending.length);
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
+}
+
 // All active PRs where the current user is a reviewer OR the author, for one org
 // (two parallel calls, merged and deduped — a PR can match both).
-export async function listAssignedPRs(org: string): Promise<Pr[]> {
+export async function listAssignedPRs(org: string, refreshActivity = false): Promise<Pr[]> {
     const me = await getMe(org);
     const base = `${orgBase(org)}/_apis/git/pullrequests`;
     const q = `searchCriteria.status=active&$top=200&${API}`;
@@ -281,9 +334,11 @@ export async function listAssignedPRs(org: string): Promise<Pr[]> {
     const byId = new Map<number, any>();
     for (const pr of (reviewerData.value || []) as any[]) byId.set(pr.pullRequestId, pr);
     for (const pr of (authoredData.value || []) as any[]) byId.set(pr.pullRequestId, pr);
-    return [...byId.values()].map((pr) =>
+    const prs = [...byId.values()].map((pr) =>
         mapPr(org, pr, reviewerIds.has(pr.pullRequestId), me.id),
     );
+    await addCommentActivity(prs, me.id, refreshActivity);
+    return prs;
 }
 
 // All active PRs in one (org, project), each tagged `mine` when the current user
@@ -291,7 +346,7 @@ export async function listAssignedPRs(org: string): Promise<Pr[]> {
 // set, plus the reviewer=me subset (ADO expands group/team reviewers server-side,
 // so a PR assigned to me via a group is still correctly flagged `mine`) — the
 // full set already contains PRs I authored, so mapPr folds those in too.
-export async function listActivePRs(org: string, project: string): Promise<Pr[]> {
+export async function listActivePRs(org: string, project: string, refreshActivity = false): Promise<Pr[]> {
     const me = await getMe(org);
     const base = `${orgBase(org)}/${enc(project)}/_apis/git/pullrequests`;
     const q = `searchCriteria.status=active&$top=200&${API}`;
@@ -300,9 +355,71 @@ export async function listActivePRs(org: string, project: string): Promise<Pr[]>
         adoJson("GET", `${base}?searchCriteria.reviewerId=${me.id}&${q}`),
     ]);
     const mineIds = new Set(((mineData.value || []) as any[]).map((pr) => pr.pullRequestId));
-    return ((allData.value || []) as any[]).map((pr) =>
+    const prs = ((allData.value || []) as any[]).map((pr) =>
         mapPr(org, pr, mineIds.has(pr.pullRequestId), me.id),
     );
+    await addCommentActivity(prs, me.id, refreshActivity);
+    return prs;
+}
+
+/** Resolve one PR directly for a canvas deep-link, independent of list filters. */
+export async function getPrSummary(
+    org: string,
+    project: string,
+    repoId: string,
+    prId: string | number,
+): Promise<Pr> {
+    const [me, raw] = await Promise.all([
+        getMe(org),
+        adoJson("GET", `${repoBase(org, project, repoId)}/pullRequests/${prId}?${API}`),
+    ]);
+    if (
+        !raw ||
+        typeof raw.pullRequestId !== "number" ||
+        !raw.repository ||
+        typeof raw.repository.id !== "string"
+    ) {
+        throw new Error("ADO returned an invalid PR summary");
+    }
+    const assignedDirectly = ((raw.reviewers || []) as any[]).some((r) => r.id === me.id);
+    return mapPr(org, raw, assignedDirectly, me.id);
+}
+
+// All active PRs the current user AUTHORED, for one org (the set where peer
+// comments matter most — used by the notification inbox poll).
+export async function listAuthoredPRs(org: string): Promise<Pr[]> {
+    const me = await getMe(org);
+    const base = `${orgBase(org)}/_apis/git/pullrequests`;
+    const q = `searchCriteria.status=active&searchCriteria.creatorId=${me.id}&$top=100&${API}`;
+    const data = await adoJson("GET", `${base}?${q}`);
+    return ((data.value || []) as any[]).map((pr) => mapPr(org, pr, false, me.id));
+}
+
+// Flatten a PR's comment threads into a single comment list carrying author id,
+// timestamp, and type — the raw material the inbox diffs against its watermark.
+export async function getPrThreads(
+    org: string,
+    project: string,
+    repoId: string,
+    prId: string | number,
+): Promise<InboxComment[]> {
+    const base = `${repoBase(org, project, repoId)}/pullRequests/${prId}`;
+    const data = await adoJson("GET", `${base}/threads?${API}`);
+    const out: InboxComment[] = [];
+    for (const t of (data.value || []) as any[]) {
+        for (const c of (t.comments || []) as any[]) {
+            out.push({
+                id: c.id,
+                authorId: c.author?.id,
+                authorName: c.author?.displayName || "unknown",
+                content: c.content || "",
+                parentCommentId: c.parentCommentId || 0,
+                published: c.publishedDate,
+                commentType: c.commentType,
+            });
+        }
+    }
+    return out;
 }
 
 // PR detail: changed files (latest iteration) + threads (comments). Diffs are lazy.
@@ -364,6 +481,7 @@ function normalizeThread(t: any): Thread {
     const ctx = t.threadContext || {};
     const comments: ThreadComment[] = ((t.comments || []) as any[])
         .filter((c) => c.commentType !== "system")
+        .filter((c) => (c.content || "").trim().length > 0)
         .map((c) => ({
             id: c.id,
             author: c.author?.displayName || "unknown",

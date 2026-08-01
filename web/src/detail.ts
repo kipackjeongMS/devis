@@ -11,15 +11,18 @@ import { renderMermaid } from "./mermaid.js";
 import { renderThread } from "./threads.js";
 import { renderFile } from "./diff.js";
 import { refreshReviewPanel } from "./reviewPanel.js";
+import { mountSeverityLights, refreshSeverityLights, unmountSeverityLights } from "./severityLights.js";
 import { sendPrToCopilot } from "./bridge.js";
 import { openModal, closeModal } from "./modal.js";
 import { requestNotifyPermission } from "./notifyWatch.js";
+import { toast } from "./toast.js";
 import type { PR, Detail, Thread } from "./types.js";
 import { statusBadge, voteBadge, myActionBadge } from "./prStatus.js";
 
 // Closing the detail modal: stop the review poll and drop the current selection.
 function onDetailClose(): void {
   stopReviewPoll();
+  unmountSeverityLights();
   state.current = undefined;
 }
 
@@ -31,10 +34,7 @@ export async function openDetail(pr: PR): Promise<void> {
   openModal(container, { onClose: onDetailClose });
   let detail: Detail;
   try {
-    detail = await getJSON(
-      `/api/pr?org=${encodeURIComponent(pr.org)}&project=${encodeURIComponent(pr.project)}` +
-        `&repoId=${encodeURIComponent(pr.repoId)}&id=${pr.id}`
-    );
+    detail = await fetchDetail(pr);
   } catch (e: any) {
     if (!container.isConnected) return; // modal was closed/replaced mid-fetch
     container.innerHTML = `<div class="empty">Failed to load PR: ${esc(e.message)}</div>`;
@@ -44,8 +44,27 @@ export async function openDetail(pr: PR): Promise<void> {
   buildDetail(container, pr, detail);
 }
 
+function fetchDetail(pr: PR, refresh = false): Promise<Detail> {
+  const cacheBust = refresh ? `&_=${Date.now()}` : "";
+  return getJSON(
+    `/api/pr?org=${encodeURIComponent(pr.org)}&project=${encodeURIComponent(pr.project)}` +
+      `&repoId=${encodeURIComponent(pr.repoId)}&id=${pr.id}${cacheBust}`
+  );
+}
+
+function syncPrSummary(pr: PR, detail: Detail): void {
+  if (detail.status !== undefined) {
+    pr.status = detail.status;
+    pr.isDraft = detail.isDraft ?? pr.isDraft;
+    pr.reviewers = detail.reviewers || [];
+    pr.myVote = detail.myVote || 0;
+  }
+  pr.iCommented = !!detail.iCommented;
+}
+
 // Render a fully-loaded PR into a slide-over modal.
 function buildDetail(container: HTMLElement, pr: PR, detail: Detail): void {
+  syncPrSummary(pr, detail);
   state.current = { pr, detail };
   container.innerHTML = "";
 
@@ -67,9 +86,42 @@ function buildDetail(container: HTMLElement, pr: PR, detail: Detail): void {
       sendAll.textContent = orig;
     }
   });
+  const refreshBtn = el(
+    `<button class="btn ghost sm pr-refresh" title="Refresh this PR" aria-label="Refresh this pull request">` +
+      `<span class="pr-refresh-icon" aria-hidden="true">⟳</span>` +
+      `<span class="pr-refresh-label">Refresh</span></button>`
+  ) as HTMLButtonElement;
+  const refreshLabel = refreshBtn.querySelector<HTMLElement>(".pr-refresh-label")!;
+  refreshBtn.addEventListener("click", async () => {
+    if (refreshBtn.disabled) return;
+    refreshBtn.disabled = true;
+    refreshBtn.setAttribute("aria-busy", "true");
+    refreshBtn.setAttribute("aria-label", "Refreshing this pull request");
+    refreshLabel.textContent = "Refreshing…";
+    const panel = container.closest<HTMLElement>(".modal-panel");
+    const scrollTop = panel?.scrollTop || 0;
+    try {
+      const next = await fetchDetail(pr, true);
+      if (!container.isConnected) return;
+      stopReviewPoll();
+      buildDetail(container, pr, next);
+      window.dispatchEvent(new CustomEvent("ado-pr-updated"));
+      requestAnimationFrame(() => {
+        if (panel) panel.scrollTop = scrollTop;
+      });
+      toast("PR refreshed", "ok");
+    } catch (e: any) {
+      if (container.isConnected) toast("Refresh failed: " + e.message, "err");
+      refreshBtn.disabled = false;
+      refreshBtn.removeAttribute("aria-busy");
+      refreshBtn.setAttribute("aria-label", "Refresh this pull request");
+      refreshLabel.textContent = "Refresh";
+    }
+  });
   const rightGroup = el(`<div class="backbar-actions"></div>`);
   const closeBtn = el(`<button class="modal-close" title="Close (Esc)" aria-label="Close">✕</button>`);
   closeBtn.addEventListener("click", () => closeModal());
+  rightGroup.appendChild(refreshBtn);
   rightGroup.appendChild(sendAll);
   rightGroup.appendChild(closeBtn);
   back.appendChild(backBtn);
@@ -97,10 +149,14 @@ function buildDetail(container: HTMLElement, pr: PR, detail: Detail): void {
   const strip = buildReviewerStrip(detail);
   if (strip) container.appendChild(strip);
 
+  // Sticky severity lights, pinned directly below the header (hidden until the
+  // background review lands findings).
+  container.appendChild(mountSeverityLights(pr));
+
   // Background-review result panel (populated async; polls while running).
   const revPanel = el(`<div class="rev-panel" hidden></div>`);
   container.appendChild(revPanel);
-  refreshReviewPanel(pr, revPanel);
+  refreshReviewPanel(pr, revPanel, refreshSeverityLights);
 
   // PR description rendered as a lightweight markdown preview.
   if (detail.description && detail.description.trim()) {

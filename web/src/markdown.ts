@@ -1,6 +1,7 @@
 // Lightweight markdown -> HTML (escape-first, safe subset).
 // A ```mermaid fence becomes a diagram container that mermaid.ts renders later.
 import { esc } from "./util.js";
+import { sanitizeHtml } from "./sanitizeHtml.js";
 
 /** Inline markdown: code, bold, italic, and http(s) links (escape-first, XSS-safe). */
 export function mdInline(s: string): string {
@@ -10,6 +11,10 @@ export function mdInline(s: string): string {
     .replace(/__([^_]+)__/g, "<strong>$1</strong>")
     .replace(/(^|[^*])\*([^*\s][^*]*?)\*/g, "$1<em>$2</em>")
     .replace(/\b_([^_\s][^_]*?)_\b/g, "<em>$1</em>")
+    .replace(
+      /!\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g,
+      (_, alt, u) => `<img src="${u}" alt="${alt}" class="md-img">`
+    )
     .replace(
       /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
       (_, t, u) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${t}</a>`
@@ -119,4 +124,18 @@ export function renderMarkdown(src: unknown): string {
   if (fence != null) emitFence();
   closeBlocks();
   return out.join("\n");
+}
+
+// Comment bodies that carry inline HTML (bot/GitOps posts) vs. plain markdown.
+const HTML_TAG_RE =
+  /<\/?(?:span|div|small|details|summary|p|br|b|strong|i|em|u|s|a|img|ul|ol|li|h[1-6]|blockquote|table|thead|tbody|tr|td|th|hr|code|pre|kbd|sub|sup|abbr)\b/i;
+
+/**
+ * Render a PR comment body. Comments that embed inline HTML (e.g. the GitOps PR
+ * Assistant) are sanitized and rendered as HTML; everything else goes through
+ * the markdown renderer. Both branches return XSS-safe HTML for innerHTML.
+ */
+export function renderCommentBody(content: unknown): string {
+  const s = String(content == null ? "" : content);
+  return HTML_TAG_RE.test(s) ? sanitizeHtml(s) : renderMarkdown(s);
 }

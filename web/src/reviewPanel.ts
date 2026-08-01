@@ -1,7 +1,7 @@
 // The background-review result panel: fetches the stored review for a PR, keeps
 // the list badge in sync, polls while running, and renders the semantic story +
 // implementation summary. Findings are componentized as staged inline diff comments.
-import { getJSON } from "./api.js";
+import { getJSON, postJSON } from "./api.js";
 import { el } from "./dom.js";
 import { esc, timeAgo } from "./util.js";
 import { state, scheduleReviewPoll } from "./state.js";
@@ -11,7 +11,13 @@ import type { PR, Review } from "./types.js";
 
 // Populate (and, while running, poll) the background-review panel for one PR.
 // Renders the semantic story + findings as markdown once a result exists.
-export async function refreshReviewPanel(pr: PR, panel: HTMLElement): Promise<void> {
+// `onUpdate` fires after every refresh (including polls), so dependent UI such
+// as the severity lights can re-read the findings.
+export async function refreshReviewPanel(
+  pr: PR,
+  panel: HTMLElement,
+  onUpdate?: () => void
+): Promise<void> {
   let review: Review | null = null;
   try {
     const res = await getJSON("/api/review-result?prId=" + encodeURIComponent(pr.id));
@@ -23,6 +29,7 @@ export async function refreshReviewPanel(pr: PR, panel: HTMLElement): Promise<vo
   // Keep the list badge in sync with what we just learned.
   if (review) state.reviews[String(pr.id)] = review;
   else delete state.reviews[String(pr.id)];
+  if (onUpdate) onUpdate();
 
   if (!review || review.status === "pending") {
     panel.hidden = true;
@@ -35,7 +42,7 @@ export async function refreshReviewPanel(pr: PR, panel: HTMLElement): Promise<vo
     panel.innerHTML =
       '<div class="rev-head"><span class="spinner"></span> Copilot is reviewing this PR in the background…</div>' +
       '<div class="rev-note">Results will appear here automatically when the review completes.</div>';
-    scheduleReviewPoll(() => refreshReviewPanel(pr, panel), 4000);
+    scheduleReviewPoll(() => refreshReviewPanel(pr, panel, onUpdate), 4000);
     return;
   }
 
@@ -62,6 +69,41 @@ export async function refreshReviewPanel(pr: PR, panel: HTMLElement): Promise<vo
     panel.classList.toggle("collapsed");
     (header.querySelector(".rev-chev") as HTMLElement).textContent = panel.classList.contains("collapsed") ? "▶" : "▼";
   });
+
+  // Opt-in: save this review as a markdown record in the configured folder.
+  const actions = el('<div class="rev-actions"></div>');
+  const saveBtn = el('<button class="btn sm rev-save">Save as .md</button>') as HTMLButtonElement;
+  const saveStatus = el('<span class="rev-save-status"></span>');
+  saveBtn.addEventListener("click", async () => {
+    saveBtn.disabled = true;
+    saveStatus.className = "rev-save-status";
+    saveStatus.textContent = "Saving…";
+    try {
+      const r = await postJSON("/api/review-md", { prId: pr.id });
+      if (r.saved) {
+        saveStatus.classList.add("ok");
+        saveStatus.textContent = "Saved ✓";
+        if (r.path) saveStatus.title = r.path;
+      } else {
+        saveStatus.classList.add("warn");
+        saveStatus.textContent =
+          r.reason === "disabled"
+            ? "Set a Reviews folder in Settings first"
+            : r.reason === "empty"
+              ? "Nothing to save yet"
+              : "Save failed";
+      }
+    } catch (e) {
+      saveStatus.classList.add("warn");
+      saveStatus.textContent = (e as Error).message || "Save failed";
+    } finally {
+      saveBtn.disabled = false;
+    }
+  });
+  actions.appendChild(saveBtn);
+  actions.appendChild(saveStatus);
+  body.appendChild(actions);
+
   if (review.story && review.story.trim()) {
     body.appendChild(el('<div class="rev-sub">Semantic story</div>'));
     const s = el('<div class="md"></div>');

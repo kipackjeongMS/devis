@@ -5,6 +5,10 @@ import { postJSON } from "./api.js";
 import { toast } from "./toast.js";
 import type { PR, FileChange, Thread, Comment, Finding } from "./types.js";
 import { openElaborateModal } from "./ask.js";
+import { openRephraseModal } from "./rephraseModal.js";
+import { refreshSeverityLights } from "./severityLights.js";
+import { state } from "./state.js";
+import { renderCommentBody } from "./markdown.js";
 
 /** Inline composer row for a brand-new line-anchored thread/range (ADO write on submit). */
 export function buildComposerRow(
@@ -145,15 +149,17 @@ export function renderThread(pr: PR, thread: Thread): HTMLElement {
 
 export function renderComment(c: Comment): HTMLElement {
   const reply = c.parentCommentId ? " reply" : "";
-  return el(
+  const node = el(
     `<div class="comment${reply}">
        <div class="cmt-head">
          <span class="cmt-author">${esc(c.author)}</span>
          <span class="cmt-time">${esc(timeAgo(c.published))}</span>
        </div>
-       <div class="cmt-body">${esc(c.content)}</div>
+       <div class="cmt-body"></div>
      </div>`
   );
+  (node.querySelector(".cmt-body") as HTMLElement).innerHTML = renderCommentBody(c.content);
+  return node;
 }
 
 /**
@@ -168,6 +174,7 @@ export function renderStagedFinding(
   onPosted?: (created: Thread) => void
 ): HTMLElement {
   const box = el(`<div class="thread staged"></div>`);
+  if (finding.id) box.dataset.findingId = String(finding.id); // jump target for the severity lights
   const sev = String(finding.severity || "note").toLowerCase();
   const base = (file.path.split("/").pop() || file.path);
   const where =
@@ -203,32 +210,33 @@ export function renderStagedFinding(
   const dismissBtn = actions.querySelector(".dismiss") as HTMLButtonElement;
   elaborateBtn.addEventListener("click", () => openElaborateModal(pr, file, finding));
   dismissBtn.addEventListener("click", () => box.remove());
-  postBtn.addEventListener("click", async () => {
+  postBtn.addEventListener("click", () => {
     if (postBtn.disabled) return;
-    postBtn.disabled = true;
-    postBtn.textContent = "Posting…";
-    try {
-      const created: Thread = await postJSON("/api/review/post-finding", {
-        org: pr.org,
-        project: pr.project,
-        repoId: pr.repoId,
-        prId: pr.id,
-        findingId: finding.id,
-        filePath: file.path,
-        line: finding.line,
-        endLine: finding.endLine,
-        side: finding.side || "right",
-        content: finding.comment,
-      });
-      finding.posted = true;
-      toast("Comment posted to ADO", "ok");
-      box.replaceWith(renderThread(pr, created));
-      if (typeof onPosted === "function") onPosted(created);
-    } catch (e: any) {
-      toast("Post failed: " + e.message, "err");
-      postBtn.disabled = false;
-      postBtn.textContent = "Post to ADO";
-    }
+    openRephraseModal({
+      title: finding.title ?? undefined,
+      comment: finding.comment,
+      loc: `${where} · ${finding.side || "right"}`,
+      model: state.config.reviewModel,
+      onPost: async (text) => {
+        const created: Thread = await postJSON("/api/review/post-finding", {
+          org: pr.org,
+          project: pr.project,
+          repoId: pr.repoId,
+          prId: pr.id,
+          findingId: finding.id,
+          filePath: file.path,
+          line: finding.line,
+          endLine: finding.endLine,
+          side: finding.side || "right",
+          content: text,
+        });
+        finding.posted = true;
+        toast("Comment posted to ADO", "ok");
+        refreshSeverityLights(); // one fewer staged finding at this severity
+        box.replaceWith(renderThread(pr, created));
+        if (typeof onPosted === "function") onPosted(created);
+      },
+    });
   });
   body.appendChild(actions);
 

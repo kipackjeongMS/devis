@@ -3,19 +3,71 @@
 // (the final boot() call), so import order stays free of runtime cycles.
 import { $, view, filterbar, orgFilter, projectFilter, assignFilter, el, renderError } from "./dom.js";
 import { esc } from "./util.js";
-import { getJSON, postJSON } from "./api.js";
+import { getJSON, postJSON, bindIdentity } from "./api.js";
 import { state, loadReviews } from "./state.js";
 import { toast } from "./toast.js";
 import { renderList } from "./list.js";
+import { openDetail } from "./detail.js";
 import { renderRollouts } from "./rollouts.js";
-import type { Assignment } from "./types.js";
+import { initInbox } from "./inboxPanel.js";
+import { startInboxWatch, refreshInbox } from "./inboxWatch.js";
+import type { Assignment, PR } from "./types.js";
+
+interface CanvasPrTarget {
+  org: string;
+  project: string;
+  repoId: string;
+  prId: number;
+}
+
+function readCanvasTarget(): CanvasPrTarget | null {
+  const params = new URLSearchParams(window.location.search);
+  if (!params.has("prId")) return null;
+  const org = (params.get("org") || "").trim();
+  const project = (params.get("project") || "").trim();
+  const repoId = (params.get("repoId") || "").trim();
+  const prId = Number(params.get("prId"));
+  if (!org || !project || !repoId || !Number.isSafeInteger(prId) || prId < 1) {
+    throw new Error("Invalid PR target in the canvas URL");
+  }
+  return { org, project, repoId, prId };
+}
+
+async function resolveCanvasTarget(target: CanvasPrTarget): Promise<PR> {
+  const query =
+    `org=${encodeURIComponent(target.org)}&project=${encodeURIComponent(target.project)}` +
+    `&repoId=${encodeURIComponent(target.repoId)}&prId=${target.prId}`;
+  const res = await getJSON(`/api/pr-summary?${query}`);
+  return res.pr as PR;
+}
 
 // ---------- boot ----------
 async function boot(): Promise<void> {
+  await bindIdentity();
+  let target: CanvasPrTarget | null;
+  try {
+    target = readCanvasTarget();
+  } catch (e) {
+    return renderError((e as Error).message);
+  }
   try {
     state.config = await getJSON("/api/config");
   } catch (e: any) {
     return renderError("Could not read config: " + e.message);
+  }
+  initInbox();
+  startInboxWatch();
+  if (target) {
+    // Keep the normal list mounted underneath, but resolve/open the requested PR
+    // independently so list filters and activity enrichment cannot block routing.
+    const listPromise = loadPRs(false, false);
+    try {
+      await openDetail(await resolveCanvasTarget(target));
+    } catch (e) {
+      toast("Could not open target PR: " + (e as Error).message, "err");
+    }
+    await listPromise;
+    return;
   }
   if (!state.config.organizations || state.config.organizations.length === 0) {
     return renderSettings();
@@ -23,14 +75,17 @@ async function boot(): Promise<void> {
   await loadPRs();
 }
 
-async function loadPRs(): Promise<void> {
+async function loadPRs(refreshActivity = false, stopPolling = true): Promise<void> {
   view.innerHTML = '<div class="loading"><span class="spinner"></span> Loading pull requests…</div>';
   try {
-    const [res] = await Promise.all([getJSON("/api/prs"), loadReviews()]);
+    const [res] = await Promise.all([
+      getJSON(`/api/prs${refreshActivity ? "?refresh=1" : ""}`),
+      loadReviews(),
+    ]);
     state.prs = res.prs || [];
     if (res.errors && res.errors.length) toast(res.errors[0], "err");
     setupFilters();
-    renderList();
+    renderList(stopPolling);
   } catch (e: any) {
     renderError("Failed to load PRs: " + e.message);
   }
@@ -38,7 +93,7 @@ async function loadPRs(): Promise<void> {
 
 // ---------- filters ----------
 function setupFilters(): void {
-  filterbar.hidden = false;
+  filterbar.hidden = currentView !== "prs";
   populateOrgFilter();
   populateProjectFilter();
   updateAssignment();
@@ -225,12 +280,31 @@ function renderSettings(): void {
     loadModels(true).finally(() => { refreshModels.disabled = false; });
   });
 
+  // ---- Reviews markdown folder ----
+  let reviewsDir = state.config.reviewsDir || "";
+  wrap.appendChild(el(`<h2 style="margin-top:24px">Reviews folder</h2>`));
+  wrap.appendChild(
+    el(
+      `<div class="desc">Optional. Completed reviews are also saved as Markdown at <code>&lt;folder&gt;/&lt;RepoName&gt;/&lt;prId&gt;-&lt;title&gt;.md</code> — handy for an Obsidian vault. Leave empty to disable. The app's SQLite store stays the source of truth either way.</div>`
+    )
+  );
+  const dirRow = el(`<div class="org-add"></div>`);
+  const dirInput = el(
+    `<input type="text" style="flex:1" placeholder="e.g. C:\\Users\\you\\OneDrive\\PRReviews" />`
+  ) as HTMLInputElement;
+  dirInput.value = reviewsDir;
+  dirInput.addEventListener("input", () => {
+    reviewsDir = dirInput.value;
+  });
+  dirRow.appendChild(dirInput);
+  wrap.appendChild(dirRow);
+
   const actions = el(`<div class="org-add" style="justify-content:flex-end"></div>`);
   const save = el(`<button class="btn">Save</button>`) as HTMLButtonElement;
   save.addEventListener("click", async () => {
     save.disabled = true;
     try {
-      state.config = await postJSON("/api/config", { organizations: orgs, projects, reviewModel: selectedModel });
+      state.config = await postJSON("/api/config", { organizations: orgs, projects, reviewModel: selectedModel, reviewsDir: reviewsDir.trim() });
       state.org = "all";
       state.project = "all";
       toast("Saved", "ok");
@@ -243,7 +317,7 @@ function renderSettings(): void {
   const cancel = el(`<button class="btn ghost">Cancel</button>`);
   cancel.addEventListener("click", () => {
     if ((state.config.organizations || []).length) {
-      filterbar.hidden = false;
+      filterbar.hidden = currentView !== "prs";
       renderList();
     }
   });
@@ -282,8 +356,9 @@ function setView(v: ViewName): void {
 // ---------- events ----------
 $("#btnSettings").addEventListener("click", renderSettings);
 $("#btnRefresh").addEventListener("click", () => {
+  void refreshInbox();
   if (currentView === "rollouts") return void renderRollouts();
-  if ((state.config.organizations || []).length) loadPRs();
+  if ((state.config.organizations || []).length) loadPRs(true);
   else boot();
 });
 for (const btn of document.querySelectorAll<HTMLButtonElement>(".nav-btn")) {
@@ -307,6 +382,9 @@ assignFilter.addEventListener("click", (e) => {
   state.assignment = (btn.dataset.assign as Assignment) || "all";
   updateAssignment();
   renderList();
+});
+window.addEventListener("ado-pr-updated", () => {
+  if (currentView === "prs") renderList(false);
 });
 
 boot();
