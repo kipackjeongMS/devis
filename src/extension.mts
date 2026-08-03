@@ -117,13 +117,13 @@ const session = await joinSession({
                                     additionalProperties: false,
                                     required: ["file", "line", "side", "severity", "comment"],
                                     properties: {
-                                        file: { type: ["string", "null"] },
-                                        line: { type: ["integer", "null"], minimum: 1 },
+                                        file: { type: "string", minLength: 1 },
+                                        line: { type: "integer", minimum: 1 },
                                         endLine: { type: ["integer", "null"], minimum: 1 },
-                                        side: { type: ["string", "null"], enum: ["left", "right", null] },
+                                        side: { type: "string", enum: ["left", "right"] },
                                         severity: {
-                                            type: ["string", "null"],
-                                            enum: ["critical", "high", "medium", "low", "nit", null],
+                                            type: "string",
+                                            enum: ["critical", "high", "medium", "low", "nit"],
                                         },
                                         title: { type: ["string", "null"] },
                                         comment: { type: "string", minLength: 1 },

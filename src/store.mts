@@ -325,11 +325,20 @@ export function upsertReview(r: ReviewInput): ReviewRow {
 
 /** Complete only the currently-active launch, preventing stale child overwrites. */
 export function publishReviewRun(r: ReviewInput & { runId: string }): ReviewRow {
-    const current = getReview(r.prId);
-    if (current?.run_id && current.run_id !== r.runId) {
-        throw new Error("This review run is stale and can no longer publish");
+    const connection = requireDb();
+    connection.exec("BEGIN IMMEDIATE");
+    try {
+        const current = getReview(r.prId);
+        if (current?.run_id && current.run_id !== r.runId) {
+            throw new Error("This review run is stale and can no longer publish");
+        }
+        const row = upsertReview(r);
+        connection.exec("COMMIT");
+        return row;
+    } catch (e) {
+        connection.exec("ROLLBACK");
+        throw e;
     }
-    return upsertReview(r);
 }
 
 /** Mark one staged finding as posted (survives the next review re-render/poll). */
