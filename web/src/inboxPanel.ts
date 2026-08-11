@@ -30,7 +30,7 @@ export function initInbox(): void {
     if (flyout && !flyout.contains(t) && bell && !bell.contains(t)) close();
   });
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") close();
+    if (e.key === "Escape" && open) close(true);
   });
   window.addEventListener("resize", () => {
     if (open) position();
@@ -66,24 +66,46 @@ function openPanel(): void {
   if (!flyout) {
     flyout = document.createElement("div");
     flyout.className = "inbox-flyout";
+    flyout.id = "inboxFlyout";
+    flyout.setAttribute("role", "region");
+    flyout.setAttribute("aria-label", "Notifications");
     document.body.appendChild(flyout);
   }
   open = true;
   renderList();
   position();
+  flyout.inert = false;
+  flyout.setAttribute("aria-hidden", "false");
+  bell.setAttribute("aria-expanded", "true");
   flyout.classList.add("show");
+  requestAnimationFrame(() => {
+    flyout?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
+  });
 }
 
-function close(): void {
+function close(restoreFocus = false): void {
   open = false;
   flyout?.classList.remove("show");
+  if (flyout) {
+    flyout.inert = true;
+    flyout.setAttribute("aria-hidden", "true");
+  }
+  bell?.setAttribute("aria-expanded", "false");
+  if (restoreFocus) bell?.focus();
 }
 
 function position(): void {
   if (!bell || !flyout) return;
   const r = bell.getBoundingClientRect();
-  flyout.style.top = `${Math.round(r.bottom + 6)}px`;
-  flyout.style.right = `${Math.round(window.innerWidth - r.right)}px`;
+  const topbarBottom = document.querySelector(".topbar")?.getBoundingClientRect().bottom || r.bottom;
+  const width = Math.min(380, window.innerWidth - 24);
+  const left = Math.min(
+    Math.max(12, r.right - width),
+    window.innerWidth - width - 12
+  );
+  flyout.style.top = `${Math.round(Math.max(r.bottom, topbarBottom) + 6)}px`;
+  flyout.style.left = `${Math.round(left)}px`;
+  flyout.style.right = "auto";
 }
 
 function renderList(): void {

@@ -5,11 +5,13 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { SessionRef } from "@github/copilot-sdk/extension";
 import { sendJson, readBody } from "./http.mjs";
 import { readConfig, writeConfig } from "./config.mjs";
-import { ensureDb, getReview, listReviews, upsertReview, publishReviewRun, expireStaleReviews, markFindingPosted, setDismissed, listPlateDismissals, setPlateDismissed, listNotifications, unreadCount, markNotificationsRead, markAllNotificationsRead } from "./store.mjs";
+import { ensureDb, getReview, listReviews, listActiveReviewJobs, upsertReview, publishReviewRun, expireStaleReviews, markFindingPosted, setDismissed, listPlateDismissals, setPlateDismissed, listNotifications, unreadCount, markNotificationsRead, markAllNotificationsRead, reviewIdentityKey, legacyReviewKey, type ReviewIdentity } from "./store.mjs";
 import type { Finding } from "./store.mjs";
 import { writeReviewMarkdown } from "./reviews-md.mjs";
 import { scanInbox } from "./inbox.mjs";
-import { rephraseComment } from "./rephrase.mjs";
+import { rephraseComment, buildRephrasePrompt, cleanRephrase } from "./rephrase.mjs";
+import { runInReviewerSession, asReviewerSessionId } from "./reviewer-session.mjs";
+import { queueReviewJobs, setReviewDispatchSession } from "./review-dispatch.mjs";
 import {
     listAssignedPRs,
     listActivePRs,
@@ -30,6 +32,7 @@ let sessionRef: SessionRef | null = null;
 
 export function setSession(s: SessionRef | null): void {
     sessionRef = s;
+    setReviewDispatchSession(s);
 }
 
 // Identifies this server's process instance. The loopback server binds an
@@ -59,6 +62,32 @@ const ASK_TTL_MS = 10 * 60 * 1000;
 function pruneAsks(): void {
     const cutoff = Date.now() - ASK_TTL_MS;
     for (const [id, e] of asks) if (e.ts < cutoff) asks.delete(id);
+}
+
+// ---- reviewer-session handoff ----------------------------------------------
+// Follow-ups (Elaborate, humanize-before-post) are answered by the Copilot
+// session that actually produced the PR's review, so they inherit its context.
+// The client names only the PR; the session id is looked up here from the row
+// this extension stamped at publish time. That way nothing on the loopback port
+// can steer a `copilot --resume` run into a session of its choosing.
+function asReviewIdentity(value: Record<string, unknown>): ReviewIdentity {
+    return {
+        prId: value.prId == null ? "" : String(value.prId),
+        org: value.org == null ? null : String(value.org),
+        project: value.project == null ? null : String(value.project),
+        repoId: value.repoId == null ? null : String(value.repoId),
+    };
+}
+
+async function reviewerSessionFor(identity: ReviewIdentity): Promise<string | null> {
+    if (String(identity.prId).trim() === "") return null;
+    try {
+        await ensureDb();
+        return asReviewerSessionId(getReview(identity)?.reviewer_session_id);
+    } catch (e) {
+        console.error(`[reviewer-session] lookup failed: ${(e as Error).message}`);
+        return null;
+    }
 }
 
 export async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
@@ -134,7 +163,12 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
             await Promise.all(tasks);
             await ensureDb();
             const dismissed = listPlateDismissals();
-            for (const pr of prs) pr.plateDismissed = dismissed.has(String(pr.id));
+            for (const pr of prs) {
+                const identity = { prId: pr.id, org: pr.org, project: pr.project, repoId: pr.repoId };
+                pr.plateDismissed =
+                    dismissed.has(reviewIdentityKey(identity)) ||
+                    dismissed.has(legacyReviewKey(pr.id));
+            }
             prs.sort((a, b) => new Date(b.created).getTime() - new Date(a.created).getTime());
             return sendJson(res, 200, { prs, errors });
         }
@@ -155,7 +189,14 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
             if (!target) return sendJson(res, 400, { error: "PR target required" });
             const pr = await getPrSummary(target.org, target.project, target.repoId, target.prId);
             await ensureDb();
-            pr.plateDismissed = listPlateDismissals().has(String(pr.id));
+            const dismissed = listPlateDismissals();
+            pr.plateDismissed =
+                dismissed.has(reviewIdentityKey({
+                    prId: pr.id,
+                    org: pr.org,
+                    project: pr.project,
+                    repoId: pr.repoId,
+                })) || dismissed.has(legacyReviewKey(pr.id));
             return sendJson(res, 200, { pr });
         }
 
@@ -195,6 +236,11 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
             return sendJson(res, 200, created);
         }
 
+        // ---- durable, bounded dispatch into independent app-managed sessions ----
+        if (p === "/api/review/queue" && req.method === "POST") {
+            return sendJson(res, 200, await queueReviewJobs(await readBody(req)));
+        }
+
         // ---- bridge a prompt into the Copilot CLI session ----
         if (p === "/api/bridge" && req.method === "POST") {
             const b = await readBody(req);
@@ -207,21 +253,37 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
         }
 
         // ---- "Ask Copilot" about a diff selection: register + send ----
+        // Two transports. When the PR has a recorded reviewer session and the
+        // caller supplied a prompt suitable for it, the prompt is resumed inside
+        // that session and its reply fills the ask entry directly. Otherwise it
+        // goes to the local chat session and the agent POSTs its answer back to
+        // /api/ask-result.
         if (p === "/api/ask" && req.method === "POST") {
             const b = await readBody(req);
             const askId = b.askId != null ? String(b.askId).trim() : "";
             if (!askId) return sendJson(res, 400, { error: "askId required" });
             if (!b.prompt || !String(b.prompt).trim()) return sendJson(res, 400, { error: "empty prompt" });
+            pruneAsks();
+            const reviewerPrompt = b.reviewerPrompt != null ? String(b.reviewerPrompt).trim() : "";
+            const reviewerSessionId = reviewerPrompt ? await reviewerSessionFor(asReviewIdentity(b)) : null;
+            if (reviewerSessionId) {
+                asks.set(askId, { status: "pending", ts: Date.now() });
+                void runInReviewerSession({ sessionId: reviewerSessionId, prompt: reviewerPrompt })
+                    .then((answer) => asks.set(askId, { status: "done", answer, ts: Date.now() }))
+                    .catch((e: Error) =>
+                        asks.set(askId, { status: "error", error: e.message || "reviewer session failed", ts: Date.now() }),
+                    );
+                return sendJson(res, 200, { ok: true, via: "reviewer-session" });
+            }
             if (!sessionRef || typeof sessionRef.send !== "function") {
                 return sendJson(res, 503, { error: "session not available" });
             }
-            pruneAsks();
             asks.set(askId, { status: "pending", ts: Date.now() });
             await sessionRef.send({
                 prompt: String(b.prompt),
                 attachments: Array.isArray(b.attachments) ? b.attachments : undefined,
             });
-            return sendJson(res, 200, { ok: true });
+            return sendJson(res, 200, { ok: true, via: "session" });
         }
         // The agent POSTs its answer here; the modal reads it back.
         if (p === "/api/ask-result" && req.method === "POST") {
@@ -251,7 +313,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
             }
             await ensureDb();
             const status = b.status == null ? "" : String(b.status);
-            const current = getReview(b.prId);
+            const current = getReview(asReviewIdentity(b));
             if (
                 (status === "done" || status === "error") &&
                 current?.run_id &&
@@ -259,10 +321,15 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
             ) {
                 return sendJson(res, 409, { error: "stale review run" });
             }
+            // reviewer_session_id is stamped from this extension's own session on
+            // the canvas-action publish path. Accepting it over HTTP would let the
+            // reviewing agent — or anything else that reaches the loopback port —
+            // pick which session later follow-ups resume into, so drop it here.
+            const { reviewerSessionId: _clientSuppliedSession, ...safe } = b;
             const merged =
                 (status === "done" || status === "error") && b.runId
-                    ? publishReviewRun({ ...b, runId: String(b.runId) })
-                    : upsertReview(b);
+                    ? publishReviewRun({ ...safe, runId: String(b.runId) })
+                    : upsertReview(safe);
             return sendJson(res, 200, merged);
         }
         // On-demand: write the stored review to the configured markdown folder.
@@ -274,7 +341,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
                 return sendJson(res, 400, { error: "prId required" });
             }
             await ensureDb();
-            const row = getReview(b.prId);
+            const row = getReview(asReviewIdentity(b));
             if (!row) return sendJson(res, 404, { error: "no review for this PR" });
             const result = await writeReviewMarkdown(row);
             return sendJson(res, 200, result);
@@ -283,24 +350,38 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
         if (p === "/api/review-result" && req.method === "GET") {
             await ensureDb();
             expireStaleReviews();
-            return sendJson(res, 200, { review: shapeReview(getReview(q.get("prId")!)) });
+            return sendJson(res, 200, {
+                review: shapeReview(getReview({
+                    prId: q.get("prId") || "",
+                    org: q.get("org"),
+                    project: q.get("project"),
+                    repoId: q.get("repoId"),
+                })),
+            });
         }
         // All stored reviews (compact — for list badges).
         if (p === "/api/review-results" && req.method === "GET") {
             await ensureDb();
             expireStaleReviews();
-            return sendJson(res, 200, { reviews: listReviews() });
+            return sendJson(res, 200, {
+                reviews: listReviews(),
+                activeJobs: listActiveReviewJobs(),
+            });
         }
         // User-driven My Plate lifecycle: remove (dismiss) or restore any PR.
-        // Body: { prIds: (string|number)[], dismissed?: boolean } — dismissed defaults to true.
+        // Body: { prs: ReviewIdentity[], dismissed?: boolean } — dismissed defaults to true.
         if (p === "/api/review/dismiss" && req.method === "POST") {
             const b = await readBody(req);
-            const prIds = Array.isArray(b.prIds) ? b.prIds : [];
-            if (!prIds.length) return sendJson(res, 400, { error: "prIds required" });
+            const identities: ReviewIdentity[] = Array.isArray(b.prs)
+                ? b.prs.map((item: Record<string, unknown>) => asReviewIdentity(item))
+                : Array.isArray(b.prIds)
+                  ? b.prIds.map((prId: unknown) => ({ prId: String(prId) }))
+                  : [];
+            if (!identities.length) return sendJson(res, 400, { error: "prs required" });
             const dismissed = b.dismissed === undefined ? true : !!b.dismissed;
             await ensureDb();
-            const changed = setPlateDismissed(prIds, dismissed);
-            setDismissed(prIds, dismissed); // keep legacy review rows in sync
+            const changed = setPlateDismissed(identities, dismissed);
+            setDismissed(identities, dismissed);
             return sendJson(res, 200, { ok: true, dismissed, changed });
         }
 
@@ -313,21 +394,39 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
                 filePath: b.filePath, line: b.line, endLine: b.endLine, side: b.side, content: b.content,
             });
             await ensureDb();
-            if (b.findingId != null) markFindingPosted(b.prId, String(b.findingId));
+            if (b.findingId != null) {
+                markFindingPosted(asReviewIdentity(b), String(b.findingId));
+            }
             return sendJson(res, 200, created);
         }
 
-        // ---- humanize a staged finding into a natural comment (headless copilot -p) ----
-        // No chat session is created; the subprocess runs in print mode and returns text.
+        // ---- humanize a staged finding into a natural comment ----
+        // Preferred: resume the session that produced the review, so the rewrite
+        // knows why the comment was written. Otherwise (legacy reviews, or that
+        // session is gone) fall back to a throwaway headless `copilot -p`.
+        // Neither path creates a visible chat session.
         if (p === "/api/rephrase" && req.method === "POST") {
             const b = await readBody(req);
             if (!b.comment || !String(b.comment).trim()) return sendJson(res, 400, { error: "empty comment" });
-            const text = await rephraseComment({
+            const input = {
                 comment: String(b.comment),
                 title: b.title ? String(b.title) : undefined,
                 model: b.model ? String(b.model) : undefined,
-            });
-            return sendJson(res, 200, { text });
+            };
+            const reviewerSessionId = await reviewerSessionFor(asReviewIdentity(b));
+            if (reviewerSessionId) {
+                try {
+                    const reply = await runInReviewerSession({
+                        sessionId: reviewerSessionId,
+                        prompt: buildRephrasePrompt(input),
+                    });
+                    const text = cleanRephrase(reply);
+                    if (text) return sendJson(res, 200, { text, via: "reviewer-session" });
+                } catch (e) {
+                    console.error(`[rephrase] reviewer session unavailable, using a fresh run: ${(e as Error).message}`);
+                }
+            }
+            return sendJson(res, 200, { text: await rephraseComment(input), via: "fresh" });
         }
 
         // ---- notification inbox (peer comments/replies on my authored PRs) ----

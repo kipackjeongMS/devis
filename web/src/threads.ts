@@ -83,14 +83,17 @@ export function renderThread(pr: PR, thread: Thread): HTMLElement {
     ? `${esc(thread.filePath.split("/").pop())}${lineLabel(thread)}`
     : "General";
   const header = el(
-    `<div class="thread-loc">
+    `<button type="button" class="thread-loc" aria-expanded="true">
        <span class="thread-chev">▾</span>
        <span class="thread-where">${where}</span>
        <span class="thread-count">${thread.comments.length}</span>
        <span class="st">${esc(thread.status)}</span>
-     </div>`
+     </button>`
   );
-  header.addEventListener("click", () => box.classList.toggle("collapsed"));
+  header.addEventListener("click", () => {
+    const isCollapsed = box.classList.toggle("collapsed");
+    header.setAttribute("aria-expanded", String(!isCollapsed));
+  });
 
   const body = el(`<div class="thread-body"></div>`);
   const list = el(`<div class="cmt-list"></div>`);
@@ -100,7 +103,7 @@ export function renderThread(pr: PR, thread: Thread): HTMLElement {
   const rb = el(
     `<div class="reply-box">
        <textarea placeholder="Reply…" rows="1"></textarea>
-       <button class="btn sm">Reply</button>
+       <button type="button" class="btn sm">Reply</button>
      </div>`
   );
   const ta = rb.querySelector("textarea") as HTMLTextAreaElement;
@@ -217,6 +220,10 @@ export function renderStagedFinding(
       comment: finding.comment,
       loc: `${where} · ${finding.side || "right"}`,
       model: state.config.reviewModel,
+      prId: pr.id,
+      org: pr.org,
+      project: pr.project,
+      repoId: pr.repoId,
       onPost: async (text) => {
         const created: Thread = await postJSON("/api/review/post-finding", {
           org: pr.org,

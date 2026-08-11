@@ -114,20 +114,32 @@ export interface Finding {
 /** A stored background-review result (GET /api/review-result[s]). */
 export interface Review {
   pr_id?: string;
-  status: string; // "pending" | "running" | "done" | "error"
+  status: string; // "pending" | "queued" | "running" | "done" | "error"
   summary?: string;
   story?: string;
   findings?: string;
   findingsList?: Finding[];
   error?: string;
   run_id?: string;
+  /** Copilot session that performed the review; follow-ups resume into it. */
+  reviewer_session_id?: string | null;
   /** Legacy review-row mirror of the My Plate removal preference. */
   dismissed?: number;
   updated_at?: string;
   org?: string;
   project?: string;
   repo?: string;
+  repo_id?: string;
   title?: string;
+}
+
+export interface ActiveReviewJob {
+  pr_id: string;
+  org: string;
+  project: string;
+  repo: string;
+  repo_id: string;
+  status: string;
 }
 
 /** Persisted extension config (GET/POST /api/config). */
@@ -168,6 +180,7 @@ export interface AppState {
   project: string;
   assignment: Assignment;
   reviews: Record<string, Review>;
+  activeReviewJobs: Record<string, ActiveReviewJob>;
   current?: { pr: PR; detail: Detail };
 }
 

@@ -1,8 +1,13 @@
 // "Ask Copilot about this selection": a self-contained dialog (its own overlay so
 // it stacks above the PR-detail slide-over) that sends the selected code + a
-// question to the CLI session and renders Copilot's answer back in place. Because
-// session.send() is fire-and-forget, we hand the agent a callback URL + askId and
-// poll /api/ask-result for the reply.
+// question to Copilot and renders the answer back in place.
+//
+// Two transports, both polled via /api/ask-result:
+//   - default: session.send() is fire-and-forget, so the agent is handed a
+//     callback URL + askId and POSTs its answer back.
+//   - Elaborate on a finding whose review recorded a reviewer session: the
+//     server resumes that session and fills the answer itself, so the prompt
+//     carries no callback instructions.
 import { el } from "./dom.js";
 import { esc } from "./util.js";
 import { postJSON, getJSON } from "./api.js";
@@ -14,6 +19,9 @@ import type { DiffSelection } from "./selection.js";
 
 const POLL_MS = 2000;
 const MAX_POLLS = 60; // ~2 min
+// Resuming the reviewer session replays its history before it answers, so give
+// that path a longer budget than a live in-session reply.
+const MAX_POLLS_REVIEWER = 150; // ~5 min
 
 function newAskId(): string {
   const c = (globalThis as any).crypto;
@@ -76,6 +84,41 @@ function buildElaboratePrompt(
   askId: string,
   callbackUrl: string
 ): string {
+  return [
+    `The user wants a deeper explanation of an AI-generated code review comment on Azure DevOps PR #${pr.id} ("${pr.title}").`,
+    ``,
+    ...elaborateContext(file, finding),
+    ``,
+    `The user's follow-up: ${question}`,
+    ``,
+    callbackInstructions(askId, callbackUrl),
+  ].join("\n");
+}
+
+// Same request, addressed to the session that actually produced the review. It
+// already holds the diffs and the reasoning behind the comment, and the server
+// reads its reply straight off the resumed run — so no callback block.
+function buildReviewerElaboratePrompt(
+  pr: PR,
+  file: FileChange,
+  finding: Finding,
+  question: string
+): string {
+  return [
+    `You previously reviewed Azure DevOps PR #${pr.id} ("${pr.title}") and staged this review comment:`,
+    ``,
+    ...elaborateContext(file, finding),
+    ``,
+    `The user's follow-up: ${question}`,
+    ``,
+    "Answer concisely and directly in Markdown, drawing on what you already know about this PR " +
+      "(you may use a small ```mermaid fenced diagram if it genuinely aids understanding). " +
+      "Output only the answer — no preamble, no restatement of the question.",
+  ].join("\n");
+}
+
+// The finding's location + text, shared by both Elaborate prompts.
+function elaborateContext(file: FileChange, finding: Finding): string[] {
   const loc =
     finding.line != null
       ? finding.endLine && finding.endLine > finding.line
@@ -83,22 +126,12 @@ function buildElaboratePrompt(
         : `${finding.line}`
       : "n/a";
   const side = finding.side || "right";
-  const commentLines = finding.title
-    ? [`Title: ${finding.title}`, finding.comment]
-    : [finding.comment];
   return [
-    `The user wants a deeper explanation of an AI-generated code review comment on Azure DevOps PR #${pr.id} ("${pr.title}").`,
-    ``,
     `File: ${file.path}`,
     `Location: lines ${loc} (${side} side)`,
     ``,
-    `The staged review comment was:`,
-    ...commentLines,
-    ``,
-    `The user's follow-up: ${question}`,
-    ``,
-    callbackInstructions(askId, callbackUrl),
-  ].join("\n");
+    ...(finding.title ? [`Title: ${finding.title}`, finding.comment] : [finding.comment]),
+  ];
 }
 
 // Builds the SDK "selection" attachment carrying the snippet as inline `text`
@@ -132,6 +165,18 @@ interface AskOptions {
   sendLabel: string; // send button label
   buildPrompt: (question: string, askId: string, callbackUrl: string) => string;
   attachments?: unknown[]; // SDK attachments to send with the prompt
+  /**
+   * Set both to offer the reviewer-session transport. The client names only the
+   * PR — the server looks up the session that produced its review and, if there
+   * is one, resumes it with buildReviewerPrompt() instead of pushing
+   * buildPrompt() into the local chat session. Naming the PR rather than the
+   * session keeps the resume target unforgeable from here.
+   */
+  prId?: string | number;
+  org?: string;
+  project?: string;
+  repoId?: string;
+  buildReviewerPrompt?: (question: string) => string;
 }
 
 // The shared Ask/Elaborate dialog: a snippet-or-comment context block, a question
@@ -190,12 +235,24 @@ function openAsk(opts: AskOptions): void {
     answer.hidden = false;
     answer.className = "ask-answer loading-ans";
     answer.innerHTML = '<span class="spinner"></span> Asking Copilot…';
+    const body: Record<string, unknown> = {
+      askId,
+      prompt: opts.buildPrompt(question, askId, callbackUrl),
+      attachments: opts.attachments ?? [],
+    };
+    if (opts.prId != null && opts.buildReviewerPrompt) {
+      body.prId = opts.prId;
+      body.org = opts.org;
+      body.project = opts.project;
+      body.repoId = opts.repoId;
+      body.reviewerPrompt = opts.buildReviewerPrompt(question);
+    }
+    // The server picks the transport and reports it back, so the wait budget and
+    // wording match the path that actually ran.
+    let via = "session";
     try {
-      await postJSON("/api/ask", {
-        askId,
-        prompt: opts.buildPrompt(question, askId, callbackUrl),
-        attachments: opts.attachments ?? [],
-      });
+      const res: any = await postJSON("/api/ask", body);
+      if (res && typeof res.via === "string") via = res.via;
     } catch (e: any) {
       answer.className = "ask-answer err-ans";
       answer.textContent = "Failed to send: " + e.message;
@@ -203,11 +260,16 @@ function openAsk(opts: AskOptions): void {
       ta.disabled = false;
       return;
     }
-    pollAnswer(askId);
+    if (via === "reviewer-session") {
+      answer.innerHTML = '<span class="spinner"></span> Asking the session that reviewed this PR…';
+    }
+    pollAnswer(askId, via);
   }
 
-  async function pollAnswer(askId: string): Promise<void> {
-    for (let i = 0; i < MAX_POLLS; i++) {
+  async function pollAnswer(askId: string, via: string): Promise<void> {
+    const reviewer = via === "reviewer-session";
+    const maxPolls = reviewer ? MAX_POLLS_REVIEWER : MAX_POLLS;
+    for (let i = 0; i < maxPolls; i++) {
       await new Promise((r) => setTimeout(r, POLL_MS));
       if (closed) return;
       let res: any;
@@ -233,7 +295,9 @@ function openAsk(opts: AskOptions): void {
     }
     if (closed) return;
     answer.className = "ask-answer err-ans";
-    answer.textContent = "Copilot didn't respond in time. It may still reply in the chat.";
+    answer.textContent = reviewer
+      ? "The reviewer session didn't respond in time."
+      : "Copilot didn't respond in time. It may still reply in the chat.";
     resetInput(opts.sendLabel);
   }
 
@@ -288,6 +352,11 @@ export function openElaborateModal(pr: PR, file: FileChange, finding: Finding): 
     initialQuestion:
       "Explain this review comment in more detail — what it means, why it matters, and how to address it.",
     sendLabel: "Ask Copilot",
+    prId: pr.id,
+    org: pr.org,
+    project: pr.project,
+    repoId: pr.repoId,
+    buildReviewerPrompt: (q) => buildReviewerElaboratePrompt(pr, file, finding, q),
     buildPrompt: (q, id, url) => buildElaboratePrompt(pr, file, finding, q, id, url),
   });
 }

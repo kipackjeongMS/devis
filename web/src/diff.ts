@@ -8,12 +8,13 @@ import { highlightCode } from "./highlight.js";
 import { renderThread, buildComposerRow, renderStagedFinding } from "./threads.js";
 import { installSelectionToolbar } from "./selection.js";
 import { openAskModal } from "./ask.js";
+import { reviewStateKey } from "./reviewKey.js";
 import type { RevealableFile } from "./reveal.js";
 import type { PR, Detail, FileChange, Diff, DiffLine, Thread, Finding } from "./types.js";
 
 /** Unposted, line-anchored findings for one file (staged inline comments). */
 function stagedForFile(pr: PR, filePath: string): Finding[] {
-  const review = state.reviews ? state.reviews[String(pr.id)] : undefined;
+  const review = state.reviews ? state.reviews[reviewStateKey(pr)] : undefined;
   const list = (review && review.findingsList) || [];
   return list.filter((f) => f && !f.posted && f.file === filePath);
 }
@@ -30,12 +31,12 @@ export function renderFile(pr: PR, detail: Detail, file: FileChange, threads: Th
   const box = el<RevealableFile>(`<div class="file"></div>`);
   box.dataset.path = file.path; // lookup key for revealFinding()
   const head = el(
-    `<div class="file-head">
+    `<button type="button" class="file-head" aria-expanded="false">
        <span class="file-chev">▶</span>
        <span class="file-path">${esc(file.path)}</span>
        ${threads.length ? '<span class="file-cmt-dot" title="' + threads.length + ' comment(s)"></span>' : ""}
        <span class="chg ${cls}">${esc(label)}</span>
-     </div>`
+     </button>`
   );
   const body = el(`<div class="file-body"></div>`);
 
@@ -75,12 +76,14 @@ export function renderFile(pr: PR, detail: Detail, file: FileChange, threads: Th
   const ensureLoaded = (): Promise<void> => (loading ||= loadDiff());
 
   head.addEventListener("click", () => {
-    box.classList.toggle("open");
-    if (box.classList.contains("open")) void ensureLoaded();
+    const open = box.classList.toggle("open");
+    head.setAttribute("aria-expanded", String(open));
+    if (open) void ensureLoaded();
   });
 
   box._ensureOpen = async () => {
     box.classList.add("open");
+    head.setAttribute("aria-expanded", "true");
     await ensureLoaded();
   };
 

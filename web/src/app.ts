@@ -152,6 +152,14 @@ function renderSettings(): void {
   filterbar.hidden = true;
   view.innerHTML = "";
   const wrap = el(`<div class="settings"></div>`);
+  wrap.appendChild(
+    el(
+      `<div class="settings-heading">
+         <h1>Review Console settings</h1>
+         <p>Configure the Azure DevOps scopes and review defaults used by this workspace.</p>
+       </div>`
+    )
+  );
   wrap.appendChild(el(`<h2>Organizations &amp; projects</h2>`));
   wrap.appendChild(
     el(
@@ -248,14 +256,14 @@ function renderSettings(): void {
 
   // ---- PR review model selector ----
   let selectedModel = state.config.reviewModel || "";
-  wrap.appendChild(el(`<h2 style="margin-top:24px">PR review model</h2>`));
+  wrap.appendChild(el(`<h2 class="settings-section-title">PR review model</h2>`));
   wrap.appendChild(
     el(
       `<div class="desc">AI model used for background PR reviews. <b>Auto</b> lets Copilot pick. Models are discovered from the Copilot CLI.</div>`
     )
   );
   const modelRow = el(`<div class="org-add"></div>`);
-  const modelSelect = el(`<select class="filter-select" style="flex:1"></select>`) as HTMLSelectElement;
+  const modelSelect = el(`<select class="filter-select settings-model-select"></select>`) as HTMLSelectElement;
   modelSelect.innerHTML = `<option value="">Auto (let Copilot pick)</option>`;
   modelSelect.value = "";
   modelRow.appendChild(modelSelect);
@@ -282,7 +290,7 @@ function renderSettings(): void {
 
   // ---- Reviews markdown folder ----
   let reviewsDir = state.config.reviewsDir || "";
-  wrap.appendChild(el(`<h2 style="margin-top:24px">Reviews folder</h2>`));
+  wrap.appendChild(el(`<h2 class="settings-section-title">Reviews folder</h2>`));
   wrap.appendChild(
     el(
       `<div class="desc">Optional. Completed reviews are also saved as Markdown at <code>&lt;folder&gt;/&lt;RepoName&gt;/&lt;prId&gt;-&lt;title&gt;.md</code> — handy for an Obsidian vault. Leave empty to disable. The app's SQLite store stays the source of truth either way.</div>`
@@ -290,7 +298,7 @@ function renderSettings(): void {
   );
   const dirRow = el(`<div class="org-add"></div>`);
   const dirInput = el(
-    `<input type="text" style="flex:1" placeholder="e.g. C:\\Users\\you\\OneDrive\\PRReviews" />`
+    `<input type="text" class="settings-folder-input" placeholder="e.g. C:\\Users\\you\\OneDrive\\PRReviews" />`
   ) as HTMLInputElement;
   dirInput.value = reviewsDir;
   dirInput.addEventListener("input", () => {
@@ -299,7 +307,7 @@ function renderSettings(): void {
   dirRow.appendChild(dirInput);
   wrap.appendChild(dirRow);
 
-  const actions = el(`<div class="org-add" style="justify-content:flex-end"></div>`);
+  const actions = el(`<div class="org-add settings-actions"></div>`);
   const save = el(`<button class="btn">Save</button>`) as HTMLButtonElement;
   save.addEventListener("click", async () => {
     save.disabled = true;

@@ -84,6 +84,9 @@ function metaLine(row: ReviewRow): string {
     const when = row.updated_at || "";
     const day = /^\d{4}-\d{2}-\d{2}/.test(when) ? when.slice(0, 10) : when;
     if (day) bits.push(`**Reviewed:** ${day}`);
+    // The session that produced the review: resume it with
+    // `copilot --resume <id>` to pick the review back up later.
+    if (row.reviewer_session_id) bits.push(`**Session:** \`${row.reviewer_session_id}\``);
     return bits.join(" · ");
 }
 

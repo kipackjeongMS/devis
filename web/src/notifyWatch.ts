@@ -44,9 +44,10 @@ async function tick(): Promise<void> {
   const before = prev;
   await loadReviews(); // refreshes state.reviews from the shared store
   const after = state.reviews;
+  window.dispatchEvent(new CustomEvent("ado-pr-updated"));
   for (const note of diffReviews(before, after, getTriggered())) {
     fireNote(note);
-    unmarkTriggered(note.prId);
+    unmarkTriggered(note.key);
   }
   prev = { ...after };
   if (triggeredCount() === 0) stopNotifyWatch();

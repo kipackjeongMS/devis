@@ -1,6 +1,7 @@
 // "Humanize & post": clicking Post to ADO on a staged AI finding opens this modal.
 // It shows the original AI comment, generates a natural human-sounding rewrite via
-// the headless `copilot -p` subprocess (POST /api/rephrase — no chat session), lets
+// POST /api/rephrase (headless — no chat session either way; when the review
+// recorded its reviewer session the rewrite is produced by that session), lets
 // the user edit or Regenerate, then posts the final edited text to ADO via onPost.
 // Reuses the .ask-* dialog styles so it stacks above the PR-detail slide-over.
 import { el } from "./dom.js";
@@ -12,6 +13,14 @@ interface RephraseOptions {
   comment: string; // original AI comment
   loc: string; // header location text (e.g. "file:42 · right")
   model?: string; // preferred model (state.config.reviewModel)
+  /**
+   * PR whose recorded reviewer session should produce the rewrite, if it has one.
+   * The client names the PR, never the session — the server resolves it.
+   */
+  prId?: string | number;
+  org?: string;
+  project?: string;
+  repoId?: string;
   onPost: (text: string) => Promise<void>; // performs the real ADO post + card swap
 }
 
@@ -90,6 +99,10 @@ export function openRephraseModal(opts: RephraseOptions): void {
         comment: opts.comment,
         title: opts.title || "",
         model: opts.model || "",
+        prId: opts.prId ?? "",
+        org: opts.org || "",
+        project: opts.project || "",
+        repoId: opts.repoId || "",
       });
       if (closed) return;
       ta.value = (res && res.text) || "";

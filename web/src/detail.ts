@@ -78,7 +78,7 @@ function buildDetail(container: HTMLElement, pr: PR, detail: Detail): void {
     requestNotifyPermission(); // within the user gesture, so the host honors it
     sendAll.disabled = true;
     const orig = sendAll.textContent;
-    sendAll.textContent = "Reviewing…";
+    sendAll.textContent = "Preparing…";
     try {
       await sendPrToCopilot(pr, detail);
     } finally {

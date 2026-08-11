@@ -9,6 +9,7 @@ import { esc } from "./util.js";
 import { state } from "./state.js";
 import { toast } from "./toast.js";
 import { revealFinding } from "./reveal.js";
+import { reviewStateKey } from "./reviewKey.js";
 import type { PR, Finding } from "./types.js";
 
 /** Rendered left-to-right, most severe first. */
@@ -35,7 +36,7 @@ function bucket(severity?: string | null): string {
 
 /** Unposted findings only — the lights are a triage queue that empties as you post. */
 function stagedFindings(pr: PR): Finding[] {
-  const review = state.reviews[String(pr.id)];
+  const review = state.reviews[reviewStateKey(pr)];
   return ((review && review.findingsList) || []).filter((f) => f && !f.posted);
 }
 
@@ -119,8 +120,6 @@ function closeDrawer(): void {
     const dying = pop;
     pop = null;
     dying.classList.remove("open");
-    const drawer = dying.querySelector(".sl-drawer") as HTMLElement | null;
-    if (drawer) drawer.style.maxHeight = "0px";
     if (reducedMotion()) dying.remove();
     else setTimeout(() => dying.remove(), 260);
   }
@@ -165,12 +164,9 @@ function toggleDrawer(
 
   positionUnder(bar, light, node);
 
-  const drawer = node.querySelector(".sl-drawer") as HTMLElement;
-  // Next frame so the transition runs from the collapsed state rather than
-  // snapping straight to the open one.
+  // Next frame so the transition runs from the hidden state.
   requestAnimationFrame(() => {
     node.classList.add("open");
-    drawer.style.maxHeight = drawer.scrollHeight + "px";
   });
 
   onOutside = (e: MouseEvent) => {

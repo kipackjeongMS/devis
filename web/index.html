@@ -3,46 +3,80 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>ADO DevOps</title>
+    <title>Review Console</title>
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
+    <a class="skip-link" href="#view">Skip to review queue</a>
     <header class="topbar">
-      <div class="brand">
-        <span class="logo">◆</span>
-        <span>DevOps</span>
+      <div class="brand" aria-label="Review Console">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" focusable="false">
+            <circle cx="7" cy="5" r="2"></circle>
+            <circle cx="17" cy="7" r="2"></circle>
+            <circle cx="7" cy="19" r="2"></circle>
+            <path d="M7 7v10M9 7h2a6 6 0 0 1 6 6v4"></path>
+          </svg>
+        </span>
+        <span class="brand-copy">
+          <strong>Review Console</strong>
+          <span>Azure DevOps</span>
+        </span>
       </div>
-      <nav class="topnav" aria-label="View">
+      <nav class="topnav" aria-label="Primary navigation">
         <button type="button" class="nav-btn active" data-view="prs">Pull requests</button>
         <button type="button" class="nav-btn" data-view="rollouts">Rollouts</button>
       </nav>
       <div class="topbar-actions">
-        <button id="btnInbox" class="icon-btn inbox-btn" title="Notifications" aria-label="Notifications">🔔<span class="inbox-badge" hidden>0</span></button>
-        <button id="btnRefresh" class="icon-btn" title="Refresh">⟳</button>
-        <button id="btnSettings" class="icon-btn" title="Settings">⚙</button>
+        <button id="btnInbox" class="icon-btn inbox-btn" type="button" title="Notifications" aria-label="Notifications"
+          aria-expanded="false" aria-controls="inboxFlyout">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path>
+            <path d="M10 21h4"></path>
+          </svg>
+          <span class="inbox-badge" hidden>0</span>
+        </button>
+        <button id="btnRefresh" class="icon-btn" type="button" title="Refresh" aria-label="Refresh">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M20 7v5h-5"></path>
+            <path d="M19 12a7 7 0 1 0-2 5"></path>
+          </svg>
+        </button>
+        <button id="btnSettings" class="icon-btn" type="button" title="Settings" aria-label="Settings">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a2 2 0 0 0 .4 2.2l.1.1-2.6 2.6-.1-.1a2 2 0 0 0-2.2-.4 2 2 0 0 0-1.2 1.8V21h-3.6v-.2A2 2 0 0 0 9 19a2 2 0 0 0-2.2.4l-.1.1-2.6-2.6.1-.1A2 2 0 0 0 4.6 15a2 2 0 0 0-1.8-1.2H3v-3.6h.2A2 2 0 0 0 5 9a2 2 0 0 0-.4-2.2l-.1-.1 2.6-2.6.1.1A2 2 0 0 0 9 4.6a2 2 0 0 0 1.2-1.8V3h3.6v.2A2 2 0 0 0 15 5a2 2 0 0 0 2.2-.4l.1-.1 2.6 2.6-.1.1A2 2 0 0 0 19.4 9a2 2 0 0 0 1.8 1.2h.2v3.6h-.2A2 2 0 0 0 19.4 15Z"></path>
+          </svg>
+        </button>
       </div>
     </header>
 
     <div id="filterbar" class="filterbar" hidden>
-      <label class="filter-field">
-        <span class="filter-label">Org</span>
-        <select id="orgFilter" class="filter-select"></select>
-      </label>
-      <label class="filter-field">
-        <span class="filter-label">Project</span>
-        <select id="projectFilter" class="filter-select"></select>
-      </label>
-      <div class="filter-field assign-field">
-        <span class="filter-label">Main list</span>
-        <div id="assignFilter" class="seg" role="group" aria-label="Assignment">
-          <button type="button" class="seg-btn" data-assign="mine">Me</button>
-          <button type="button" class="seg-btn" data-assign="notmine">Not me</button>
-          <button type="button" class="seg-btn" data-assign="all">All</button>
+      <div class="filterbar-heading">
+        <strong>Review scope</strong>
+        <span>Queue and ownership</span>
+      </div>
+      <div class="filterbar-fields">
+        <label class="filter-field">
+          <span class="filter-label">Organization</span>
+          <select id="orgFilter" class="filter-select"></select>
+        </label>
+        <label class="filter-field">
+          <span class="filter-label">Project</span>
+          <select id="projectFilter" class="filter-select"></select>
+        </label>
+        <div class="filter-field assign-field">
+          <span class="filter-label">Assigned</span>
+          <div id="assignFilter" class="seg" role="group" aria-label="Assignment">
+            <button type="button" class="seg-btn" data-assign="mine">To me</button>
+            <button type="button" class="seg-btn" data-assign="notmine">Others</button>
+            <button type="button" class="seg-btn" data-assign="all">All</button>
+          </div>
         </div>
       </div>
     </div>
 
-    <main id="view" class="view">
+    <main id="view" class="view" tabindex="-1">
       <div class="loading">Loading…</div>
     </main>
 

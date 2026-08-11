@@ -62,14 +62,17 @@ function renderGroup(g: ServiceGroupRollouts): void {
   const badges = statuses.map((s) => statusBadge(s)).join("");
 
   const head = el(
-    `<div class="sg-head">` +
+    `<button type="button" class="sg-head" aria-expanded="true">` +
       `<span class="sg-chev">▶</span>` +
       `<span class="sg-name">${esc(shortSg(g.name))}</span>` +
       `<span class="sg-badges">${badges}</span>` +
       `<span class="count">${g.rollouts.length}</span>` +
-      `</div>`
+      `</button>`
   );
-  head.addEventListener("click", () => wrap.classList.toggle("collapsed"));
+  head.addEventListener("click", () => {
+    const isCollapsed = wrap.classList.toggle("collapsed");
+    head.setAttribute("aria-expanded", String(!isCollapsed));
+  });
   wrap.appendChild(head);
 
   const list = el(`<div class="sg-list"></div>`);
@@ -81,7 +84,7 @@ function renderGroup(g: ServiceGroupRollouts): void {
 function renderRolloutCard(r: RolloutSummary): HTMLElement {
   const card = el(`<div class="rollout-card"></div>`);
   const head = el(
-    `<div class="rollout-head">` +
+    `<div class="rollout-head" role="button" tabindex="0" aria-expanded="false">` +
       `<span class="ro-chev">▶</span>` +
       statusBadge(r.status) +
       `<span class="ro-id" title="${esc(r.id)}"><code>${esc(r.id.slice(0, 8))}</code></span>` +
@@ -89,7 +92,7 @@ function renderRolloutCard(r: RolloutSummary): HTMLElement {
       (r.startTime ? `<span class="ro-time">Started ${esc(timeAgo(r.startTime))}</span>` : "") +
       `</div>`
   );
-  const portal = el(`<button class="link-btn ro-portal">Ev2 Portal ↗</button>`);
+  const portal = el(`<button type="button" class="link-btn ro-portal">Ev2 Portal ↗</button>`);
   portal.addEventListener("click", (e) => {
     e.stopPropagation();
     window.open(r.url, "_blank");
@@ -98,8 +101,9 @@ function renderRolloutCard(r: RolloutSummary): HTMLElement {
 
   const gridWrap = el(`<div class="rollout-grid"></div>`);
   let loaded = false;
-  head.addEventListener("click", async () => {
+  const toggleRollout = async (): Promise<void> => {
     const open = card.classList.toggle("open");
+    head.setAttribute("aria-expanded", String(open));
     if (open && !loaded) {
       loaded = true;
       gridWrap.innerHTML =
@@ -114,6 +118,15 @@ function renderRolloutCard(r: RolloutSummary): HTMLElement {
         gridWrap.innerHTML = `<div class="grid-note">Failed to load stages: ${esc(e.message)}</div>`;
       }
     }
+  };
+  head.addEventListener("click", (e) => {
+    if ((e.target as HTMLElement).closest(".ro-portal")) return;
+    void toggleRollout();
+  });
+  head.addEventListener("keydown", (e) => {
+    if (e.target !== head || (e.key !== "Enter" && e.key !== " ")) return;
+    e.preventDefault();
+    void toggleRollout();
   });
 
   card.appendChild(head);

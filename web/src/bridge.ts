@@ -1,62 +1,63 @@
-// The Copilot bridge: turns a PR + its diffs + comments into a background-review
-// prompt and sends it into the CLI session via POST /api/bridge.
-//
-// The prompt itself is built in ./reviewPrompt.ts (buildPrContext = dynamic PR
-// data, buildReviewInstructions = review instructions). This file owns the
-// orchestration: kick off the optimistic "running" badge/notify side-effects,
-// stitch the two prompt halves, and hand the result to the transport.
-import { postJSON } from "./api.js";
+// Durable PR-review queue. Both the detail-page button and list-page Review All
+// prepare the same self-contained tasks, then enqueue them for bounded dispatch
+// into independent app-managed sessions.
+import { getJSON, postJSON } from "./api.js";
 import { toast } from "./toast.js";
 import { state } from "./state.js";
 import { refreshReviewPanel } from "./reviewPanel.js";
 import { markTriggered } from "./notify.js";
 import { startNotifyWatch } from "./notifyWatch.js";
-import { buildPrContext, buildReviewInstructions } from "./reviewPrompt.js";
+import { buildPrContext, buildReviewTask } from "./reviewPrompt.js";
+import { activeJobKey, reviewStateKey } from "./reviewKey.js";
 import type { PR, Detail } from "./types.js";
 
-export async function sendPrToCopilot(pr: PR, detail: Detail): Promise<void> {
-  // PART 1 — dynamic PR context (may fetch diffs the user hasn't opened yet).
-  const context = await buildPrContext(pr, detail);
+interface PreparedReview {
+  pr: PR;
+  runId: string;
+  taskPrompt: string;
+  targetCanvasInstanceId: string;
+}
+
+const QUEUE_BATCH_SIZE = 50;
+
+export interface BulkReviewResult {
+  /** Canonical [org, project, repoId, prId] keys, not bare PR numbers. */
+  accepted: string[];
+  skipped: string[];
+  failed: Array<{ prId: string; error: string }>;
+}
+
+function responseKey(item: any): string {
+  return JSON.stringify([String(item.org), String(item.project), String(item.repoId), String(item.prId)]);
+}
+
+function currentCanvasInstanceId(): string {
+  const id = new URLSearchParams(window.location.search).get("canvasInstanceId")?.trim();
+  if (!id) throw new Error("This canvas instance cannot dispatch reviews. Reopen the canvas and try again.");
+  return id;
+}
+
+function targetCanvasInstanceId(pr: PR): string {
+  return `ado-pr-review-${pr.org}-${pr.repoId}-${pr.id}`
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .slice(0, 120);
+}
+
+async function fetchDetailForReview(pr: PR): Promise<Detail> {
+  return getJSON(
+    `/api/pr?org=${encodeURIComponent(pr.org)}&project=${encodeURIComponent(pr.project)}` +
+      `&repoId=${encodeURIComponent(pr.repoId)}&id=${pr.id}`
+  );
+}
+
+async function prepareReview(pr: PR, detail?: Detail): Promise<PreparedReview> {
+  const resolvedDetail = detail || (await fetchDetailForReview(pr));
   const runId = crypto.randomUUID();
-
-  // Persist the run before dispatch so a child completion can be correlated and
-  // an older child can never overwrite a newer review.
-  try {
-    await postJSON("/api/review-result", {
-      prId: String(pr.id),
-      runId,
-      org: pr.org,
-      project: pr.project,
-      repo: pr.repo,
-      title: pr.title,
-      status: "running",
-    });
-  } catch (e) {
-    toast("Could not start review: " + (e as Error).message, "err");
-    return;
-  }
-  if (state.reviews) {
-    state.reviews[String(pr.id)] = { pr_id: String(pr.id), run_id: runId, status: "running" };
-  }
-  pr.plateDismissed = false;
-  // If this PR's detail modal is on screen, show the running state right away.
-  const panelEl = document.querySelector(".rev-panel") as HTMLElement | null;
-  if (panelEl && state.current && state.current.pr && String(state.current.pr.id) === String(pr.id)) {
-    refreshReviewPanel(pr, panelEl);
-  }
-
-  // PART 2 — build one self-contained fork_session dispatch payload. The child
-  // opens its own target-specific canvas and publishes through that canvas, so
-  // completion no longer depends on inherited chat context or this loopback port.
-  const canvasInstanceId =
-    `ado-pr-review-${pr.org}-${pr.repoId}-${pr.id}`
-      .toLowerCase()
-      .replace(/[^a-z0-9-]+/g, "-")
-      .slice(0, 120);
-  const instructions = buildReviewInstructions({
+  const canvasInstanceId = targetCanvasInstanceId(pr);
+  const taskPrompt = buildReviewTask({
     prId: pr.id,
-    reviewModel: state.config.reviewModel || "",
-    prContext: context,
+    prContext: await buildPrContext(pr, resolvedDetail),
     canvasInstanceId,
     org: pr.org,
     project: pr.project,
@@ -65,39 +66,136 @@ export async function sendPrToCopilot(pr: PR, detail: Detail): Promise<void> {
     title: pr.title,
     runId,
   });
-
-  const sent = await bridge(instructions, `PR #${pr.id} sent to Copilot (background)`);
-  if (!sent) {
-    const error = "Could not dispatch the review to the Copilot session.";
-    try {
-      await postJSON("/api/review-result", {
-        prId: String(pr.id),
-        runId,
-        status: "error",
-        error,
-      });
-    } catch {
-      // The bridge toast already surfaced the transport failure.
-    }
-    if (state.reviews) {
-      state.reviews[String(pr.id)] = { pr_id: String(pr.id), run_id: runId, status: "error", error };
-    }
-    if (panelEl) refreshReviewPanel(pr, panelEl);
-    return;
-  }
-
-  // Only a successfully dispatched review should trigger completion notifications.
-  markTriggered(String(pr.id));
-  startNotifyWatch();
+  return { pr, runId, taskPrompt, targetCanvasInstanceId: canvasInstanceId };
 }
 
-export async function bridge(prompt: string, okMsg?: string): Promise<boolean> {
-  try {
-    await postJSON("/api/bridge", { prompt });
-    toast(okMsg || "Sent to Copilot", "ok");
-    return true;
-  } catch (e: any) {
-    toast("Bridge failed: " + e.message, "err");
-    return false;
+async function prepareReviews(
+  prs: PR[],
+  onProgress?: (done: number, total: number, pr: PR) => void
+): Promise<{ prepared: PreparedReview[]; failed: BulkReviewResult["failed"] }> {
+  const prepared: PreparedReview[] = [];
+  const failed: BulkReviewResult["failed"] = [];
+  let next = 0;
+  let done = 0;
+  const worker = async (): Promise<void> => {
+    while (next < prs.length) {
+      const pr = prs[next++];
+      try {
+        prepared.push(await prepareReview(pr));
+      } catch (e) {
+        failed.push({ prId: String(pr.id), error: (e as Error).message });
+      } finally {
+        done++;
+        onProgress?.(done, prs.length, pr);
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(3, prs.length) }, () => worker()));
+  return { prepared, failed };
+}
+
+async function enqueuePrepared(
+  prepared: PreparedReview[],
+  failed: BulkReviewResult["failed"] = []
+): Promise<BulkReviewResult> {
+  if (!prepared.length) return { accepted: [], skipped: [], failed };
+  const canvasInstanceId = currentCanvasInstanceId();
+  const accepted: string[] = [];
+  const skipped: string[] = [];
+  const allFailed = [...failed];
+
+  for (let offset = 0; offset < prepared.length; offset += QUEUE_BATCH_SIZE) {
+    const chunk = prepared.slice(offset, offset + QUEUE_BATCH_SIZE);
+    let res: any;
+    try {
+      res = await postJSON("/api/review/queue", {
+        canvasInstanceId,
+        jobs: chunk.map(({ pr, runId, taskPrompt, targetCanvasInstanceId: targetId }) => ({
+          prId: String(pr.id),
+          runId,
+          org: pr.org,
+          project: pr.project,
+          repo: pr.repo,
+          repoId: pr.repoId,
+          title: pr.title,
+          taskPrompt,
+          targetCanvasInstanceId: targetId,
+          reviewModel: state.config.reviewModel || "",
+        })),
+      });
+    } catch (e) {
+      const error = (e as Error).message;
+      allFailed.push(...chunk.map(({ pr }) => ({ prId: String(pr.id), error })));
+      continue;
+    }
+
+    accepted.push(...(res.accepted || []).map(responseKey));
+    skipped.push(...(res.skipped || []).map(responseKey));
+    for (const item of [...(res.accepted || []), ...(res.skipped || [])]) {
+      const key = responseKey(item);
+      const prId = String(item.prId);
+      const pr = state.prs.find(
+        (candidate) =>
+          candidate.org === item.org &&
+          candidate.project === item.project &&
+          candidate.repoId === item.repoId &&
+          String(candidate.id) === prId
+      );
+      const activeJob = {
+        pr_id: prId,
+        org: String(item.org),
+        project: String(item.project),
+        repo: String(item.repo),
+        repo_id: String(item.repoId),
+        status: String(item.status),
+      };
+      state.activeReviewJobs[activeJobKey(activeJob)] = activeJob;
+      markTriggered(key);
+      if (pr) {
+        state.reviews[reviewStateKey(pr)] = {
+          ...state.reviews[reviewStateKey(pr)],
+          pr_id: prId,
+          org: pr.org,
+          project: pr.project,
+          repo: pr.repo,
+          repo_id: pr.repoId,
+          run_id: String(item.runId),
+          status: item.status === "queued" || item.status === "dispatching" ? "queued" : "running",
+        };
+        if ((res.accepted || []).some((acceptedItem: any) => responseKey(acceptedItem) === key)) {
+          pr.plateDismissed = false;
+        }
+      }
+    }
   }
+  if (accepted.length || skipped.length) startNotifyWatch();
+  return { accepted, skipped, failed: allFailed };
+}
+
+export async function sendPrToCopilot(pr: PR, detail: Detail): Promise<void> {
+  try {
+    const result = await enqueuePrepared([await prepareReview(pr, detail)]);
+    if (result.accepted.length) {
+      toast(`Queued PR #${pr.id} for independent review`, "ok");
+    } else if (result.failed.length) {
+      throw new Error(result.failed[0].error);
+    } else {
+      toast(`PR #${pr.id} is already queued or being reviewed`, "ok");
+    }
+  } catch (e) {
+    toast("Could not queue review: " + (e as Error).message, "err");
+  } finally {
+    const panel = document.querySelector(".rev-panel") as HTMLElement | null;
+    if (panel && state.current && String(state.current.pr.id) === String(pr.id)) {
+      void refreshReviewPanel(pr, panel);
+    }
+  }
+}
+
+export async function sendPrsToCopilot(
+  prs: PR[],
+  onProgress?: (done: number, total: number, pr: PR) => void
+): Promise<BulkReviewResult> {
+  const { prepared, failed } = await prepareReviews(prs, onProgress);
+  return enqueuePrepared(prepared, failed);
 }

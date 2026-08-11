@@ -68,6 +68,8 @@ declare module "@github/copilot-sdk/extension" {
 
     /** The live session; `send` pushes a prompt (with optional attachments) into the Copilot CLI conversation. */
     export interface SessionRef {
+        /** Id of the CLI session this extension process is joined to. */
+        readonly sessionId: string;
         send: (msg: { prompt: string; attachments?: SelectionAttachment[] }) => Promise<void>;
     }
 

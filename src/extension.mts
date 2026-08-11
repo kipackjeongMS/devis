@@ -6,8 +6,9 @@
 //   - ONE shared loopback HTTP server (started lazily on first canvas open).
 //   - Serves the static UI from ./web and a small JSON API (see api.mts).
 //   - Config, review store, ADO client, and HTTP helpers live in sibling modules.
-//   - The Copilot CLI bridge posts a user-built prompt into the session via
-//     session.send(). Never use console.log here — stdout is the JSON-RPC pipe.
+//   - A durable review queue asks the joined session to create independent,
+//     app-visible reviewer sessions. Never use console.log here — stdout is the
+//     JSON-RPC pipe.
 //
 // This entry file MUST compile to `extension.mjs` at the extension root: the
 // Copilot loader imports it by filename convention (there is no manifest).
@@ -20,6 +21,12 @@ import { handleApi, setSession } from "./api.mjs";
 import { serveStatic } from "./http.mjs";
 import { parsePrCanvasTarget, targetUrl, type PrCanvasTarget } from "./canvas-target.mjs";
 import { publishCanvasReview } from "./canvas-review.mjs";
+import {
+    acknowledgeReviewDispatch,
+    claimQueuedReviewTask,
+    registerReviewCanvas,
+    unregisterReviewCanvas,
+} from "./review-dispatch.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const WEB_DIR = join(__dirname, "web");
@@ -34,6 +41,11 @@ interface ServerEntry {
 
 let serverEntry: ServerEntry | null = null;
 const canvasTargets = new Map<string, PrCanvasTarget>();
+
+// Id of the CLI session this extension process is joined to. Stamped onto any
+// review published from here so follow-up subtasks can be resumed inside the
+// exact session that performed the review. Assigned once joinSession resolves.
+let joinedSessionId: string | null = null;
 
 async function ensureServer(): Promise<ServerEntry> {
     if (serverEntry) return serverEntry;
@@ -135,8 +147,55 @@ const session = await joinSession({
                     handler: async (ctx: CanvasActionContext) => {
                         const target = canvasTargets.get(ctx.instanceId);
                         if (!target) throw new Error("This canvas instance has no PR target");
-                        return publishCanvasReview(ctx.input, target);
+                        return publishCanvasReview(ctx.input, target, joinedSessionId);
                     },
+                },
+                {
+                    name: "claimReviewTask",
+                    description:
+                        "Claim the durable review task assigned to this PR-specific reviewer session.",
+                    inputSchema: {
+                        type: "object",
+                        additionalProperties: false,
+                        required: ["runId"],
+                        properties: {
+                            runId: { type: "string", minLength: 1 },
+                        },
+                    },
+                    handler: async (ctx: CanvasActionContext) => {
+                        const target = canvasTargets.get(ctx.instanceId);
+                        if (!target) throw new Error("This canvas instance has no PR target");
+                        return claimQueuedReviewTask(ctx.input, target);
+                    },
+                },
+                {
+                    name: "ackReviewDispatch",
+                    description:
+                        "Acknowledge the independent app sessions created for one queued review batch.",
+                    inputSchema: {
+                        type: "object",
+                        additionalProperties: false,
+                        required: ["batchId", "results"],
+                        properties: {
+                            batchId: { type: "string", minLength: 1 },
+                            results: {
+                                type: "array",
+                                items: {
+                                    type: "object",
+                                    additionalProperties: false,
+                                    required: ["runId", "ok"],
+                                    properties: {
+                                        runId: { type: "string", minLength: 1 },
+                                        ok: { type: "boolean" },
+                                        appSessionId: { type: "string" },
+                                        error: { type: "string" },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                    handler: async (ctx: CanvasActionContext) =>
+                        acknowledgeReviewDispatch(ctx.input, ctx.instanceId),
                 },
             ],
             open: async (ctx) => {
@@ -144,18 +203,24 @@ const session = await joinSession({
                 const target = parsePrCanvasTarget(ctx.input);
                 if (target) canvasTargets.set(ctx.instanceId, target);
                 else canvasTargets.delete(ctx.instanceId);
-                return target
-                    ? { title: `ADO DevOps · PR #${target.prId}`, url: targetUrl(entry.url, target) }
-                    : { title: "ADO DevOps", url: entry.url };
+                registerReviewCanvas(ctx.instanceId, !target);
+                const url = new URL(target ? targetUrl(entry.url, target) : entry.url);
+                url.searchParams.set("canvasInstanceId", ctx.instanceId);
+                return {
+                    title: target ? `ADO DevOps · PR #${target.prId}` : "ADO DevOps",
+                    url: url.toString(),
+                };
             },
             // Shared server is intentionally left running across instance closes;
             // it is cheap (loopback, idle) and reused by the next open.
             onClose: async (ctx) => {
                 canvasTargets.delete(ctx.instanceId);
+                unregisterReviewCanvas(ctx.instanceId);
             },
         }),
     ],
 });
 
 // Inject the live session so the bridge endpoint can push prompts into the CLI.
+joinedSessionId = typeof session.sessionId === "string" && session.sessionId ? session.sessionId : null;
 setSession(session);

@@ -31,10 +31,12 @@ export interface Finding {
 
 /** A stored review row (one per PR). String columns are null until written. */
 export interface ReviewRow {
+    review_key: string;
     pr_id: string;
     org: string | null;
     project: string | null;
     repo: string | null;
+    repo_id: string | null;
     title: string | null;
     status: string;
     summary: string | null;
@@ -43,6 +45,8 @@ export interface ReviewRow {
     findings_json: string | null;
     error: string | null;
     run_id: string | null;
+    /** Copilot session that produced this review; follow-up subtasks resume into it. */
+    reviewer_session_id: string | null;
     // Legacy mirror of the My Plate preference. Kept for stored-review compatibility.
     // A fresh review clears both this field and the dedicated preference row.
     // fresh review starts, so a re-review re-surfaces it.
@@ -51,8 +55,57 @@ export interface ReviewRow {
     updated_at: string | null;
 }
 
-/** Compact row used for list badges. */
-export type ReviewListItem = Pick<ReviewRow, "pr_id" | "status" | "summary" | "dismissed" | "updated_at">;
+/** Compact row used for list badges. Scope fields prevent cross-repo PR-number collisions. */
+export type ReviewListItem = Pick<
+    ReviewRow,
+    "review_key" | "pr_id" | "org" | "project" | "repo" | "repo_id" | "status" | "summary" | "dismissed" | "updated_at"
+>;
+
+export interface ReviewIdentity {
+    prId: string | number;
+    org?: string | null;
+    project?: string | null;
+    repoId?: string | null;
+}
+
+export type ReviewJobStatus = "queued" | "dispatching" | "created" | "running" | "done" | "error";
+
+/** One durable request to create an independent app-managed reviewer session. */
+export interface ReviewJobRow {
+    run_id: string;
+    pr_id: string;
+    org: string;
+    project: string;
+    repo: string;
+    repo_id: string;
+    title: string;
+    task_prompt: string;
+    target_canvas_instance_id: string;
+    dispatcher_session_id: string;
+    dispatcher_canvas_instance_id: string;
+    review_model: string | null;
+    status: ReviewJobStatus;
+    batch_id: string | null;
+    app_session_id: string | null;
+    error: string | null;
+    created_at: string;
+    updated_at: string;
+}
+
+export interface ReviewJobInput {
+    runId: string;
+    prId: string | number;
+    org: string;
+    project: string;
+    repo: string;
+    repoId: string;
+    title: string;
+    taskPrompt: string;
+    targetCanvasInstanceId: string;
+    dispatcherSessionId: string;
+    dispatcherCanvasInstanceId: string;
+    reviewModel?: string | null;
+}
 
 /** The POST payload an agent (or the canvas) writes; only `prId` is required. */
 export interface ReviewInput {
@@ -60,6 +113,7 @@ export interface ReviewInput {
     org?: string | null;
     project?: string | null;
     repo?: string | null;
+    repoId?: string | null;
     title?: string | null;
     status?: string | null;
     summary?: string | null;
@@ -70,6 +124,12 @@ export interface ReviewInput {
     findings?: string | Finding | Finding[] | null;
     error?: string | null;
     runId?: string | null;
+    /**
+     * Copilot session that performed the review. Sourced from the publishing
+     * extension process (never from agent input), so it is only set on the
+     * canvas-action publish path.
+     */
+    reviewerSessionId?: string | null;
 }
 
 let db: DatabaseSync | null = null;
@@ -96,42 +156,119 @@ async function initializeDb(): Promise<DatabaseSync> {
     try {
         connection.exec(`
             CREATE TABLE IF NOT EXISTS reviews (
-                pr_id      TEXT PRIMARY KEY,
-                org        TEXT,
-                project    TEXT,
-                repo       TEXT,
-                title      TEXT,
-                status     TEXT NOT NULL DEFAULT 'pending',
-                summary    TEXT,
-                story      TEXT,
-                findings   TEXT,
-                error      TEXT,
-                created_at TEXT,
-                updated_at TEXT
+                review_key         TEXT PRIMARY KEY,
+                pr_id              TEXT NOT NULL,
+                org                TEXT,
+                project            TEXT,
+                repo               TEXT,
+                repo_id            TEXT,
+                title              TEXT,
+                status             TEXT NOT NULL DEFAULT 'pending',
+                summary            TEXT,
+                story              TEXT,
+                findings           TEXT,
+                findings_json      TEXT,
+                error              TEXT,
+                run_id             TEXT,
+                reviewer_session_id TEXT,
+                dismissed          INTEGER NOT NULL DEFAULT 0,
+                created_at         TEXT,
+                updated_at         TEXT
             );
         `);
-        // Re-check under the write lock so parallel extension processes cannot
-        // both attempt the same ALTER TABLE migration.
-        const cols = connection.prepare("PRAGMA table_info(reviews)").all() as Array<{ name: string }>;
-        if (!cols.some((c) => c.name === "findings_json")) {
-            connection.exec("ALTER TABLE reviews ADD COLUMN findings_json TEXT");
+        // Older builds keyed reviews by bare PR number. Preserve those rows as
+        // explicit legacy records while allowing scoped rows for every repo.
+        let reviewCols = connection.prepare("PRAGMA table_info(reviews)").all() as Array<{ name: string }>;
+        if (!reviewCols.some((c) => c.name === "review_key")) {
+            if (!reviewCols.some((c) => c.name === "findings_json")) {
+                connection.exec("ALTER TABLE reviews ADD COLUMN findings_json TEXT");
+            }
+            if (!reviewCols.some((c) => c.name === "dismissed")) {
+                connection.exec("ALTER TABLE reviews ADD COLUMN dismissed INTEGER NOT NULL DEFAULT 0");
+            }
+            if (!reviewCols.some((c) => c.name === "run_id")) {
+                connection.exec("ALTER TABLE reviews ADD COLUMN run_id TEXT");
+            }
+            if (!reviewCols.some((c) => c.name === "reviewer_session_id")) {
+                connection.exec("ALTER TABLE reviews ADD COLUMN reviewer_session_id TEXT");
+            }
+            connection.exec(`
+                ALTER TABLE reviews RENAME TO reviews_legacy;
+                CREATE TABLE reviews (
+                    review_key         TEXT PRIMARY KEY,
+                    pr_id              TEXT NOT NULL,
+                    org                TEXT,
+                    project            TEXT,
+                    repo               TEXT,
+                    repo_id            TEXT,
+                    title              TEXT,
+                    status             TEXT NOT NULL DEFAULT 'pending',
+                    summary            TEXT,
+                    story              TEXT,
+                    findings           TEXT,
+                    findings_json      TEXT,
+                    error              TEXT,
+                    run_id             TEXT,
+                    reviewer_session_id TEXT,
+                    dismissed          INTEGER NOT NULL DEFAULT 0,
+                    created_at         TEXT,
+                    updated_at         TEXT
+                );
+                INSERT INTO reviews
+                    (review_key, pr_id, org, project, repo, repo_id, title, status,
+                     summary, story, findings, findings_json, error, run_id,
+                     reviewer_session_id, dismissed, created_at, updated_at)
+                SELECT 'legacy:' || pr_id, pr_id, org, project, repo, NULL, title, status,
+                       summary, story, findings, findings_json, error, run_id,
+                       reviewer_session_id, dismissed, created_at, updated_at
+                FROM reviews_legacy;
+                DROP TABLE reviews_legacy;
+            `);
+            reviewCols = connection.prepare("PRAGMA table_info(reviews)").all() as Array<{ name: string }>;
         }
-        if (!cols.some((c) => c.name === "dismissed")) {
-            connection.exec("ALTER TABLE reviews ADD COLUMN dismissed INTEGER NOT NULL DEFAULT 0");
-        }
-        if (!cols.some((c) => c.name === "run_id")) {
-            connection.exec("ALTER TABLE reviews ADD COLUMN run_id TEXT");
-        }
-        // My Plate can now contain activity-only PRs with no Copilot review row,
-        // so dismissal state has its own table. Preserve existing user choices.
+        connection.exec(`
+            CREATE INDEX IF NOT EXISTS idx_reviews_identity
+            ON reviews(org, project, repo_id, pr_id);
+        `);
+
+        // My Plate can also contain activity-only PRs, so its preference key uses
+        // the same scoped identity. Legacy bare-number choices remain readable.
         connection.exec(`
             CREATE TABLE IF NOT EXISTS plate_preferences (
-                pr_id      TEXT PRIMARY KEY,
+                plate_key  TEXT PRIMARY KEY,
+                pr_id      TEXT NOT NULL,
+                org        TEXT,
+                project    TEXT,
+                repo_id    TEXT,
                 dismissed INTEGER NOT NULL DEFAULT 0,
                 updated_at TEXT
             );
-            INSERT OR IGNORE INTO plate_preferences (pr_id, dismissed, updated_at)
-            SELECT pr_id, 1, updated_at FROM reviews WHERE dismissed = 1;
+        `);
+        const plateCols = connection.prepare("PRAGMA table_info(plate_preferences)").all() as Array<{ name: string }>;
+        if (!plateCols.some((c) => c.name === "plate_key")) {
+            connection.exec(`
+                ALTER TABLE plate_preferences RENAME TO plate_preferences_legacy;
+                CREATE TABLE plate_preferences (
+                    plate_key  TEXT PRIMARY KEY,
+                    pr_id      TEXT NOT NULL,
+                    org        TEXT,
+                    project    TEXT,
+                    repo_id    TEXT,
+                    dismissed INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT
+                );
+                INSERT INTO plate_preferences
+                    (plate_key, pr_id, org, project, repo_id, dismissed, updated_at)
+                SELECT 'legacy:' || pr_id, pr_id, NULL, NULL, NULL, dismissed, updated_at
+                FROM plate_preferences_legacy;
+                DROP TABLE plate_preferences_legacy;
+            `);
+        }
+        connection.exec(`
+            INSERT OR IGNORE INTO plate_preferences
+                (plate_key, pr_id, org, project, repo_id, dismissed, updated_at)
+            SELECT review_key, pr_id, org, project, repo_id, 1, updated_at
+            FROM reviews WHERE dismissed = 1;
         `);
         // Notification inbox: deduped, persisted ADO events.
         connection.exec(`
@@ -158,6 +295,32 @@ async function initializeDb(): Promise<DatabaseSync> {
                 value TEXT
             );
         `);
+        connection.exec(`
+            CREATE TABLE IF NOT EXISTS review_jobs (
+                run_id                        TEXT PRIMARY KEY,
+                pr_id                        TEXT NOT NULL,
+                org                          TEXT NOT NULL,
+                project                      TEXT NOT NULL,
+                repo                         TEXT NOT NULL,
+                repo_id                      TEXT NOT NULL,
+                title                        TEXT NOT NULL,
+                task_prompt                  TEXT NOT NULL,
+                target_canvas_instance_id    TEXT NOT NULL,
+                dispatcher_session_id        TEXT NOT NULL,
+                dispatcher_canvas_instance_id TEXT NOT NULL,
+                review_model                 TEXT,
+                status                       TEXT NOT NULL,
+                batch_id                     TEXT,
+                app_session_id               TEXT,
+                error                        TEXT,
+                created_at                   TEXT NOT NULL,
+                updated_at                   TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_review_jobs_dispatch
+            ON review_jobs(dispatcher_session_id, status, created_at);
+            CREATE INDEX IF NOT EXISTS idx_review_jobs_pr
+            ON review_jobs(pr_id, status, updated_at);
+        `);
         connection.exec("COMMIT");
         db = connection;
         return connection;
@@ -177,18 +340,445 @@ function requireDb(): DatabaseSync {
     return db;
 }
 
-export function getReview(prId: string | number): ReviewRow | null {
+function cleanIdentityPart(value: unknown): string | null {
+    if (typeof value !== "string") return null;
+    const trimmed = value.trim();
+    return trimmed || null;
+}
+
+export function legacyReviewKey(prId: string | number): string {
+    return `legacy:${String(prId)}`;
+}
+
+export function reviewIdentityKey(identity: ReviewIdentity): string {
+    const prId = String(identity.prId);
+    const org = cleanIdentityPart(identity.org);
+    const project = cleanIdentityPart(identity.project);
+    const repoId = cleanIdentityPart(identity.repoId);
+    return org && project && repoId
+        ? JSON.stringify([org, project, repoId, prId])
+        : legacyReviewKey(prId);
+}
+
+function exactReview(identity: ReviewIdentity): ReviewRow | null {
     return (
-        (requireDb().prepare("SELECT * FROM reviews WHERE pr_id = ?").get(String(prId)) as
-            | ReviewRow
-            | undefined) || null
+        (requireDb()
+            .prepare("SELECT * FROM reviews WHERE review_key = ?")
+            .get(reviewIdentityKey(identity)) as ReviewRow | undefined) || null
     );
+}
+
+export function getReview(identity: ReviewIdentity | string | number): ReviewRow | null {
+    const normalized: ReviewIdentity =
+        typeof identity === "object" ? identity : { prId: identity };
+    const exact = exactReview(normalized);
+    if (exact || reviewIdentityKey(normalized).startsWith("legacy:")) return exact;
+    return exactReview({ prId: normalized.prId });
 }
 
 export function listReviews(): ReviewListItem[] {
     return requireDb()
-        .prepare("SELECT pr_id, status, summary, dismissed, updated_at FROM reviews ORDER BY updated_at DESC")
+        .prepare(
+            `SELECT review_key, pr_id, org, project, repo, repo_id, status, summary, dismissed, updated_at
+             FROM reviews ORDER BY updated_at DESC`,
+        )
         .all() as unknown as ReviewListItem[];
+}
+
+export function listActiveReviewJobs(): Array<
+    Pick<ReviewJobRow, "pr_id" | "org" | "project" | "repo" | "repo_id" | "status">
+> {
+    return requireDb()
+        .prepare(
+            `SELECT pr_id, org, project, repo, repo_id, status FROM review_jobs
+             WHERE status IN ('queued','dispatching','created','running')`,
+        )
+        .all() as Array<
+        Pick<ReviewJobRow, "pr_id" | "org" | "project" | "repo" | "repo_id" | "status">
+    >;
+}
+
+export function getReviewJob(runId: string): ReviewJobRow | null {
+    return (
+        (requireDb().prepare("SELECT * FROM review_jobs WHERE run_id = ?").get(runId) as
+            | ReviewJobRow
+            | undefined) || null
+    );
+}
+
+/** Persist review tasks before dispatch. An active PR is returned as skipped. */
+export function enqueueReviewJobs(inputs: ReviewJobInput[]): {
+    accepted: ReviewJobRow[];
+    skipped: ReviewJobRow[];
+} {
+    const connection = requireDb();
+    const findActive = connection.prepare(
+        `SELECT * FROM review_jobs
+         WHERE org = ? AND project = ? AND repo_id = ? AND pr_id = ?
+           AND status IN ('queued','dispatching','created','running')
+         ORDER BY created_at DESC LIMIT 1`,
+    );
+    const insert = connection.prepare(
+        `INSERT INTO review_jobs
+         (run_id, pr_id, org, project, repo, repo_id, title, task_prompt,
+          target_canvas_instance_id, dispatcher_session_id, dispatcher_canvas_instance_id,
+          review_model, status, batch_id, app_session_id, error, created_at, updated_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    );
+    const accepted: ReviewJobRow[] = [];
+    const skipped: ReviewJobRow[] = [];
+    connection.exec("BEGIN IMMEDIATE");
+    try {
+        for (const input of inputs) {
+            const prId = String(input.prId);
+            const active = findActive.get(
+                input.org,
+                input.project,
+                input.repoId,
+                prId,
+            ) as ReviewJobRow | undefined;
+            if (active) {
+                skipped.push(active);
+                continue;
+            }
+            const now = new Date().toISOString();
+            insert.run(
+                input.runId,
+                prId,
+                input.org,
+                input.project,
+                input.repo,
+                input.repoId,
+                input.title,
+                input.taskPrompt,
+                input.targetCanvasInstanceId,
+                input.dispatcherSessionId,
+                input.dispatcherCanvasInstanceId,
+                input.reviewModel || null,
+                "queued",
+                null,
+                null,
+                null,
+                now,
+                now,
+            );
+            upsertReview({
+                prId,
+                runId: input.runId,
+                org: input.org,
+                project: input.project,
+                repo: input.repo,
+                repoId: input.repoId,
+                title: input.title,
+                status: "queued",
+                error: null,
+            });
+            accepted.push(getReviewJob(input.runId)!);
+        }
+        connection.exec("COMMIT");
+        return { accepted, skipped };
+    } catch (e) {
+        connection.exec("ROLLBACK");
+        throw e;
+    }
+}
+
+/** Heartbeat queued work so another app session adopts it only after this owner disappears. */
+export function touchQueuedReviewJobs(dispatcherSessionId: string): void {
+    requireDb()
+        .prepare(
+            `UPDATE review_jobs SET updated_at = ?
+             WHERE dispatcher_session_id = ? AND status = 'queued'`,
+        )
+        .run(new Date().toISOString(), dispatcherSessionId);
+}
+
+/** Atomically reserve the next queued jobs for one parent-session dispatch turn. */
+export function claimQueuedReviewJobs(
+    dispatcherSessionId: string,
+    dispatcherCanvasInstanceId: string,
+    batchId: string,
+    maxConcurrent: number,
+    orphanedBefore: string,
+): ReviewJobRow[] {
+    if (maxConcurrent < 1) return [];
+    const connection = requireDb();
+    connection.exec("BEGIN IMMEDIATE");
+    try {
+        // Reserve capacity under the same write lock as the status transition.
+        // `dispatching` already represents a promised reviewer session, so it
+        // occupies a slot alongside created/running sessions.
+        const active = connection
+            .prepare(
+                `SELECT COUNT(*) AS count FROM review_jobs
+                 WHERE status IN ('dispatching','created','running')`,
+            )
+            .get() as { count: number };
+        const limit = Math.max(0, maxConcurrent - Number(active.count));
+        if (!limit) {
+            connection.exec("COMMIT");
+            return [];
+        }
+        const rows = connection
+            .prepare(
+                `SELECT * FROM review_jobs
+                 WHERE status = 'queued'
+                   AND (dispatcher_session_id = ? OR updated_at < ?)
+                 ORDER BY CASE WHEN dispatcher_session_id = ? THEN 0 ELSE 1 END,
+                          created_at ASC
+                 LIMIT ?`,
+            )
+            .all(dispatcherSessionId, orphanedBefore, dispatcherSessionId, limit) as unknown as ReviewJobRow[];
+        const now = new Date().toISOString();
+        const update = connection.prepare(
+            `UPDATE review_jobs
+             SET status = 'dispatching',
+                 dispatcher_session_id = ?,
+                 dispatcher_canvas_instance_id = ?,
+                 batch_id = ?,
+                 updated_at = ?
+             WHERE run_id = ? AND status = 'queued'`,
+        );
+        const claimed: ReviewJobRow[] = [];
+        for (const row of rows) {
+            if (
+                Number(
+                    update.run(
+                        dispatcherSessionId,
+                        dispatcherCanvasInstanceId,
+                        batchId,
+                        now,
+                        row.run_id,
+                    ).changes || 0,
+                ) === 1
+            ) {
+                claimed.push({
+                    ...row,
+                    status: "dispatching",
+                    dispatcher_session_id: dispatcherSessionId,
+                    dispatcher_canvas_instance_id: dispatcherCanvasInstanceId,
+                    batch_id: batchId,
+                    updated_at: now,
+                });
+            }
+        }
+        connection.exec("COMMIT");
+        return claimed;
+    } catch (e) {
+        connection.exec("ROLLBACK");
+        throw e;
+    }
+}
+
+export function listReviewBatchJobs(
+    dispatcherSessionId: string,
+    batchId: string,
+): ReviewJobRow[] {
+    return requireDb()
+        .prepare(
+            `SELECT * FROM review_jobs
+             WHERE dispatcher_session_id = ? AND batch_id = ?
+             ORDER BY created_at ASC`,
+        )
+        .all(dispatcherSessionId, batchId) as unknown as ReviewJobRow[];
+}
+
+export interface ReviewDispatchAck {
+    runId: string;
+    ok: boolean;
+    appSessionId?: string | null;
+    error?: string | null;
+}
+
+function jobReviewInput(row: ReviewJobRow): ReviewInput {
+    return {
+        prId: row.pr_id,
+        org: row.org,
+        project: row.project,
+        repo: row.repo,
+        repoId: row.repo_id,
+        title: row.title,
+        runId: row.run_id,
+    };
+}
+
+/** Record create_session outcomes without overwriting a child that already claimed its task. */
+export function acknowledgeReviewJobs(
+    dispatcherSessionId: string,
+    batchId: string,
+    results: ReviewDispatchAck[],
+): void {
+    const connection = requireDb();
+    connection.exec("BEGIN IMMEDIATE");
+    try {
+        for (const result of results) {
+            const row = connection
+                .prepare(
+                    `SELECT * FROM review_jobs
+                     WHERE run_id = ? AND dispatcher_session_id = ? AND batch_id = ?`,
+                )
+                .get(result.runId, dispatcherSessionId, batchId) as ReviewJobRow | undefined;
+            if (!row || row.status === "done" || row.status === "error") continue;
+            const now = new Date().toISOString();
+            if (result.ok) {
+                const info =
+                    row.status === "running"
+                        ? connection
+                              .prepare(
+                                  `UPDATE review_jobs
+                                   SET app_session_id = ?, updated_at = ?
+                                   WHERE run_id = ? AND status = 'running'`,
+                              )
+                              .run(result.appSessionId || null, now, row.run_id)
+                        : connection
+                              .prepare(
+                                  `UPDATE review_jobs
+                                   SET status = 'created', app_session_id = ?,
+                                       error = NULL, updated_at = ?
+                                   WHERE run_id = ? AND status = 'dispatching'`,
+                              )
+                              .run(result.appSessionId || null, now, row.run_id);
+                if (Number(info.changes || 0) === 1) {
+                    upsertReview({ ...jobReviewInput(row), status: "running", error: null });
+                }
+            } else if (row.status === "dispatching") {
+                const error = result.error || "Could not create the reviewer session.";
+                const info = connection
+                    .prepare(
+                        `UPDATE review_jobs
+                         SET status = 'error', error = ?, updated_at = ?
+                         WHERE run_id = ? AND status = 'dispatching'`,
+                    )
+                    .run(error, now, row.run_id);
+                if (Number(info.changes || 0) === 1) {
+                    upsertReview({ ...jobReviewInput(row), status: "error", error });
+                }
+            }
+        }
+        connection.exec("COMMIT");
+    } catch (e) {
+        connection.exec("ROLLBACK");
+        throw e;
+    }
+}
+
+/** Claim the stored prompt from the reviewer session opened on the matching PR. */
+export function claimReviewTask(
+    runId: string,
+    target: { prId: string; org: string; project: string; repoId: string },
+): ReviewJobRow {
+    const connection = requireDb();
+    connection.exec("BEGIN IMMEDIATE");
+    try {
+        const row = getReviewJob(runId);
+        if (!row) throw new Error("Review job not found");
+        if (
+            row.pr_id !== target.prId ||
+            row.org !== target.org ||
+            row.project !== target.project ||
+            row.repo_id !== target.repoId
+        ) {
+            throw new Error("Review job does not match this canvas target");
+        }
+        if (!["dispatching", "created", "running"].includes(row.status)) {
+            throw new Error(`Review job cannot be claimed while ${row.status}`);
+        }
+        const now = new Date().toISOString();
+        connection
+            .prepare(
+                `UPDATE review_jobs
+                 SET status = 'running', error = NULL, updated_at = ?
+                 WHERE run_id = ?`,
+            )
+            .run(now, runId);
+        upsertReview({ ...jobReviewInput(row), status: "running", error: null });
+        connection.exec("COMMIT");
+        return { ...row, status: "running", error: null, updated_at: now };
+    } catch (e) {
+        connection.exec("ROLLBACK");
+        throw e;
+    }
+}
+
+export function finishReviewJob(runId: string, status: "done" | "error", error?: string): void {
+    requireDb()
+        .prepare(
+            `UPDATE review_jobs
+             SET status = ?, error = ?, updated_at = ?
+             WHERE run_id = ?`,
+        )
+        .run(status, error || null, new Date().toISOString(), runId);
+}
+
+export function failReviewBatch(
+    dispatcherSessionId: string,
+    batchId: string,
+    error: string,
+): void {
+    const rows = requireDb()
+        .prepare(
+            `SELECT * FROM review_jobs
+             WHERE dispatcher_session_id = ? AND batch_id = ? AND status = 'dispatching'`,
+        )
+        .all(dispatcherSessionId, batchId) as unknown as ReviewJobRow[];
+    const now = new Date().toISOString();
+    const update = requireDb().prepare(
+        `UPDATE review_jobs
+         SET status = 'error', error = ?, updated_at = ?
+         WHERE run_id = ? AND status = 'dispatching'`,
+    );
+    for (const row of rows) {
+        const info = update.run(error, now, row.run_id);
+        if (Number(info.changes || 0) === 1) {
+            upsertReview({ ...jobReviewInput(row), status: "error", error });
+        }
+    }
+}
+
+/** Release capacity held by sessions that were never acknowledged, started, or completed. */
+export function expireStaleReviewJobs(nowMs = Date.now()): number {
+    const cutoffs: Array<{ status: ReviewJobStatus; before: string; message: string }> = [
+        {
+            status: "dispatching",
+            before: new Date(nowMs - 3 * 60 * 1000).toISOString(),
+            message: "The review dispatcher did not acknowledge the session creation.",
+        },
+        {
+            status: "created",
+            before: new Date(nowMs - 10 * 60 * 1000).toISOString(),
+            message: "The reviewer session was created but did not start.",
+        },
+        {
+            status: "running",
+            before: new Date(nowMs - 2 * 60 * 60 * 1000).toISOString(),
+            message: "Background review did not complete before the timeout.",
+        },
+    ];
+    let changed = 0;
+    const connection = requireDb();
+    for (const item of cutoffs) {
+        const rows = connection
+            .prepare("SELECT * FROM review_jobs WHERE status = ? AND updated_at < ?")
+            .all(item.status, item.before) as unknown as ReviewJobRow[];
+        for (const row of rows) {
+            const info = connection
+                .prepare(
+                    `UPDATE review_jobs
+                     SET status = 'error', error = ?, updated_at = ?
+                     WHERE run_id = ? AND status = ?`,
+                )
+                .run(item.message, new Date(nowMs).toISOString(), row.run_id, item.status);
+            if (Number(info.changes || 0) === 1) {
+                upsertReview({
+                    ...jobReviewInput(row),
+                    status: "error",
+                    error: item.message,
+                });
+                changed++;
+            }
+        }
+    }
+    return changed;
 }
 
 /** Convert abandoned running reviews into an explicit recoverable error state. */
@@ -207,40 +797,53 @@ export function expireStaleReviews(maxAgeMs = 2 * 60 * 60 * 1000): number {
     return Number(info.changes ?? 0);
 }
 
-/**
- * Set (or clear) the legacy review-row dismissal flag for one or more PRs.
- */
-export function setDismissed(prIds: Array<string | number>, dismissed: boolean): number {
-    const ids = prIds.map(String).filter((s) => s.trim() !== "");
-    if (!ids.length) return 0;
-    const placeholders = ids.map(() => "?").join(",");
-    const info = requireDb()
-        .prepare(`UPDATE reviews SET dismissed = ?, updated_at = ? WHERE pr_id IN (${placeholders})`)
-        .run(dismissed ? 1 : 0, new Date().toISOString(), ...ids);
-    return Number(info.changes ?? 0);
+/** Keep the review-row mirror of a scoped My Plate preference in sync. */
+export function setDismissed(identities: ReviewIdentity[], dismissed: boolean): number {
+    if (!identities.length) return 0;
+    const update = requireDb().prepare(
+        "UPDATE reviews SET dismissed = ?, updated_at = ? WHERE review_key = ?",
+    );
+    const now = new Date().toISOString();
+    let changed = 0;
+    for (const identity of identities) {
+        changed += Number(
+            update.run(dismissed ? 1 : 0, now, reviewIdentityKey(identity)).changes ?? 0,
+        );
+    }
+    return changed;
 }
 
 /** Every PR currently hidden from My Plate, including activity-only PRs. */
 export function listPlateDismissals(): Set<string> {
     const rows = requireDb()
-        .prepare("SELECT pr_id FROM plate_preferences WHERE dismissed = 1")
-        .all() as Array<{ pr_id: string }>;
-    return new Set(rows.map((row) => row.pr_id));
+        .prepare("SELECT plate_key FROM plate_preferences WHERE dismissed = 1")
+        .all() as Array<{ plate_key: string }>;
+    return new Set(rows.map((row) => row.plate_key));
 }
 
 /** Persist a My Plate removal even when the PR has no background-review row. */
-export function setPlateDismissed(prIds: Array<string | number>, dismissed: boolean): number {
-    const ids = prIds.map(String).filter((s) => s.trim() !== "");
-    if (!ids.length) return 0;
+export function setPlateDismissed(identities: ReviewIdentity[], dismissed: boolean): number {
+    if (!identities.length) return 0;
     const stmt = requireDb().prepare(
-        `INSERT INTO plate_preferences (pr_id, dismissed, updated_at)
-         VALUES (?, ?, ?)
-         ON CONFLICT(pr_id) DO UPDATE SET dismissed = excluded.dismissed, updated_at = excluded.updated_at`,
+        `INSERT INTO plate_preferences
+            (plate_key, pr_id, org, project, repo_id, dismissed, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(plate_key) DO UPDATE SET
+            dismissed = excluded.dismissed,
+            updated_at = excluded.updated_at`,
     );
     const now = new Date().toISOString();
     let changed = 0;
-    for (const id of ids) {
-        const info = stmt.run(id, dismissed ? 1 : 0, now);
+    for (const identity of identities) {
+        const info = stmt.run(
+            reviewIdentityKey(identity),
+            String(identity.prId),
+            cleanIdentityPart(identity.org),
+            cleanIdentityPart(identity.project),
+            cleanIdentityPart(identity.repoId),
+            dismissed ? 1 : 0,
+            now,
+        );
         changed += Number(info.changes ?? 0);
     }
     return changed;
@@ -271,7 +874,14 @@ function normalizeFindings(list: Finding[]): Finding[] {
 export function upsertReview(r: ReviewInput): ReviewRow {
     const now = new Date().toISOString();
     const prId = String(r.prId);
-    const ex: Partial<ReviewRow> = getReview(prId) || {};
+    const identity: ReviewIdentity = {
+        prId,
+        org: r.org,
+        project: r.project,
+        repoId: r.repoId,
+    };
+    const reviewKey = reviewIdentityKey(identity);
+    const ex: Partial<ReviewRow> = exactReview(identity) || {};
     const pick = (k: MergeKey): string | null => (r[k] != null ? r[k]! : ex[k] != null ? ex[k]! : null);
 
     // Findings can arrive as structured (array -> findings_json) or legacy markdown
@@ -290,37 +900,58 @@ export function upsertReview(r: ReviewInput): ReviewRow {
     }
 
     const row: ReviewRow = {
+        review_key: reviewKey,
         pr_id: prId,
         org: pick("org"),
         project: pick("project"),
         repo: pick("repo"),
+        repo_id: r.repoId != null ? r.repoId : ex.repo_id != null ? ex.repo_id : null,
         title: pick("title"),
         status: r.status != null ? r.status : ex.status != null ? ex.status : "pending",
         summary: pick("summary"),
         story: pick("story"),
         findings,
         findings_json: findingsJson,
-        error: pick("error"),
+        error: r.status === "queued" || r.status === "running" ? null : pick("error"),
         run_id: r.runId != null ? r.runId : ex.run_id != null ? ex.run_id : null,
+        // A new launch invalidates the previous reviewer session: follow-ups must
+        // never resume a session that reviewed an earlier run of this PR.
+        reviewer_session_id:
+            r.reviewerSessionId != null
+                ? r.reviewerSessionId
+                : r.status === "queued" || r.status === "running"
+                  ? null
+                  : (ex.reviewer_session_id ?? null),
         // A fresh review (status flips to "running") re-surfaces a previously
         // dismissed PR in My Plate; otherwise the user's choice is preserved.
-        dismissed: r.status === "running" ? 0 : (ex.dismissed ?? 0),
+        dismissed: r.status === "queued" || r.status === "running" ? 0 : (ex.dismissed ?? 0),
         created_at: ex.created_at != null ? ex.created_at : now,
         updated_at: now,
     };
     requireDb()
         .prepare(
             `INSERT OR REPLACE INTO reviews
-             (pr_id, org, project, repo, title, status, summary, story, findings, findings_json, error, run_id, dismissed, created_at, updated_at)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+             (review_key, pr_id, org, project, repo, repo_id, title, status, summary,
+              story, findings, findings_json, error, run_id, reviewer_session_id,
+              dismissed, created_at, updated_at)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         )
         .run(
-            row.pr_id, row.org, row.project, row.repo, row.title, row.status,
+            row.review_key, row.pr_id, row.org, row.project, row.repo, row.repo_id,
+            row.title, row.status,
             row.summary, row.story, row.findings, row.findings_json, row.error, row.run_id,
-            row.dismissed, row.created_at, row.updated_at,
+            row.reviewer_session_id, row.dismissed, row.created_at, row.updated_at,
         );
-    if (r.status === "running") setPlateDismissed([prId], false);
+    if (r.status === "queued" || r.status === "running") setPlateDismissed([identity], false);
     return row;
+}
+
+function publishReviewRunLocked(r: ReviewInput & { runId: string }): ReviewRow {
+    const current = getReview(r);
+    if (current?.run_id && current.run_id !== r.runId) {
+        throw new Error("This review run is stale and can no longer publish");
+    }
+    return upsertReview(r);
 }
 
 /** Complete only the currently-active launch, preventing stale child overwrites. */
@@ -328,11 +959,33 @@ export function publishReviewRun(r: ReviewInput & { runId: string }): ReviewRow 
     const connection = requireDb();
     connection.exec("BEGIN IMMEDIATE");
     try {
-        const current = getReview(r.prId);
-        if (current?.run_id && current.run_id !== r.runId) {
-            throw new Error("This review run is stale and can no longer publish");
-        }
-        const row = upsertReview(r);
+        const row = publishReviewRunLocked(r);
+        connection.exec("COMMIT");
+        return row;
+    } catch (e) {
+        connection.exec("ROLLBACK");
+        throw e;
+    }
+}
+
+/** Publish the review and release its dispatcher slot in one transaction. */
+export function publishReviewJobRun(r: ReviewInput & { runId: string }): ReviewRow {
+    const connection = requireDb();
+    connection.exec("BEGIN IMMEDIATE");
+    try {
+        const row = publishReviewRunLocked(r);
+        connection
+            .prepare(
+                `UPDATE review_jobs
+                 SET status = ?, error = ?, updated_at = ?
+                 WHERE run_id = ? AND status IN ('dispatching','created','running')`,
+            )
+            .run(
+                r.status === "error" ? "error" : "done",
+                r.status === "error" ? r.error || null : null,
+                new Date().toISOString(),
+                r.runId,
+            );
         connection.exec("COMMIT");
         return row;
     } catch (e) {
@@ -342,8 +995,8 @@ export function publishReviewRun(r: ReviewInput & { runId: string }): ReviewRow 
 }
 
 /** Mark one staged finding as posted (survives the next review re-render/poll). */
-export function markFindingPosted(prId: string | number, findingId: string): Finding[] {
-    const row = getReview(prId);
+export function markFindingPosted(identity: ReviewIdentity, findingId: string): Finding[] {
+    const row = getReview(identity);
     if (!row || !row.findings_json) return [];
     let list: Finding[];
     try {
@@ -360,8 +1013,8 @@ export function markFindingPosted(prId: string | number, findingId: string): Fin
     }
     if (changed) {
         requireDb()
-            .prepare("UPDATE reviews SET findings_json = ?, updated_at = ? WHERE pr_id = ?")
-            .run(JSON.stringify(list), new Date().toISOString(), String(prId));
+            .prepare("UPDATE reviews SET findings_json = ?, updated_at = ? WHERE review_key = ?")
+            .run(JSON.stringify(list), new Date().toISOString(), row.review_key);
     }
     return list;
 }

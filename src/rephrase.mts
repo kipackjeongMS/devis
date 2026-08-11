@@ -4,6 +4,10 @@
 // arbitrary comment text is passed as a single argv element (execFile, no shell)
 // so quotes/newlines/special chars can't break out. Mirrors the subprocess
 // pattern already used by models.mts.
+//
+// When the review recorded which session produced it, api.mts instead runs
+// buildRephrasePrompt inside that session (see reviewer-session.mts) and falls
+// back to this throwaway path.
 import { execFile } from "node:child_process";
 import { tmpdir } from "node:os";
 
@@ -13,7 +17,7 @@ export interface RephraseInput {
     model?: string;
 }
 
-function buildPrompt(input: RephraseInput): string {
+export function buildRephrasePrompt(input: RephraseInput): string {
     const original = (input.title ? `Title: ${input.title}\n` : "") + input.comment;
     return [
         "Rewrite the following code-review comment so it reads like a natural, concise note a human reviewer would leave on a pull request.",
@@ -28,7 +32,7 @@ function buildPrompt(input: RephraseInput): string {
 
 // Strip a single pair of wrapping quotes the model may have added despite the
 // instruction, plus surrounding whitespace.
-function clean(out: string): string {
+export function cleanRephrase(out: string): string {
     let text = (out || "").trim();
     if (
         text.length >= 2 &&
@@ -42,7 +46,7 @@ function clean(out: string): string {
 export function rephraseComment(input: RephraseInput): Promise<string> {
     const model = (input.model && input.model.trim()) || "auto";
     const args = [
-        "-p", buildPrompt(input),
+        "-p", buildRephrasePrompt(input),
         "--model", model,
         "-s",
         "--no-color",
@@ -56,7 +60,7 @@ export function rephraseComment(input: RephraseInput): Promise<string> {
             { timeout: 90_000, maxBuffer: 4 << 20, cwd: tmpdir(), windowsHide: true },
             (err, stdout) => {
                 if (err) return reject(new Error(err.message || "rephrase failed"));
-                const text = clean(stdout);
+                const text = cleanRephrase(stdout);
                 if (!text) return reject(new Error("empty rephrase"));
                 resolve(text);
             },

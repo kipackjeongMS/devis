@@ -4,6 +4,7 @@
 import type { Review } from "./types.js";
 
 export interface PendingNote {
+  key: string;
   prId: string;
   title: string;
   status: "done" | "error";
@@ -16,11 +17,11 @@ const TERMINAL = new Set(["done", "error"]);
 // didn't just start here).
 const triggered = new Set<string>();
 
-export function markTriggered(prId: string): void {
-  triggered.add(prId);
+export function markTriggered(key: string): void {
+  triggered.add(key);
 }
-export function unmarkTriggered(prId: string): void {
-  triggered.delete(prId);
+export function unmarkTriggered(key: string): void {
+  triggered.delete(key);
 }
 export function triggeredCount(): number {
   return triggered.size;
@@ -39,12 +40,17 @@ export function diffReviews(
   trig: Set<string>
 ): PendingNote[] {
   const out: PendingNote[] = [];
-  for (const prId of trig) {
-    const n = next[prId];
+  for (const key of trig) {
+    const n = next[key];
     if (!n || !TERMINAL.has(n.status)) continue;
-    const p = prev[prId];
+    const p = prev[key];
     if (p && TERMINAL.has(p.status)) continue; // already terminal before → already notified
-    out.push({ prId, title: n.title || "", status: n.status === "error" ? "error" : "done" });
+    out.push({
+      key,
+      prId: String(n.pr_id || ""),
+      title: n.title || "",
+      status: n.status === "error" ? "error" : "done",
+    });
   }
   return out;
 }
