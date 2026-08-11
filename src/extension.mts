@@ -27,6 +27,10 @@ import {
     registerReviewCanvas,
     unregisterReviewCanvas,
 } from "./review-dispatch.mjs";
+import {
+    getTeamsReviewIntakeState,
+    ingestTeamsReviewRequests,
+} from "./teams-review-intake.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const WEB_DIR = join(__dirname, "web");
@@ -196,6 +200,99 @@ const session = await joinSession({
                     },
                     handler: async (ctx: CanvasActionContext) =>
                         acknowledgeReviewDispatch(ctx.input, ctx.instanceId),
+                },
+                {
+                    name: "getTeamsReviewIntakeState",
+                    description:
+                        "Seed Teams review-request intake safely on first run, or return the next overlap-adjusted UTC scan window.",
+                    inputSchema: {
+                        type: "object",
+                        additionalProperties: false,
+                        required: ["sourceId"],
+                        properties: {
+                            sourceId: { type: "string", minLength: 1, maxLength: 500 },
+                        },
+                    },
+                    handler: async (ctx: CanvasActionContext) =>
+                        getTeamsReviewIntakeState(ctx.input),
+                },
+                {
+                    name: "ingestTeamsReviewRequests",
+                    description:
+                        "Persist normalized Teams/WorkIQ review-request evidence, then queue only its scoped Azure DevOps PR targets.",
+                    inputSchema: {
+                        type: "object",
+                        additionalProperties: false,
+                        required: [
+                            "sourceId",
+                            "expectedWatermark",
+                            "scanToken",
+                            "nextWatermark",
+                            "complete",
+                            "requests",
+                        ],
+                        properties: {
+                            sourceId: { type: "string", minLength: 1, maxLength: 500 },
+                            expectedWatermark: { type: "string", minLength: 1 },
+                            scanToken: { type: "string", minLength: 1, maxLength: 200 },
+                            nextWatermark: {
+                                type: "string",
+                                minLength: 1,
+                                description:
+                                    "Must exactly equal the to value issued by getTeamsReviewIntakeState for this scan.",
+                            },
+                            complete: { type: "boolean" },
+                            requests: {
+                                type: "array",
+                                maxItems: 50,
+                                items: {
+                                    type: "object",
+                                    additionalProperties: false,
+                                    required: [
+                                        "sourceMessageId",
+                                        "sourceMessageUrl",
+                                        "sender",
+                                        "sentAt",
+                                        "excerpt",
+                                        "prUrl",
+                                    ],
+                                    properties: {
+                                        sourceMessageId: {
+                                            type: "string",
+                                            minLength: 1,
+                                            maxLength: 500,
+                                        },
+                                        sourceMessageUrl: {
+                                            type: "string",
+                                            minLength: 1,
+                                            maxLength: 4096,
+                                            pattern: "^https://",
+                                        },
+                                        sender: {
+                                            type: "string",
+                                            minLength: 1,
+                                            maxLength: 1000,
+                                        },
+                                        sentAt: { type: "string", minLength: 1 },
+                                        excerpt: {
+                                            type: "string",
+                                            minLength: 1,
+                                            maxLength: 8000,
+                                        },
+                                        prUrl: {
+                                            type: "string",
+                                            minLength: 1,
+                                            maxLength: 4096,
+                                            pattern:
+                                                "^https://dev[.]azure[.]com/[^/]+/[^/]+/_git/[^/]+/pullrequest/[1-9][0-9]*(?:[?#].*)?$",
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                    handler: async (ctx: CanvasActionContext) =>
+                        ingestTeamsReviewRequests(ctx.input, ctx.instanceId),
                 },
             ],
             open: async (ctx) => {

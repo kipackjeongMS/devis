@@ -131,6 +131,10 @@ export interface Review {
   repo?: string;
   repo_id?: string;
   title?: string;
+  automation_source?: "teams" | null;
+  automation_requester?: string | null;
+  automation_source_url?: string | null;
+  automation_requested_at?: string | null;
 }
 
 export interface ActiveReviewJob {
@@ -140,6 +144,10 @@ export interface ActiveReviewJob {
   repo: string;
   repo_id: string;
   status: string;
+  automation_source?: "teams" | null;
+  automation_requester?: string | null;
+  automation_source_url?: string | null;
+  automation_requested_at?: string | null;
 }
 
 /** Persisted extension config (GET/POST /api/config). */

@@ -10,6 +10,23 @@ import { renderMermaid } from "./mermaid.js";
 import type { PR, Review } from "./types.js";
 import { reviewStateKey } from "./reviewKey.js";
 
+function provenanceChip(review: Review): string {
+  if (
+    review.automation_source !== "teams" ||
+    !review.automation_requester ||
+    !review.automation_source_url
+  ) {
+    return "";
+  }
+  return (
+    '<a class="rev-provenance" href="' +
+    esc(review.automation_source_url) +
+    '" target="_blank" rel="noreferrer" title="Open the Teams review request">Teams · ' +
+    esc(review.automation_requester) +
+    " ↗</a>"
+  );
+}
+
 // Populate (and, while running, poll) the background-review panel for one PR.
 // Renders the semantic story + findings as markdown once a result exists.
 // `onUpdate` fires after every refresh (including polls), so dependent UI such
@@ -48,7 +65,7 @@ export async function refreshReviewPanel(
   if (review.status === "queued") {
     panel.className = "rev-panel queued";
     panel.innerHTML =
-      '<div class="rev-head">◷ Review queued</div>' +
+      '<div class="rev-head">◷ Review queued' + provenanceChip(review) + "</div>" +
       '<div class="rev-note">Waiting for an independent reviewer session to become available.</div>';
     scheduleReviewPoll(() => refreshReviewPanel(pr, panel, onUpdate), 4000);
     return;
@@ -57,7 +74,9 @@ export async function refreshReviewPanel(
   if (review.status === "running") {
     panel.className = "rev-panel running";
     panel.innerHTML =
-      '<div class="rev-head"><span class="spinner"></span> Copilot is reviewing this PR in the background…</div>' +
+      '<div class="rev-head"><span class="spinner"></span> Copilot is reviewing this PR in the background…' +
+      provenanceChip(review) +
+      "</div>" +
       '<div class="rev-note">Results will appear here automatically when the review completes.</div>';
     scheduleReviewPoll(() => refreshReviewPanel(pr, panel, onUpdate), 4000);
     return;
@@ -66,7 +85,7 @@ export async function refreshReviewPanel(
   if (review.status === "error") {
     panel.className = "rev-panel error";
     panel.innerHTML =
-      '<div class="rev-head">⚠ Background review failed</div>' +
+      '<div class="rev-head">⚠ Background review failed' + provenanceChip(review) + "</div>" +
       '<div class="rev-note">' + esc(review.error || "Unknown error.") + "</div>";
     return;
   }
@@ -104,6 +123,8 @@ export async function refreshReviewPanel(
     });
     header.appendChild(chip);
   }
+  const provenance = provenanceChip(review);
+  if (provenance) header.appendChild(el(provenance));
   const body = el('<div class="rev-body"></div>');
   header.addEventListener("click", () => {
     panel.classList.toggle("collapsed");

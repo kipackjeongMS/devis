@@ -1,22 +1,14 @@
 // Durable PR-review queue. Both the detail-page button and list-page Review All
 // prepare the same self-contained tasks, then enqueue them for bounded dispatch
 // into independent app-managed sessions.
-import { getJSON, postJSON } from "./api.js";
+import { postJSON } from "./api.js";
 import { toast } from "./toast.js";
 import { state } from "./state.js";
 import { refreshReviewPanel } from "./reviewPanel.js";
 import { markTriggered } from "./notify.js";
 import { startNotifyWatch } from "./notifyWatch.js";
-import { buildPrContext, buildReviewTask } from "./reviewPrompt.js";
 import { activeJobKey, reviewStateKey } from "./reviewKey.js";
 import type { PR, Detail } from "./types.js";
-
-interface PreparedReview {
-  pr: PR;
-  runId: string;
-  taskPrompt: string;
-  targetCanvasInstanceId: string;
-}
 
 const QUEUE_BATCH_SIZE = 50;
 
@@ -37,100 +29,46 @@ function currentCanvasInstanceId(): string {
   return id;
 }
 
-function targetCanvasInstanceId(pr: PR): string {
-  return `ado-pr-review-${pr.org}-${pr.repoId}-${pr.id}`
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, "-")
-    .slice(0, 120);
-}
-
-async function fetchDetailForReview(pr: PR): Promise<Detail> {
-  return getJSON(
-    `/api/pr?org=${encodeURIComponent(pr.org)}&project=${encodeURIComponent(pr.project)}` +
-      `&repoId=${encodeURIComponent(pr.repoId)}&id=${pr.id}`
-  );
-}
-
-async function prepareReview(pr: PR, detail?: Detail): Promise<PreparedReview> {
-  const resolvedDetail = detail || (await fetchDetailForReview(pr));
-  const runId = crypto.randomUUID();
-  const canvasInstanceId = targetCanvasInstanceId(pr);
-  const taskPrompt = buildReviewTask({
-    prId: pr.id,
-    prContext: await buildPrContext(pr, resolvedDetail),
-    canvasInstanceId,
-    org: pr.org,
-    project: pr.project,
-    repo: pr.repo,
-    repoId: pr.repoId,
-    title: pr.title,
-    runId,
-  });
-  return { pr, runId, taskPrompt, targetCanvasInstanceId: canvasInstanceId };
-}
-
-async function prepareReviews(
+async function enqueueTargets(
   prs: PR[],
   onProgress?: (done: number, total: number, pr: PR) => void
-): Promise<{ prepared: PreparedReview[]; failed: BulkReviewResult["failed"] }> {
-  const prepared: PreparedReview[] = [];
-  const failed: BulkReviewResult["failed"] = [];
-  let next = 0;
-  let done = 0;
-  const worker = async (): Promise<void> => {
-    while (next < prs.length) {
-      const pr = prs[next++];
-      try {
-        prepared.push(await prepareReview(pr));
-      } catch (e) {
-        failed.push({ prId: String(pr.id), error: (e as Error).message });
-      } finally {
-        done++;
-        onProgress?.(done, prs.length, pr);
-      }
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(3, prs.length) }, () => worker()));
-  return { prepared, failed };
-}
-
-async function enqueuePrepared(
-  prepared: PreparedReview[],
-  failed: BulkReviewResult["failed"] = []
 ): Promise<BulkReviewResult> {
-  if (!prepared.length) return { accepted: [], skipped: [], failed };
+  if (!prs.length) return { accepted: [], skipped: [], failed: [] };
   const canvasInstanceId = currentCanvasInstanceId();
   const accepted: string[] = [];
   const skipped: string[] = [];
-  const allFailed = [...failed];
+  const failed: BulkReviewResult["failed"] = [];
+  let done = 0;
 
-  for (let offset = 0; offset < prepared.length; offset += QUEUE_BATCH_SIZE) {
-    const chunk = prepared.slice(offset, offset + QUEUE_BATCH_SIZE);
+  for (let offset = 0; offset < prs.length; offset += QUEUE_BATCH_SIZE) {
+    const chunk = prs.slice(offset, offset + QUEUE_BATCH_SIZE);
     let res: any;
     try {
-      res = await postJSON("/api/review/queue", {
+      res = await postJSON("/api/review/queue-targets", {
         canvasInstanceId,
-        jobs: chunk.map(({ pr, runId, taskPrompt, targetCanvasInstanceId: targetId }) => ({
-          prId: String(pr.id),
-          runId,
+        reviewModel: state.config.reviewModel || "",
+        targets: chunk.map((pr) => ({
           org: pr.org,
           project: pr.project,
-          repo: pr.repo,
           repoId: pr.repoId,
-          title: pr.title,
-          taskPrompt,
-          targetCanvasInstanceId: targetId,
-          reviewModel: state.config.reviewModel || "",
+          prId: String(pr.id),
         })),
       });
     } catch (e) {
       const error = (e as Error).message;
-      allFailed.push(...chunk.map(({ pr }) => ({ prId: String(pr.id), error })));
+      failed.push(...chunk.map((pr) => ({ prId: String(pr.id), error })));
+      for (const pr of chunk) onProgress?.(++done, prs.length, pr);
       continue;
     }
 
     accepted.push(...(res.accepted || []).map(responseKey));
     skipped.push(...(res.skipped || []).map(responseKey));
+    failed.push(
+      ...(res.failed || []).map((item: any) => ({
+        prId: String(item.prId),
+        error: String(item.error || "Could not prepare review"),
+      }))
+    );
     for (const item of [...(res.accepted || []), ...(res.skipped || [])]) {
       const key = responseKey(item);
       const prId = String(item.prId);
@@ -167,14 +105,16 @@ async function enqueuePrepared(
         }
       }
     }
+    for (const pr of chunk) onProgress?.(++done, prs.length, pr);
   }
   if (accepted.length || skipped.length) startNotifyWatch();
-  return { accepted, skipped, failed: allFailed };
+  return { accepted, skipped, failed };
 }
 
 export async function sendPrToCopilot(pr: PR, detail: Detail): Promise<void> {
+  void detail;
   try {
-    const result = await enqueuePrepared([await prepareReview(pr, detail)]);
+    const result = await enqueueTargets([pr]);
     if (result.accepted.length) {
       toast(`Queued PR #${pr.id} for independent review`, "ok");
     } else if (result.failed.length) {
@@ -196,6 +136,5 @@ export async function sendPrsToCopilot(
   prs: PR[],
   onProgress?: (done: number, total: number, pr: PR) => void
 ): Promise<BulkReviewResult> {
-  const { prepared, failed } = await prepareReviews(prs, onProgress);
-  return enqueuePrepared(prepared, failed);
+  return enqueueTargets(prs, onProgress);
 }

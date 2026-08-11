@@ -5,13 +5,18 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { SessionRef } from "@github/copilot-sdk/extension";
 import { sendJson, readBody } from "./http.mjs";
 import { readConfig, writeConfig } from "./config.mjs";
-import { ensureDb, getReview, listReviews, listActiveReviewJobs, upsertReview, publishReviewRun, expireStaleReviews, markFindingPosted, setDismissed, listPlateDismissals, setPlateDismissed, listNotifications, unreadCount, markNotificationsRead, markAllNotificationsRead, reviewIdentityKey, legacyReviewKey, type ReviewIdentity } from "./store.mjs";
+import { ensureDb, getReview, getReviewAutomationProvenance, listReviews, listActiveReviewJobs, upsertReview, publishReviewRun, expireStaleReviews, markFindingPosted, setDismissed, listPlateDismissals, setPlateDismissed, listNotifications, unreadCount, markNotificationsRead, markAllNotificationsRead, reviewIdentityKey, legacyReviewKey, type ReviewIdentity } from "./store.mjs";
 import type { Finding } from "./store.mjs";
 import { writeReviewMarkdown } from "./reviews-md.mjs";
 import { scanInbox } from "./inbox.mjs";
 import { rephraseComment, buildRephrasePrompt, cleanRephrase } from "./rephrase.mjs";
 import { runInReviewerSession, asReviewerSessionId } from "./reviewer-session.mjs";
 import { queueReviewJobs, setReviewDispatchSession } from "./review-dispatch.mjs";
+import { queueReviewTargets } from "./review-task.mjs";
+import {
+    getTeamsReviewIntakeState,
+    ingestTeamsReviewRequests,
+} from "./teams-review-intake.mjs";
 import {
     listAssignedPRs,
     listActivePRs,
@@ -239,6 +244,26 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
         // ---- durable, bounded dispatch into independent app-managed sessions ----
         if (p === "/api/review/queue" && req.method === "POST") {
             return sendJson(res, 200, await queueReviewJobs(await readBody(req)));
+        }
+        if (p === "/api/review/queue-targets" && req.method === "POST") {
+            return sendJson(res, 200, await queueReviewTargets(await readBody(req)));
+        }
+        if (p === "/api/teams-review-intake/state" && req.method === "POST") {
+            return sendJson(res, 200, await getTeamsReviewIntakeState(await readBody(req)));
+        }
+        if (p === "/api/teams-review-intake/ingest" && req.method === "POST") {
+            const body = await readBody(req);
+            const canvasInstanceId =
+                typeof body.canvasInstanceId === "string" ? body.canvasInstanceId.trim() : "";
+            if (!canvasInstanceId) {
+                return sendJson(res, 400, { error: "canvasInstanceId required" });
+            }
+            const { canvasInstanceId: _canvasInstanceId, ...intake } = body;
+            return sendJson(
+                res,
+                200,
+                await ingestTeamsReviewRequests(intake, canvasInstanceId),
+            );
         }
 
         // ---- bridge a prompt into the Copilot CLI session ----
@@ -481,5 +506,9 @@ function shapeReview(row: ReturnType<typeof getReview>): Record<string, unknown>
             /* ignore malformed json */
         }
     }
-    return { ...rest, findingsList };
+    return {
+        ...rest,
+        ...getReviewAutomationProvenance(row.run_id),
+        findingsList,
+    };
 }

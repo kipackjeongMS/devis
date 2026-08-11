@@ -17,18 +17,24 @@ import { reviewStateKey } from "./reviewKey.js";
 export function reviewBadge(pr: PR): string {
   const key = reviewStateKey(pr);
   const active = state.activeReviewJobs[key];
+  const provenance = active?.automation_source === "teams"
+    ? ` title="Requested in Teams by ${esc(active.automation_requester || "unknown requester")}"`
+    : "";
   if (active) {
     if (active.status === "queued" || active.status === "dispatching") {
-      return '<span class="rev-badge queued">◷ Queued</span>';
+      return `<span class="rev-badge queued"${provenance}>◷ Queued</span>`;
     }
-    return '<span class="rev-badge running">⏳ Reviewing…</span>';
+    return `<span class="rev-badge running"${provenance}>⏳ Reviewing…</span>`;
   }
   const r = state.reviews[key];
   if (!r) return "";
-  if (r.status === "queued") return '<span class="rev-badge queued">◷ Queued</span>';
-  if (r.status === "running") return '<span class="rev-badge running">⏳ Reviewing…</span>';
-  if (r.status === "done") return '<span class="rev-badge done">✓ Reviewed</span>';
-  if (r.status === "error") return '<span class="rev-badge error">⚠ Review failed</span>';
+  const storedProvenance = r.automation_source === "teams"
+    ? ` title="Requested in Teams by ${esc(r.automation_requester || "unknown requester")}"`
+    : "";
+  if (r.status === "queued") return `<span class="rev-badge queued"${storedProvenance}>◷ Queued</span>`;
+  if (r.status === "running") return `<span class="rev-badge running"${storedProvenance}>⏳ Reviewing…</span>`;
+  if (r.status === "done") return `<span class="rev-badge done"${storedProvenance}>✓ Reviewed</span>`;
+  if (r.status === "error") return `<span class="rev-badge error"${storedProvenance}>⚠ Review failed</span>`;
   return "";
 }
 
