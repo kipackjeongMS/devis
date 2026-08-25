@@ -79,6 +79,7 @@ export function lineLabel(t: Thread): string {
 
 export function renderThread(pr: PR, thread: Thread): HTMLElement {
   const box = el(`<div class="thread"></div>`);
+  box.dataset.threadId = String(thread.id);
   const where = thread.filePath
     ? `${esc(thread.filePath.split("/").pop())}${lineLabel(thread)}`
     : "General";
@@ -134,6 +135,7 @@ export function renderThread(pr: PR, thread: Thread): HTMLElement {
       thread.comments.push(c);
       list.appendChild(renderComment(c));
       (header.querySelector(".thread-count") as HTMLElement).textContent = String(thread.comments.length);
+      window.dispatchEvent(new CustomEvent("ado-pr-comments-updated"));
       ta.value = "";
       toast("Reply posted", "ok");
     } catch (e: any) {
@@ -218,12 +220,17 @@ export function renderStagedFinding(
     openRephraseModal({
       title: finding.title ?? undefined,
       comment: finding.comment,
+      findingId: finding.id,
+      initialText: finding.humanizedComment ?? finding.comment,
       loc: `${where} · ${finding.side || "right"}`,
       model: state.config.reviewModel,
       prId: pr.id,
       org: pr.org,
       project: pr.project,
       repoId: pr.repoId,
+      onHumanized: (text) => {
+        finding.humanizedComment = text;
+      },
       onPost: async (text) => {
         const created: Thread = await postJSON("/api/review/post-finding", {
           org: pr.org,

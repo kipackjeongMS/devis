@@ -1,5 +1,5 @@
 // Run a follow-up subtask inside the exact Copilot session that produced a PR
-// review. Elaborate and humanize-before-post are conversational continuations of
+// review. Elaborate and rephrase-before-post are conversational continuations of
 // the review, so resuming the reviewer session gives them the diffs, findings and
 // reasoning that session already holds — instead of re-deriving them from a bare
 // prompt in a throwaway process.

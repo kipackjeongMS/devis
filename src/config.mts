@@ -6,7 +6,10 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CONFIG_PATH = join(__dirname, "config.json");
+// Overridable for Node test harnesses (mirrors ADO_PR_OPS_DB_PATH in store.mts)
+// so a scan/discovery test can control organizations/projects deterministically
+// without touching a real developer's config.json.
+const CONFIG_PATH = process.env.ADO_PR_OPS_CONFIG_PATH || join(__dirname, "config.json");
 
 export interface Config {
     organizations: string[];

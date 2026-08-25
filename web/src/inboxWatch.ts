@@ -2,10 +2,18 @@
 // peer comments and fires an OS notification when the canvas is unfocused (the
 // walk-away case). The persistent bell badge covers the focused case.
 import { getJSON, postJSON } from "./api.js";
-import { applyInbox } from "./inboxPanel.js";
+import { applyInbox, setInboxError } from "./inboxPanel.js";
+import { toast } from "./toast.js";
 
 const POLL_MS = 60000;
+// Restrained on purpose: the poll runs every minute, but a repeated-failure
+// toast would be spam at that cadence. Show it once when a failing streak
+// starts, then at most this often while it continues; the bell's persistent
+// "has-error" state (see inboxPanel.setInboxError) covers everything between.
+const ERROR_TOAST_COOLDOWN_MS = 10 * 60 * 1000;
 let timer: ReturnType<typeof setInterval> | null = null;
+let consecutiveFailures = 0;
+let lastErrorToastAt = 0;
 
 export function startInboxWatch(): void {
   if (timer) return;
@@ -25,7 +33,7 @@ async function load(): Promise<void> {
     const res = await getJSON("/api/inbox");
     applyInbox({ items: res.items || [], unread: res.unread || 0 });
   } catch {
-    /* non-fatal: the bell just stays empty */
+    /* non-fatal: the bell just stays empty until the first successful poll */
   }
 }
 
@@ -39,8 +47,16 @@ async function poll(): Promise<void> {
     const res = await postJSON("/api/inbox/poll", {});
     applyInbox({ items: res.items || [], unread: res.unread || 0 });
     if (res.inserted > 0) osNotify(res.inserted);
+    if (consecutiveFailures > 0) setInboxError(false);
+    consecutiveFailures = 0;
   } catch {
-    /* non-fatal */
+    consecutiveFailures++;
+    setInboxError(true);
+    const now = Date.now();
+    if (consecutiveFailures === 1 || now - lastErrorToastAt > ERROR_TOAST_COOLDOWN_MS) {
+      lastErrorToastAt = now;
+      toast("Notifications couldn't refresh — check your connection.", "err");
+    }
   }
 }
 

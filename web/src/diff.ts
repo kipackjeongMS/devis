@@ -239,7 +239,11 @@ export function renderDiff(
     if (!endTr) return;
     const onDone = (created: Thread) => {
       clearHighlight();
+      if (!detail.threads.some((thread) => String(thread.id) === String(created.id))) {
+        detail.threads.push(created);
+      }
       insertThread(created);
+      window.dispatchEvent(new CustomEvent("ado-pr-comments-updated"));
     };
     const onCancel = () => clearHighlight();
     const row = buildComposerRow(pr, file, start, end, side, onDone, onCancel);

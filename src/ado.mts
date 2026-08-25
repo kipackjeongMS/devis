@@ -54,14 +54,20 @@ export interface Pr {
 export interface ThreadComment {
     id: number;
     author: string;
+    authorId?: string;
     content: string;
     parentCommentId: number;
     published: string | undefined;
 }
 
-/** A flattened PR comment carrying the fields the inbox needs to derive events. */
+/** A flattened PR comment carrying the fields the inbox needs to derive events.
+ *  `threadId` gives each comment a stable (org, project, repoId, prId, threadId,
+ *  id) identity — ADO comment ids are only unique *within* a thread, so the bare
+ *  id alone can collide across PRs/threads and must never be used as a
+ *  notification key by itself. */
 export interface InboxComment {
     id: number;
+    threadId: number;
     authorId: string | undefined;
     authorName: string;
     content: string;
@@ -410,6 +416,7 @@ export async function getPrThreads(
         for (const c of (t.comments || []) as any[]) {
             out.push({
                 id: c.id,
+                threadId: t.id,
                 authorId: c.author?.id,
                 authorName: c.author?.displayName || "unknown",
                 content: c.content || "",
@@ -485,6 +492,7 @@ function normalizeThread(t: any): Thread {
         .map((c) => ({
             id: c.id,
             author: c.author?.displayName || "unknown",
+            authorId: c.author?.id,
             content: c.content || "",
             parentCommentId: c.parentCommentId || 0,
             published: c.publishedDate,
@@ -536,6 +544,19 @@ export async function getFileDiff(
     return { hunks: diffLines(oldLines, newLines) };
 }
 
+/** The raw ADO comment JSON returned by a POST /comments call. Field names
+ *  mirror ADO's wire shape exactly (the web client already reads them that
+ *  way); `author.id` is what lets the inbox attribute the new comment to the
+ *  current user without a second round-trip. */
+export interface PostedComment {
+    id: number;
+    author?: { id?: string; displayName?: string };
+    publishedDate?: string;
+    parentCommentId?: number;
+    content?: string;
+    commentType?: string;
+}
+
 export async function postReply(
     org: string,
     project: string,
@@ -544,7 +565,7 @@ export async function postReply(
     threadId: string | number,
     content: string,
     parentCommentId: number,
-): Promise<any> {
+): Promise<PostedComment> {
     const url =
         `${repoBase(org, project, repoId)}/pullRequests/${prId}` +
         `/threads/${threadId}/comments?${API}`;
@@ -586,6 +607,23 @@ export async function createThread(
         threadContext,
     };
     const created = await adoJson("POST", url, body);
+    return normalizeThread(created);
+}
+
+/** Create a PR-level thread without attaching it to a file or diff line. */
+export async function createGeneralThread(
+    org: string,
+    project: string,
+    repoId: string,
+    prId: string | number,
+    content: string,
+): Promise<Thread> {
+    const url =
+        `${repoBase(org, project, repoId)}/pullRequests/${prId}/threads?${API}`;
+    const created = await adoJson("POST", url, {
+        comments: [{ parentCommentId: 0, content, commentType: "text" }],
+        status: "active",
+    });
     return normalizeThread(created);
 }
 

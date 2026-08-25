@@ -108,6 +108,20 @@ export interface Finding {
   severity?: string | null; // "critical" | "high" | "medium" | "low" | "nit"
   title?: string | null;
   comment: string;
+  technicalExplanation?: string | null;
+  humanizedComment?: string | null;
+  posted?: boolean;
+}
+
+/** A structured PR-level concern that is not tied to one changed line. */
+export interface SemanticFinding {
+  id: string;
+  category: string;
+  severity: string;
+  title: string;
+  comment: string;
+  files?: string[];
+  humanizedComment?: string | null;
   posted?: boolean;
 }
 
@@ -119,6 +133,7 @@ export interface Review {
   story?: string;
   findings?: string;
   findingsList?: Finding[];
+  semanticFindingsList?: SemanticFinding[];
   error?: string;
   run_id?: string;
   /** Copilot session that performed the review; follow-ups resume into it. */

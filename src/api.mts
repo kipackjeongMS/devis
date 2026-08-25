@@ -5,10 +5,10 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { SessionRef } from "@github/copilot-sdk/extension";
 import { sendJson, readBody } from "./http.mjs";
 import { readConfig, writeConfig } from "./config.mjs";
-import { ensureDb, getReview, getReviewAutomationProvenance, listReviews, listActiveReviewJobs, upsertReview, publishReviewRun, expireStaleReviews, markFindingPosted, setDismissed, listPlateDismissals, setPlateDismissed, listNotifications, unreadCount, markNotificationsRead, markAllNotificationsRead, reviewIdentityKey, legacyReviewKey, type ReviewIdentity } from "./store.mjs";
-import type { Finding } from "./store.mjs";
+import { ensureDb, getReview, getReviewAutomationProvenance, listReviews, listActiveReviewJobs, upsertReview, publishReviewRun, expireStaleReviews, markFindingPosted, markSemanticFindingPosted, setFindingHumanizedComment, setSemanticFindingHumanizedComment, setDismissed, listPlateDismissals, setPlateDismissed, listNotifications, unreadCount, markNotificationsRead, markAllNotificationsRead, reviewIdentityKey, legacyReviewKey, type ReviewIdentity } from "./store.mjs";
+import type { Finding, SemanticFinding } from "./store.mjs";
 import { writeReviewMarkdown } from "./reviews-md.mjs";
-import { scanInbox } from "./inbox.mjs";
+import { scanInbox, recordWatchFromAdoWrite } from "./inbox.mjs";
 import { rephraseComment, buildRephrasePrompt, cleanRephrase } from "./rephrase.mjs";
 import { runInReviewerSession, asReviewerSessionId } from "./reviewer-session.mjs";
 import { queueReviewJobs, setReviewDispatchSession } from "./review-dispatch.mjs";
@@ -25,6 +25,7 @@ import {
     getFileDiff,
     postReply,
     createThread,
+    createGeneralThread,
     type Pr,
 } from "./ado.mjs";
 import { parsePrCanvasTarget } from "./canvas-target.mjs";
@@ -70,7 +71,7 @@ function pruneAsks(): void {
 }
 
 // ---- reviewer-session handoff ----------------------------------------------
-// Follow-ups (Elaborate, humanize-before-post) are answered by the Copilot
+// Follow-ups (Elaborate, rephrase-before-post) are answered by the Copilot
 // session that actually produced the PR's review, so they inherit its context.
 // The client names only the PR; the session id is looked up here from the row
 // this extension stamped at publish time. That way nothing on the loopback port
@@ -228,6 +229,13 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
             const created = await postReply(
                 b.org, b.project, b.repoId, b.prId, b.threadId, b.content, b.parentCommentId,
             );
+            // Record/refresh the durable watch from THIS successful write so a later
+            // peer reply doesn't wait for the next discovery poll. The ADO write
+            // already succeeded above; any failure here is logged and swallowed.
+            await recordWatchFromAdoWrite({
+                org: b.org, project: b.project, repoId: b.repoId, prId: b.prId, threadId: b.threadId,
+                commentId: created?.id, publishedAt: created?.publishedDate ?? null,
+            });
             return sendJson(res, 200, created);
         }
 
@@ -237,6 +245,10 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
             if (!b.content || !String(b.content).trim()) return sendJson(res, 400, { error: "empty comment" });
             const created = await createThread(b.org, b.project, b.repoId, b.prId, {
                 filePath: b.filePath, line: b.line, endLine: b.endLine, side: b.side, content: b.content,
+            });
+            await recordWatchFromAdoWrite({
+                org: b.org, project: b.project, repoId: b.repoId, prId: b.prId, threadId: created.id,
+                commentId: created.comments?.[0]?.id, publishedAt: created.comments?.[0]?.published ?? null,
             });
             return sendJson(res, 200, created);
         }
@@ -425,7 +437,38 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
             return sendJson(res, 200, created);
         }
 
-        // ---- humanize a staged finding into a natural comment ----
+        if (p === "/api/review/post-semantic-finding" && req.method === "POST") {
+            const b = await readBody(req);
+            if (!b.content || !String(b.content).trim()) {
+                return sendJson(res, 400, { error: "empty comment" });
+            }
+            const semanticFindingId =
+                b.semanticFindingId == null ? "" : String(b.semanticFindingId).trim();
+            if (!semanticFindingId) {
+                return sendJson(res, 400, { error: "semanticFindingId required" });
+            }
+            const created = await createGeneralThread(
+                b.org,
+                b.project,
+                b.repoId,
+                b.prId,
+                String(b.content),
+            );
+            await ensureDb();
+            markSemanticFindingPosted(asReviewIdentity(b), semanticFindingId);
+            await recordWatchFromAdoWrite({
+                org: b.org,
+                project: b.project,
+                repoId: b.repoId,
+                prId: b.prId,
+                threadId: created.id,
+                commentId: created.comments?.[0]?.id,
+                publishedAt: created.comments?.[0]?.published ?? null,
+            });
+            return sendJson(res, 200, created);
+        }
+
+        // ---- optionally rephrase a staged finding before posting ----
         // Preferred: resume the session that produced the review, so the rewrite
         // knows why the comment was written. Otherwise (legacy reviews, or that
         // session is gone) fall back to a throwaway headless `copilot -p`.
@@ -433,25 +476,43 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
         if (p === "/api/rephrase" && req.method === "POST") {
             const b = await readBody(req);
             if (!b.comment || !String(b.comment).trim()) return sendJson(res, 400, { error: "empty comment" });
+            const identity = asReviewIdentity(b);
+            const findingId = b.findingId == null ? "" : String(b.findingId).trim();
+            const semanticFindingId =
+                b.semanticFindingId == null ? "" : String(b.semanticFindingId).trim();
+            if (findingId && semanticFindingId) {
+                return sendJson(res, 400, { error: "only one finding id may be provided" });
+            }
             const input = {
                 comment: String(b.comment),
                 title: b.title ? String(b.title) : undefined,
                 model: b.model ? String(b.model) : undefined,
             };
-            const reviewerSessionId = await reviewerSessionFor(asReviewIdentity(b));
+            const persist = async (text: string): Promise<string> => {
+                if (findingId) {
+                    await ensureDb();
+                    setFindingHumanizedComment(identity, findingId, text);
+                } else if (semanticFindingId) {
+                    await ensureDb();
+                    setSemanticFindingHumanizedComment(identity, semanticFindingId, text);
+                }
+                return text;
+            };
+            const reviewerSessionId = await reviewerSessionFor(identity);
             if (reviewerSessionId) {
+                let text = "";
                 try {
                     const reply = await runInReviewerSession({
                         sessionId: reviewerSessionId,
                         prompt: buildRephrasePrompt(input),
                     });
-                    const text = cleanRephrase(reply);
-                    if (text) return sendJson(res, 200, { text, via: "reviewer-session" });
+                    text = cleanRephrase(reply);
                 } catch (e) {
                     console.error(`[rephrase] reviewer session unavailable, using a fresh run: ${(e as Error).message}`);
                 }
+                if (text) return sendJson(res, 200, { text: await persist(text), via: "reviewer-session" });
             }
-            return sendJson(res, 200, { text: await rephraseComment(input), via: "fresh" });
+            return sendJson(res, 200, { text: await persist(await rephraseComment(input)), via: "fresh" });
         }
 
         // ---- notification inbox (peer comments/replies on my authored PRs) ----
@@ -463,8 +524,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
         }
         if (p === "/api/inbox/poll" && req.method === "POST") {
             await ensureDb();
-            const { inserted } = await scanInbox();
-            return sendJson(res, 200, { items: listNotifications(), unread: unreadCount(), inserted });
+            const { inserted, diagnostics } = await scanInbox();
+            return sendJson(res, 200, { items: listNotifications(), unread: unreadCount(), inserted, diagnostics });
         }
         if (p === "/api/inbox/read" && req.method === "POST") {
             await ensureDb();
@@ -492,12 +553,12 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
     }
 }
 
-// Shape a stored review row for the client: parse structured findings out of the
-// findings_json column into a `findingsList` array; drop the raw JSON string.
+// Shape structured review arrays for the client and drop their raw JSON columns.
 function shapeReview(row: ReturnType<typeof getReview>): Record<string, unknown> | null {
     if (!row) return null;
-    const { findings_json, ...rest } = row;
+    const { findings_json, semantic_findings_json, ...rest } = row;
     let findingsList: Finding[] = [];
+    let semanticFindingsList: SemanticFinding[] = [];
     if (findings_json) {
         try {
             const parsed = JSON.parse(findings_json);
@@ -506,9 +567,18 @@ function shapeReview(row: ReturnType<typeof getReview>): Record<string, unknown>
             /* ignore malformed json */
         }
     }
+    if (semantic_findings_json) {
+        try {
+            const parsed = JSON.parse(semantic_findings_json);
+            if (Array.isArray(parsed)) semanticFindingsList = parsed;
+        } catch {
+            /* ignore malformed json */
+        }
+    }
     return {
         ...rest,
         ...getReviewAutomationProvenance(row.run_id),
         findingsList,
+        semanticFindingsList,
     };
 }

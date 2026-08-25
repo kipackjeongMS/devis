@@ -1,16 +1,17 @@
-// "Humanize & post": clicking Post to ADO on a staged AI finding opens this modal.
-// It shows the original AI comment, generates a natural human-sounding rewrite via
-// POST /api/rephrase (headless — no chat session either way; when the review
-// recorded its reviewer session the rewrite is produced by that session), lets
-// the user edit or Regenerate, then posts the final edited text to ADO via onPost.
+// "Review & post": clicking Post to ADO on a staged review finding opens this
+// confirmation modal with the generated human-like comment ready to edit. Rephrase
+// is optional and uses the recorded reviewer session when one is available.
 // Reuses the .ask-* dialog styles so it stacks above the PR-detail slide-over.
 import { el } from "./dom.js";
 import { esc } from "./util.js";
 import { postJSON } from "./api.js";
 
 interface RephraseOptions {
-  title?: string; // AI finding title (optional)
-  comment: string; // original AI comment
+  title?: string;
+  comment: string;
+  findingId?: string;
+  semanticFindingId?: string;
+  initialText?: string;
   loc: string; // header location text (e.g. "file:42 · right")
   model?: string; // preferred model (state.config.reviewModel)
   /**
@@ -21,6 +22,7 @@ interface RephraseOptions {
   org?: string;
   project?: string;
   repoId?: string;
+  onHumanized?: (text: string) => void;
   onPost: (text: string) => Promise<void>; // performs the real ADO post + card swap
 }
 
@@ -30,17 +32,17 @@ export function openRephraseModal(opts: RephraseOptions): void {
   const original = (opts.title ? opts.title + "\n\n" : "") + opts.comment;
   dialog.innerHTML =
     `<div class="ask-head">` +
-    `<span class="ask-title">Humanize &amp; post</span>` +
+    `<span class="ask-title">Review &amp; post</span>` +
     `<span class="ask-loc">${esc(opts.loc)}</span>` +
     `<button class="ask-close" title="Close (Esc)" aria-label="Close">✕</button>` +
     `</div>` +
-    `<div class="rp-label">Original AI comment</div>` +
+    `<div class="rp-label">Copilot review</div>` +
     `<pre class="ask-snippet prose"><code>${esc(original)}</code></pre>` +
-    `<div class="rp-label">Rephrased — natural, human (editable)</div>` +
-    `<textarea class="ask-q rp-text" rows="5" placeholder="Generating a human-sounding version…"></textarea>` +
+    `<div class="rp-label">Comment to post (editable)</div>` +
+    `<textarea class="ask-q rp-text" rows="5" placeholder="Edit the comment before posting…"></textarea>` +
     `<div class="ask-answer loading-ans rp-status" hidden></div>` +
     `<div class="ask-actions">` +
-    `<button class="btn ghost sm rp-regen" disabled>Regenerate</button>` +
+    `<button class="btn ghost sm rp-regen">Rephrase</button>` +
     `<button class="btn ghost sm rp-cancel">Cancel</button>` +
     `<button class="btn sm rp-post" disabled>Post to ADO</button>` +
     `</div>`;
@@ -55,6 +57,7 @@ export function openRephraseModal(opts: RephraseOptions): void {
   const closeBtn = dialog.querySelector(".ask-close") as HTMLButtonElement;
 
   let closed = false;
+  let generating = false;
   function close(): void {
     closed = true;
     document.removeEventListener("keydown", onKey);
@@ -71,9 +74,10 @@ export function openRephraseModal(opts: RephraseOptions): void {
   closeBtn.addEventListener("click", close);
 
   function setGenerating(on: boolean): void {
+    generating = on;
     ta.disabled = on;
     regenBtn.disabled = on;
-    postBtn.disabled = on;
+    postBtn.disabled = on || !ta.value.trim();
     if (on) {
       status.hidden = false;
       status.className = "ask-answer loading-ans rp-status";
@@ -84,20 +88,23 @@ export function openRephraseModal(opts: RephraseOptions): void {
   }
 
   function showError(msg: string, allowManualPost: boolean): void {
+    generating = false;
     status.hidden = false;
     status.className = "ask-answer err-ans rp-status";
     status.textContent = msg;
     ta.disabled = false;
     regenBtn.disabled = false;
-    postBtn.disabled = !allowManualPost;
+    postBtn.disabled = !allowManualPost || !ta.value.trim();
   }
 
   async function generate(): Promise<void> {
     setGenerating(true);
     try {
       const res = await postJSON("/api/rephrase", {
-        comment: opts.comment,
+        comment: ta.value.trim() || opts.comment,
         title: opts.title || "",
+        findingId: opts.findingId || "",
+        semanticFindingId: opts.semanticFindingId || "",
         model: opts.model || "",
         prId: opts.prId ?? "",
         org: opts.org || "",
@@ -106,6 +113,7 @@ export function openRephraseModal(opts: RephraseOptions): void {
       });
       if (closed) return;
       ta.value = (res && res.text) || "";
+      if (opts.onHumanized) opts.onHumanized(ta.value);
       setGenerating(false);
       ta.focus();
       ta.setSelectionRange(ta.value.length, ta.value.length);
@@ -117,6 +125,9 @@ export function openRephraseModal(opts: RephraseOptions): void {
   }
 
   regenBtn.addEventListener("click", () => void generate());
+  ta.addEventListener("input", () => {
+    if (!generating) postBtn.disabled = !ta.value.trim();
+  });
 
   postBtn.addEventListener("click", async () => {
     const text = ta.value.trim();
@@ -139,5 +150,8 @@ export function openRephraseModal(opts: RephraseOptions): void {
   });
 
   dialog.focus();
-  void generate();
+  ta.value = opts.initialText?.trim() ? opts.initialText : opts.comment;
+  setGenerating(false);
+  ta.focus();
+  ta.setSelectionRange(ta.value.length, ta.value.length);
 }

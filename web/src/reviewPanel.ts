@@ -7,8 +7,81 @@ import { esc, timeAgo } from "./util.js";
 import { state, scheduleReviewPoll } from "./state.js";
 import { renderMarkdown } from "./markdown.js";
 import { renderMermaid } from "./mermaid.js";
-import type { PR, Review } from "./types.js";
+import { openRephraseModal } from "./rephraseModal.js";
+import type { PR, Review, SemanticFinding } from "./types.js";
 import { reviewStateKey } from "./reviewKey.js";
+
+const SEMANTIC_SEVERITY_RANK: Record<string, number> = {
+  critical: 0,
+  high: 1,
+  medium: 2,
+  low: 3,
+};
+
+function semanticCategoryLabel(category: string): string {
+  return category.replace(/^\w/, (value) => value.toUpperCase());
+}
+
+function semanticFindingCard(pr: PR, finding: SemanticFinding): HTMLElement {
+  const severity = finding.severity.toLowerCase();
+  const card = el(
+    `<article class="semantic-finding sev-${esc(severity)}">
+       <div class="semantic-finding-head">
+         <span class="semantic-category">${esc(semanticCategoryLabel(finding.category))}</span>
+         <span class="semantic-severity">${esc(finding.severity)}</span>
+         <strong>${esc(finding.title)}</strong>
+       </div>
+       <div class="semantic-comment md"></div>
+       <div class="semantic-files"></div>
+       <div class="semantic-actions">
+         <button class="btn sm semantic-post">${finding.posted ? "Posted" : "Post to ADO"}</button>
+       </div>
+     </article>`
+  );
+  const comment = card.querySelector(".semantic-comment") as HTMLElement;
+  comment.innerHTML = renderMarkdown(finding.comment);
+  const files = card.querySelector(".semantic-files") as HTMLElement;
+  for (const file of finding.files || []) {
+    files.appendChild(el(`<code>${esc(file)}</code>`));
+  }
+
+  const postButton = card.querySelector(".semantic-post") as HTMLButtonElement;
+  postButton.disabled = !!finding.posted;
+  if (finding.posted) card.classList.add("posted");
+  postButton.addEventListener("click", () => {
+    if (postButton.disabled) return;
+    openRephraseModal({
+      title: finding.title,
+      comment: finding.comment,
+      semanticFindingId: finding.id,
+      initialText: finding.humanizedComment ?? finding.comment,
+      loc: `${semanticCategoryLabel(finding.category)} · PR-level`,
+      model: state.config.reviewModel,
+      prId: pr.id,
+      org: pr.org,
+      project: pr.project,
+      repoId: pr.repoId,
+      onHumanized: (text) => {
+        finding.humanizedComment = text;
+      },
+      onPost: async (text) => {
+        await postJSON("/api/review/post-semantic-finding", {
+          org: pr.org,
+          project: pr.project,
+          repoId: pr.repoId,
+          prId: pr.id,
+          semanticFindingId: finding.id,
+          content: text,
+        });
+        finding.posted = true;
+        card.classList.add("posted");
+        postButton.disabled = true;
+        postButton.textContent = "Posted";
+      },
+    });
+  });
+  return card;
+}
 
 function provenanceChip(review: Review): string {
   if (
@@ -100,7 +173,7 @@ export async function refreshReviewPanel(
       (review.updated_at ? '<span class="rev-when">' + esc(timeAgo(review.updated_at)) + "</span>" : "") +
       "</div>"
   );
-  // The session that produced this review — Elaborate and Humanize are resumed
+  // The session that produced this review — Elaborate and Rephrase are resumed
   // inside it, and it can be reopened later with `copilot --resume <id>`.
   if (review.reviewer_session_id) {
     const id = review.reviewer_session_id;
@@ -176,6 +249,19 @@ export async function refreshReviewPanel(
     s.innerHTML = renderMarkdown(review.story);
     body.appendChild(s);
   }
+  const semanticFindings = [...(review.semanticFindingsList || [])].sort(
+    (a, b) =>
+      (SEMANTIC_SEVERITY_RANK[a.severity] ?? 4) -
+      (SEMANTIC_SEVERITY_RANK[b.severity] ?? 4)
+  );
+  if (semanticFindings.length) {
+    body.appendChild(el('<div class="rev-sub">High-level semantic findings</div>'));
+    const findings = el('<div class="semantic-findings"></div>');
+    for (const finding of semanticFindings) {
+      findings.appendChild(semanticFindingCard(pr, finding));
+    }
+    body.appendChild(findings);
+  }
   // Findings are componentized: each renders as a STAGED inline comment in the
   // diff below (with a per-comment Post button), not listed here.
   const staged = (review.findingsList || []).filter((f) => f && !f.posted);
@@ -193,5 +279,5 @@ export async function refreshReviewPanel(
   }
   panel.appendChild(header);
   panel.appendChild(body);
-  renderMermaid(body);
+  renderMermaid(body, true);
 }

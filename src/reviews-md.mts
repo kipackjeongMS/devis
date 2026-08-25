@@ -10,7 +10,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { readConfig } from "./config.mjs";
-import type { ReviewRow, Finding } from "./store.mjs";
+import type { ReviewRow, Finding, SemanticFinding } from "./store.mjs";
 
 // Characters Windows forbids in file/dir names, plus control chars.
 const ILLEGAL = /[<>:"/\\|?*\x00-\x1f]/g;
@@ -29,6 +29,7 @@ function sanitizeSegment(input: string | null | undefined, fallback: string): st
 }
 
 const SEV_ICON: Record<string, string> = {
+    critical: "🔴",
     high: "🔴",
     medium: "🟠",
     low: "🟡",
@@ -37,7 +38,13 @@ const SEV_ICON: Record<string, string> = {
 
 // Severity ordering for the findings list (high first). Anything unknown sinks
 // to the bottom.
-const SEV_RANK: Record<string, number> = { high: 0, medium: 1, low: 2, nit: 3 };
+const SEV_RANK: Record<string, number> = {
+    critical: 0,
+    high: 1,
+    medium: 2,
+    low: 3,
+    nit: 4,
+};
 
 function sevRank(sev: string | null | undefined): number {
     const r = SEV_RANK[(sev || "").toLowerCase()];
@@ -66,6 +73,26 @@ function parseFindings(row: ReviewRow): Finding[] {
     } catch {
         return [];
     }
+}
+
+function parseSemanticFindings(row: ReviewRow): SemanticFinding[] {
+    if (!row.semantic_findings_json) return [];
+    try {
+        const parsed = JSON.parse(row.semantic_findings_json);
+        return Array.isArray(parsed) ? (parsed as SemanticFinding[]) : [];
+    } catch {
+        return [];
+    }
+}
+
+function renderSemanticFinding(finding: SemanticFinding): string {
+    const severity = finding.severity.toLowerCase();
+    const icon = SEV_ICON[severity] || "•";
+    const category = finding.category.replace(/^\w/, (value) => value.toUpperCase());
+    const files = finding.files?.length
+        ? `\n\n**Evidence:** ${finding.files.map((file) => `\`${file}\``).join(", ")}`
+        : "";
+    return `### ${icon} ${finding.severity} · ${category} · ${finding.title}\n\n${finding.comment.trim()}${files}\n`;
 }
 
 /** Build the ADO pull-request URL when we have enough context, else null. */
@@ -110,6 +137,14 @@ export function renderMarkdown(row: ReviewRow): string {
         parts.push(row.story.trim());
     }
 
+    const semanticFindings = parseSemanticFindings(row).sort(
+        (a, b) => sevRank(a.severity) - sevRank(b.severity),
+    );
+    if (semanticFindings.length) {
+        parts.push("## Semantic findings");
+        parts.push(semanticFindings.map(renderSemanticFinding).join("\n"));
+    }
+
     const findings = parseFindings(row).sort((a, b) => sevRank(a.severity) - sevRank(b.severity));
     if (findings.length) {
         parts.push("## Findings");
@@ -124,7 +159,13 @@ export function renderMarkdown(row: ReviewRow): string {
 
 /** True when a row carries enough to be worth mirroring (avoid empty files). */
 function hasContent(row: ReviewRow): boolean {
-    return !!(row.summary || row.story || row.findings || row.findings_json);
+    return !!(
+        row.summary ||
+        row.story ||
+        row.findings ||
+        row.findings_json ||
+        row.semantic_findings_json
+    );
 }
 
 /** Outcome of an on-demand save, so the UI can give precise feedback. */

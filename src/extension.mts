@@ -131,7 +131,14 @@ const session = await joinSession({
                                 items: {
                                     type: "object",
                                     additionalProperties: false,
-                                    required: ["file", "line", "side", "severity", "comment"],
+                                    required: [
+                                        "file",
+                                        "line",
+                                        "side",
+                                        "severity",
+                                        "comment",
+                                        "technicalExplanation",
+                                    ],
                                     properties: {
                                         file: { type: "string", minLength: 1 },
                                         line: { type: "integer", minimum: 1 },
@@ -143,6 +150,39 @@ const session = await joinSession({
                                         },
                                         title: { type: ["string", "null"] },
                                         comment: { type: "string", minLength: 1 },
+                                        technicalExplanation: { type: "string", minLength: 1 },
+                                    },
+                                },
+                            },
+                            semanticFindings: {
+                                type: "array",
+                                items: {
+                                    type: "object",
+                                    additionalProperties: false,
+                                    required: ["category", "severity", "title", "comment"],
+                                    properties: {
+                                        category: {
+                                            type: "string",
+                                            enum: [
+                                                "intent",
+                                                "architecture",
+                                                "behavior",
+                                                "contract",
+                                                "compatibility",
+                                                "operability",
+                                                "testing",
+                                            ],
+                                        },
+                                        severity: {
+                                            type: "string",
+                                            enum: ["critical", "high", "medium", "low"],
+                                        },
+                                        title: { type: "string", minLength: 1 },
+                                        comment: { type: "string", minLength: 1 },
+                                        files: {
+                                            type: "array",
+                                            items: { type: "string", minLength: 1 },
+                                        },
                                     },
                                 },
                             },

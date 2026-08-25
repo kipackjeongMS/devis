@@ -117,7 +117,8 @@ function buildReviewerElaboratePrompt(
   ].join("\n");
 }
 
-// The finding's location + text, shared by both Elaborate prompts.
+// The finding's location, human review, and deeper technical context shared by
+// both Elaborate prompts. Older stored findings fall back to the review comment.
 function elaborateContext(file: FileChange, finding: Finding): string[] {
   const loc =
     finding.line != null
@@ -126,11 +127,14 @@ function elaborateContext(file: FileChange, finding: Finding): string[] {
         : `${finding.line}`
       : "n/a";
   const side = finding.side || "right";
+  const technicalExplanation = finding.technicalExplanation || finding.comment;
   return [
     `File: ${file.path}`,
     `Location: lines ${loc} (${side} side)`,
     ``,
-    ...(finding.title ? [`Title: ${finding.title}`, finding.comment] : [finding.comment]),
+    ...(finding.title ? [`Title: ${finding.title}`] : []),
+    `Review comment: ${finding.comment}`,
+    `Technical explanation: ${technicalExplanation}`,
   ];
 }
 
@@ -342,7 +346,8 @@ export function openElaborateModal(pr: PR, file: FileChange, finding: Finding): 
       ? `${finding.line}${finding.endLine && finding.endLine > finding.line ? "–" + finding.endLine : ""}`
       : base;
   const side = finding.side || "right";
-  const context = (finding.title ? finding.title + "\n\n" : "") + finding.comment;
+  const technicalExplanation = finding.technicalExplanation || finding.comment;
+  const context = (finding.title ? finding.title + "\n\n" : "") + technicalExplanation;
   openAsk({
     title: "Elaborate",
     loc: `${base}:${loc} · ${side}`,

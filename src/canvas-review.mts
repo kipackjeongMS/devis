@@ -1,4 +1,9 @@
-import { ensureDb, publishReviewJobRun, type Finding } from "./store.mjs";
+import {
+    ensureDb,
+    publishReviewJobRun,
+    type Finding,
+    type SemanticFinding,
+} from "./store.mjs";
 import type { PrCanvasTarget } from "./canvas-target.mjs";
 
 type JsonRecord = Record<string, unknown>;
@@ -50,6 +55,10 @@ function parseFinding(value: unknown, index: number): Finding {
     if (endLine != null && endLine < line) {
         throw new Error(`findings[${index}].endLine must be greater than or equal to line`);
     }
+    const technicalExplanation = record.technicalExplanation;
+    if (typeof technicalExplanation !== "string" || !technicalExplanation.trim()) {
+        throw new Error(`findings[${index}].technicalExplanation is required`);
+    }
     return {
         file: requiredString(record, "file"),
         line,
@@ -58,6 +67,46 @@ function parseFinding(value: unknown, index: number): Finding {
         severity,
         title: optionalString(record, "title") ?? null,
         comment: requiredString(record, "comment"),
+        technicalExplanation: technicalExplanation.trim(),
+    };
+}
+
+function parseSemanticFinding(value: unknown, index: number): SemanticFinding {
+    const record = asRecord(value, `semanticFindings[${index}]`);
+    const category = requiredString(record, "category");
+    if (
+        ![
+            "intent",
+            "architecture",
+            "behavior",
+            "contract",
+            "compatibility",
+            "operability",
+            "testing",
+        ].includes(category)
+    ) {
+        throw new Error(`semanticFindings[${index}].category is invalid`);
+    }
+    const severity = requiredString(record, "severity");
+    if (!["critical", "high", "medium", "low"].includes(severity)) {
+        throw new Error(`semanticFindings[${index}].severity is invalid`);
+    }
+    const rawFiles = record.files;
+    if (rawFiles != null && !Array.isArray(rawFiles)) {
+        throw new Error(`semanticFindings[${index}].files must be an array`);
+    }
+    const files = (rawFiles || []).map((file, fileIndex) => {
+        if (typeof file !== "string" || !file.trim()) {
+            throw new Error(`semanticFindings[${index}].files[${fileIndex}] must be a string`);
+        }
+        return file.trim();
+    });
+    return {
+        category,
+        severity,
+        title: requiredString(record, "title"),
+        comment: requiredString(record, "comment"),
+        files: [...new Set(files)],
     };
 }
 
@@ -99,6 +148,7 @@ export async function publishCanvasReview(
     }
 
     let findings: Finding[] | undefined;
+    let semanticFindings: SemanticFinding[] | undefined;
     let summary: string | undefined;
     let story: string | undefined;
     let error: string | undefined;
@@ -107,6 +157,10 @@ export async function publishCanvasReview(
         story = requiredString(record, "story");
         if (!Array.isArray(record.findings)) throw new Error("findings must be an array");
         findings = record.findings.map(parseFinding);
+        if (!Array.isArray(record.semanticFindings)) {
+            throw new Error("semanticFindings must be an array");
+        }
+        semanticFindings = record.semanticFindings.map(parseSemanticFinding);
     } else {
         error = requiredString(record, "error");
     }
@@ -124,6 +178,7 @@ export async function publishCanvasReview(
         summary,
         story,
         findings,
+        semanticFindings,
         error,
         // Taken from the publishing extension process, not from `input`: the
         // reviewing agent cannot forge or omit it.

@@ -18,11 +18,13 @@ import { requestNotifyPermission } from "./notifyWatch.js";
 import { toast } from "./toast.js";
 import type { PR, Detail, Thread } from "./types.js";
 import { statusBadge, voteBadge, myActionBadge } from "./prStatus.js";
+import { mountPrComments, unmountPrComments } from "./prComments.js";
 
 // Closing the detail modal: stop the review poll and drop the current selection.
 function onDetailClose(): void {
   stopReviewPoll();
   unmountSeverityLights();
+  unmountPrComments();
   state.current = undefined;
 }
 
@@ -126,11 +128,14 @@ function buildDetail(container: HTMLElement, pr: PR, detail: Detail): void {
   rightGroup.appendChild(closeBtn);
   back.appendChild(backBtn);
   back.appendChild(rightGroup);
-  head.appendChild(back);
+  container.appendChild(back);
 
   head.appendChild(el(`<div class="detail-title">${esc(pr.title)}</div>`));
   const sub = el(`<div class="detail-sub"></div>`);
-  sub.appendChild(el(`<span class="id">#${pr.id}</span>`));
+  const identity = el(`<span class="detail-id-group"></span>`);
+  identity.appendChild(mountSeverityLights(pr));
+  identity.appendChild(el(`<span class="id">#${pr.id}</span>`));
+  sub.appendChild(identity);
   // Lifecycle status comes from the freshly-loaded detail (authoritative), falling
   // back to the list payload's isDraft for the brief moment before detail arrives.
   const st = statusBadge({ status: detail.status, isDraft: detail.isDraft ?? pr.isDraft });
@@ -139,19 +144,25 @@ function buildDetail(container: HTMLElement, pr: PR, detail: Detail): void {
   }
   sub.appendChild(el(`<span>${esc(pr.repo)} · ${esc(pr.project)}</span>`));
   sub.appendChild(el(`<span><code>${esc(pr.sourceRef)}</code> → <code>${esc(pr.targetRef)}</code></span>`));
-  const link = el(`<button class="link-btn">Open in ADO ↗</button>`);
-  link.addEventListener("click", () => window.open(pr.url, "_blank"));
-  sub.appendChild(link);
+  const actions = el(`<span class="detail-sub-actions"></span>`);
+  const adoLink = el<HTMLButtonElement>(
+    `<button type="button" class="detail-icon-btn ado-icon-btn"
+             title="Open in Azure DevOps" aria-label="Open this pull request in Azure DevOps">
+       <svg viewBox="0 0 24 24" aria-hidden="true">
+         <path d="M2.5 6.3 6 2.8l11.2 4V4l4.3 4.2v10.4l-10.7 2.6v-3.1l-4.8-1.4v2.1l-3.5-3.4zm3.5 8 4.8 1.1V9.1L6 10.6zm6.8 1.6 4.4-1.1V9.2l-4.4 1.4z"></path>
+       </svg>
+     </button>`
+  );
+  adoLink.addEventListener("click", () => window.open(pr.url, "_blank", "noopener"));
+  actions.appendChild(adoLink);
+  actions.appendChild(mountPrComments(detail.threads));
+  sub.appendChild(actions);
   head.appendChild(sub);
   container.appendChild(head);
 
   // Reviewer strip: my own action first, then each named reviewer with their vote.
   const strip = buildReviewerStrip(detail);
   if (strip) container.appendChild(strip);
-
-  // Sticky severity lights, pinned directly below the header (hidden until the
-  // background review lands findings).
-  container.appendChild(mountSeverityLights(pr));
 
   // Background-review result panel (populated async; polls while running).
   const revPanel = el(`<div class="rev-panel" hidden></div>`);

@@ -159,10 +159,11 @@ function toggleDrawer(
   );
   const list = node.querySelector(".sl-list") as HTMLElement;
   for (const f of items) list.appendChild(buildRow(f));
-  bar.appendChild(node);
+  const host = bar.closest<HTMLElement>(".detail-head") || bar;
+  host.appendChild(node);
   pop = node;
 
-  positionUnder(bar, light, node);
+  positionUnder(host, light, node);
 
   // Next frame so the transition runs from the hidden state.
   requestAnimationFrame(() => {
@@ -187,12 +188,14 @@ function toggleDrawer(
   document.addEventListener("keydown", onKey, true);
 }
 
-/** Hang the drawer off its own light, clamped so it can't overflow the bar. */
-function positionUnder(bar: HTMLElement, light: HTMLElement, node: HTMLElement): void {
-  const center = light.offsetLeft + light.offsetWidth / 2;
+/** Hang the drawer off its own light, clamped to the full sticky heading. */
+function positionUnder(host: HTMLElement, light: HTMLElement, node: HTMLElement): void {
+  const hostRect = host.getBoundingClientRect();
+  const lightRect = light.getBoundingClientRect();
+  const center = lightRect.left - hostRect.left + lightRect.width / 2;
   const width = node.offsetWidth;
   const edge = 8;
-  const left = Math.max(edge, Math.min(center - width / 2, bar.clientWidth - width - edge));
+  const left = Math.max(edge, Math.min(center - width / 2, host.clientWidth - width - edge));
   node.style.left = left + "px";
   (node.querySelector(".sl-caret") as HTMLElement).style.left = center - left + "px";
 }

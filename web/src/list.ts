@@ -1,7 +1,7 @@
 // The PR list: a review badge per PR plus the repo-grouped, collapsible card list.
 // A card click opens the PR detail in a slide-over modal (see detail.ts); the list
 // stays mounted underneath, so it needs no re-render when the modal closes.
-import { el, view } from "./dom.js";
+import { bulkReviewHost, el, view } from "./dom.js";
 import { esc, timeAgo } from "./util.js";
 import { state, stopReviewPoll } from "./state.js";
 import { openDetail } from "./detail.js";
@@ -175,7 +175,7 @@ function renderRepoGroups(prs: PR[], container: HTMLElement, collapsed: boolean,
 // --- Bulk review selection ---------------------------------------------------
 
 function syncBulkBar(): void {
-  const actions = view.querySelector<HTMLElement>(".bulk-review-bar");
+  const actions = bulkReviewHost.querySelector<HTMLElement>(".bulk-review-bar");
   if (!actions) return;
   const n = reviewSel.size;
   const selectable = view.querySelectorAll<HTMLInputElement>(".pr-sel:not(:disabled)");
@@ -346,6 +346,7 @@ export function renderList(stopPolling = true): void {
   }
 
   if (!plate.length && !rest.length) {
+    bulkReviewHost.replaceChildren();
     const msg =
       state.assignment === "mine"
         ? "No pull requests assigned to you."
@@ -360,7 +361,7 @@ export function renderList(stopPolling = true): void {
   }
 
   view.innerHTML = "";
-  view.appendChild(renderBulkReviewBar(visible));
+  bulkReviewHost.replaceChildren(renderBulkReviewBar(visible));
 
   if (plate.length) {
     const sec = el(`<section class="plate-group"></section>`);

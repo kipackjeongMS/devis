@@ -6,6 +6,7 @@ import { state } from "./state.js";
 import { openDetail } from "./detail.js";
 import { esc, timeAgo } from "./util.js";
 import { requestNotifyPermission } from "./notifyWatch.js";
+import { matchNotificationPr } from "./inboxRoute.js";
 import type { Notification } from "./types.js";
 
 let items: Notification[] = [];
@@ -43,6 +44,16 @@ export function applyInbox(next: { items: Notification[]; unread: number }): voi
   unread = Number(next.unread || 0);
   renderBadge();
   if (open) renderList();
+}
+
+/** Durable (not per-poll-flash) indicator that the background poll is
+ *  currently failing — cleared automatically the next time a poll succeeds.
+ *  Restrained on purpose: inboxWatch decides how often to also toast this, the
+ *  bell just reflects the current state persistently until it clears. */
+export function setInboxError(failing: boolean): void {
+  if (!bell) return;
+  bell.classList.toggle("has-error", failing);
+  bell.title = failing ? "Notifications couldn't refresh — check your connection." : "Notifications";
 }
 
 function renderBadge(): void {
@@ -164,7 +175,7 @@ async function onRow(id: string): Promise<void> {
 }
 
 function route(n: Notification): void {
-  const pr = state.prs.find((p) => String(p.id) === String(n.pr_id));
+  const pr = matchNotificationPr(state.prs, n);
   if (pr) {
     void openDetail(pr);
     return;

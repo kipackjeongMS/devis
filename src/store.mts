@@ -31,6 +31,20 @@ export interface Finding {
     severity?: string | null; // "critical" | "high" | "medium" | "low" | "nit"
     title?: string | null;
     comment: string;
+    technicalExplanation?: string | null;
+    humanizedComment?: string | null;
+    posted?: boolean;
+}
+
+/** A PR-level concern that spans behavior or design rather than one diff line. */
+export interface SemanticFinding {
+    id?: string;
+    category: string;
+    severity: string;
+    title: string;
+    comment: string;
+    files?: string[];
+    humanizedComment?: string | null;
     posted?: boolean;
 }
 
@@ -48,6 +62,7 @@ export interface ReviewRow {
     story: string | null;
     findings: string | null;
     findings_json: string | null;
+    semantic_findings_json: string | null;
     error: string | null;
     run_id: string | null;
     /** Copilot session that produced this review; follow-up subtasks resume into it. */
@@ -188,6 +203,7 @@ export interface ReviewInput {
     // (or a single Finding object — PowerShell's ConvertTo-Json can collapse a
     // one-element array into a bare object).
     findings?: string | Finding | Finding[] | null;
+    semanticFindings?: SemanticFinding | SemanticFinding[] | null;
     error?: string | null;
     runId?: string | null;
     /**
@@ -240,6 +256,7 @@ async function initializeDb(): Promise<DatabaseSync> {
                 story              TEXT,
                 findings           TEXT,
                 findings_json      TEXT,
+                semantic_findings_json TEXT,
                 error              TEXT,
                 run_id             TEXT,
                 reviewer_session_id TEXT,
@@ -279,6 +296,7 @@ async function initializeDb(): Promise<DatabaseSync> {
                     story              TEXT,
                     findings           TEXT,
                     findings_json      TEXT,
+                    semantic_findings_json TEXT,
                     error              TEXT,
                     run_id             TEXT,
                     reviewer_session_id TEXT,
@@ -288,15 +306,18 @@ async function initializeDb(): Promise<DatabaseSync> {
                 );
                 INSERT INTO reviews
                     (review_key, pr_id, org, project, repo, repo_id, title, status,
-                     summary, story, findings, findings_json, error, run_id,
+                     summary, story, findings, findings_json, semantic_findings_json, error, run_id,
                      reviewer_session_id, dismissed, created_at, updated_at)
                 SELECT 'legacy:' || pr_id, pr_id, org, project, repo, NULL, title, status,
-                       summary, story, findings, findings_json, error, run_id,
+                       summary, story, findings, findings_json, NULL, error, run_id,
                        reviewer_session_id, dismissed, created_at, updated_at
                 FROM reviews_legacy;
                 DROP TABLE reviews_legacy;
             `);
             reviewCols = connection.prepare("PRAGMA table_info(reviews)").all() as Array<{ name: string }>;
+        }
+        if (!reviewCols.some((c) => c.name === "semantic_findings_json")) {
+            connection.exec("ALTER TABLE reviews ADD COLUMN semantic_findings_json TEXT");
         }
         connection.exec(`
             CREATE INDEX IF NOT EXISTS idx_reviews_identity
@@ -366,6 +387,33 @@ async function initializeDb(): Promise<DatabaseSync> {
                 key   TEXT PRIMARY KEY,
                 value TEXT
             );
+            -- Durable watch list: every PR/thread the inbox must keep polling for
+            -- new peer activity. 'authored' rows cover a whole PR the user created
+            -- (thread_id NULL); 'participated' rows cover one specific thread the
+            -- user commented in on a PR authored by someone else. Both kinds are
+            -- polled regardless of PR status, so replies on a since-completed PR
+            -- are still caught.
+            CREATE TABLE IF NOT EXISTS inbox_watches (
+                watch_key            TEXT PRIMARY KEY,
+                kind                 TEXT NOT NULL CHECK (kind IN ('authored','participated')),
+                org                  TEXT NOT NULL,
+                project              TEXT,
+                repo                 TEXT,
+                repo_id              TEXT,
+                pr_id                TEXT NOT NULL,
+                thread_id            TEXT,
+                title                TEXT,
+                url                  TEXT,
+                pr_status            TEXT,
+                last_user_comment_id TEXT,
+                last_user_comment_at TEXT,
+                created_at           TEXT NOT NULL,
+                updated_at           TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_inbox_watches_pr
+            ON inbox_watches(org, project, repo_id, pr_id);
+            CREATE INDEX IF NOT EXISTS idx_inbox_watches_kind
+            ON inbox_watches(kind, org);
         `);
         connection.exec(`
             CREATE TABLE IF NOT EXISTS review_jobs (
@@ -1120,7 +1168,36 @@ function normalizeFindings(list: Finding[]): Finding[] {
             severity: f.severity ?? null,
             title: f.title ?? null,
             comment: f.comment,
+            technicalExplanation: f.technicalExplanation ?? null,
+            humanizedComment: f.humanizedComment ?? null,
             posted: !!f.posted,
+        }));
+}
+
+function normalizeSemanticFindings(list: SemanticFinding[]): SemanticFinding[] {
+    return list
+        .filter(
+            (finding) =>
+                finding &&
+                typeof finding.title === "string" &&
+                finding.title.trim() !== "" &&
+                typeof finding.comment === "string" &&
+                finding.comment.trim() !== "",
+        )
+        .map((finding, index) => ({
+            id:
+                finding.id != null && String(finding.id).trim() !== ""
+                    ? String(finding.id)
+                    : "s" + index,
+            category: finding.category,
+            severity: finding.severity,
+            title: finding.title,
+            comment: finding.comment,
+            files: Array.isArray(finding.files)
+                ? [...new Set(finding.files.filter((file) => typeof file === "string" && file.trim()))]
+                : [],
+            humanizedComment: finding.humanizedComment ?? null,
+            posted: !!finding.posted,
         }));
 }
 
@@ -1151,6 +1228,13 @@ export function upsertReview(r: ReviewInput): ReviewRow {
     } else if (typeof r.findings === "string" && r.findings.trim() !== "") {
         findings = r.findings;
     }
+    let semanticFindingsJson =
+        ex.semantic_findings_json != null ? ex.semantic_findings_json : null;
+    if (Array.isArray(r.semanticFindings)) {
+        semanticFindingsJson = JSON.stringify(normalizeSemanticFindings(r.semanticFindings));
+    } else if (r.semanticFindings && typeof r.semanticFindings === "object") {
+        semanticFindingsJson = JSON.stringify(normalizeSemanticFindings([r.semanticFindings]));
+    }
 
     const row: ReviewRow = {
         review_key: reviewKey,
@@ -1165,6 +1249,7 @@ export function upsertReview(r: ReviewInput): ReviewRow {
         story: pick("story"),
         findings,
         findings_json: findingsJson,
+        semantic_findings_json: semanticFindingsJson,
         error: r.status === "queued" || r.status === "running" ? null : pick("error"),
         run_id: r.runId != null ? r.runId : ex.run_id != null ? ex.run_id : null,
         // A new launch invalidates the previous reviewer session: follow-ups must
@@ -1185,15 +1270,16 @@ export function upsertReview(r: ReviewInput): ReviewRow {
         .prepare(
             `INSERT OR REPLACE INTO reviews
              (review_key, pr_id, org, project, repo, repo_id, title, status, summary,
-              story, findings, findings_json, error, run_id, reviewer_session_id,
-              dismissed, created_at, updated_at)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+             story, findings, findings_json, semantic_findings_json, error, run_id,
+             reviewer_session_id, dismissed, created_at, updated_at)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         )
         .run(
             row.review_key, row.pr_id, row.org, row.project, row.repo, row.repo_id,
             row.title, row.status,
-            row.summary, row.story, row.findings, row.findings_json, row.error, row.run_id,
-            row.reviewer_session_id, row.dismissed, row.created_at, row.updated_at,
+            row.summary, row.story, row.findings, row.findings_json, row.semantic_findings_json,
+            row.error, row.run_id, row.reviewer_session_id, row.dismissed, row.created_at,
+            row.updated_at,
         );
     if (r.status === "queued" || r.status === "running") setPlateDismissed([identity], false);
     return row;
@@ -1270,6 +1356,80 @@ export function markFindingPosted(identity: ReviewIdentity, findingId: string): 
             .run(JSON.stringify(list), new Date().toISOString(), row.review_key);
     }
     return list;
+}
+
+/** Store the latest generated rewrite on its scoped finding for reuse on reopen. */
+export function setFindingHumanizedComment(
+    identity: ReviewIdentity,
+    findingId: string,
+    humanizedComment: string,
+): Finding {
+    const row = getReview(identity);
+    if (!row?.findings_json) throw new Error("review findings not found");
+
+    let list: Finding[];
+    try {
+        const parsed = JSON.parse(row.findings_json);
+        if (!Array.isArray(parsed)) throw new Error("invalid review findings");
+        list = parsed as Finding[];
+    } catch (e) {
+        throw new Error(`invalid review findings: ${(e as Error).message}`);
+    }
+
+    const finding = list.find((item) => String(item.id) === String(findingId));
+    if (!finding) throw new Error("finding not found");
+    finding.humanizedComment = humanizedComment;
+    requireDb()
+        .prepare("UPDATE reviews SET findings_json = ?, updated_at = ? WHERE review_key = ?")
+        .run(JSON.stringify(list), new Date().toISOString(), row.review_key);
+    return finding;
+}
+
+function updateSemanticFinding(
+    identity: ReviewIdentity,
+    semanticFindingId: string,
+    update: (finding: SemanticFinding) => void,
+): SemanticFinding {
+    const row = getReview(identity);
+    if (!row?.semantic_findings_json) throw new Error("semantic review findings not found");
+
+    let list: SemanticFinding[];
+    try {
+        const parsed = JSON.parse(row.semantic_findings_json);
+        if (!Array.isArray(parsed)) throw new Error("invalid semantic review findings");
+        list = parsed as SemanticFinding[];
+    } catch (e) {
+        throw new Error(`invalid semantic review findings: ${(e as Error).message}`);
+    }
+
+    const finding = list.find((item) => String(item.id) === String(semanticFindingId));
+    if (!finding) throw new Error("semantic finding not found");
+    update(finding);
+    requireDb()
+        .prepare(
+            "UPDATE reviews SET semantic_findings_json = ?, updated_at = ? WHERE review_key = ?",
+        )
+        .run(JSON.stringify(list), new Date().toISOString(), row.review_key);
+    return finding;
+}
+
+export function markSemanticFindingPosted(
+    identity: ReviewIdentity,
+    semanticFindingId: string,
+): SemanticFinding {
+    return updateSemanticFinding(identity, semanticFindingId, (finding) => {
+        finding.posted = true;
+    });
+}
+
+export function setSemanticFindingHumanizedComment(
+    identity: ReviewIdentity,
+    semanticFindingId: string,
+    humanizedComment: string,
+): SemanticFinding {
+    return updateSemanticFinding(identity, semanticFindingId, (finding) => {
+        finding.humanizedComment = humanizedComment;
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -1374,6 +1534,137 @@ export function getMeta(key: string): string | null {
 
 export function setMeta(key: string, value: string): void {
     requireDb().prepare("INSERT OR REPLACE INTO inbox_meta (key, value) VALUES (?, ?)").run(key, value);
+}
+
+// ---------------------------------------------------------------------------
+// Durable inbox watches — the set of PRs/threads the poller must keep
+// checking for new peer activity, independent of whether ADO's "active PRs"
+// listing still returns them (a completed PR still needs its watched thread
+// polled for late replies).
+// ---------------------------------------------------------------------------
+
+export type InboxWatchKind = "authored" | "participated";
+
+export interface InboxWatchRow {
+    watch_key: string;
+    kind: InboxWatchKind;
+    org: string;
+    project: string | null;
+    repo: string | null;
+    repo_id: string | null;
+    pr_id: string;
+    thread_id: string | null;
+    title: string | null;
+    url: string | null;
+    pr_status: string | null;
+    last_user_comment_id: string | null;
+    last_user_comment_at: string | null;
+    created_at: string;
+    updated_at: string;
+}
+
+export interface InboxWatchInput {
+    kind: InboxWatchKind;
+    org: string;
+    project?: string | null;
+    repo?: string | null;
+    repoId?: string | null;
+    prId: string | number;
+    /** Required for kind === "participated"; ignored (stored as NULL) for "authored". */
+    threadId?: string | number | null;
+    title?: string | null;
+    url?: string | null;
+    prStatus?: string | null;
+    lastUserCommentId?: string | number | null;
+    lastUserCommentAt?: string | null;
+}
+
+/** Deterministic scoped key: same shape family as notification ids, so a watch
+ *  for one PR/thread never collides with the "same" PR number in another
+ *  org/project/repo. */
+export function inboxWatchKey(input: {
+    kind: InboxWatchKind;
+    org: string;
+    project?: string | null;
+    repoId?: string | null;
+    prId: string | number;
+    threadId?: string | number | null;
+}): string {
+    const threadPart = input.kind === "authored" ? "*" : String(input.threadId ?? "");
+    return [input.org, input.project ?? "", input.repoId ?? "", String(input.prId), threadPart].join("::");
+}
+
+/** Insert or refresh one durable watch. Participation evidence (last user
+ *  comment id/timestamp) only ever moves forward — a stale poll can never
+ *  regress it. Returns the up-to-date row plus whether this watch is new
+ *  (callers use that to decide whether to apply the bounded backfill window
+ *  instead of the normal incremental cutoff). */
+export function upsertInboxWatch(input: InboxWatchInput): { row: InboxWatchRow; created: boolean } {
+    if (input.kind === "participated" && (input.threadId == null || String(input.threadId).trim() === "")) {
+        throw new Error("a participated watch requires threadId");
+    }
+    const key = inboxWatchKey(input);
+    const now = new Date().toISOString();
+    const db = requireDb();
+    const existing = db.prepare("SELECT * FROM inbox_watches WHERE watch_key = ?").get(key) as unknown as
+        | InboxWatchRow
+        | undefined;
+    const created = !existing;
+
+    let lastCommentId = existing?.last_user_comment_id ?? null;
+    let lastCommentAt = existing?.last_user_comment_at ?? null;
+    if (input.lastUserCommentAt && (!lastCommentAt || input.lastUserCommentAt > lastCommentAt)) {
+        lastCommentAt = input.lastUserCommentAt;
+        lastCommentId = input.lastUserCommentId != null ? String(input.lastUserCommentId) : lastCommentId;
+    }
+
+    const title = input.title ?? existing?.title ?? null;
+    const url = input.url ?? existing?.url ?? null;
+    const repo = input.repo ?? existing?.repo ?? null;
+    const prStatus = input.prStatus ?? existing?.pr_status ?? null;
+
+    db.prepare(
+        `INSERT INTO inbox_watches
+            (watch_key, kind, org, project, repo, repo_id, pr_id, thread_id, title, url, pr_status,
+             last_user_comment_id, last_user_comment_at, created_at, updated_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+         ON CONFLICT(watch_key) DO UPDATE SET
+            title = excluded.title,
+            url = excluded.url,
+            repo = excluded.repo,
+            pr_status = excluded.pr_status,
+            last_user_comment_id = excluded.last_user_comment_id,
+            last_user_comment_at = excluded.last_user_comment_at,
+            updated_at = excluded.updated_at`,
+    ).run(
+        key,
+        input.kind,
+        input.org,
+        input.project ?? null,
+        repo,
+        input.repoId ?? null,
+        String(input.prId),
+        input.kind === "participated" ? String(input.threadId) : null,
+        title,
+        url,
+        prStatus,
+        lastCommentId,
+        lastCommentAt,
+        existing?.created_at ?? now,
+        now,
+    );
+    const row = db.prepare("SELECT * FROM inbox_watches WHERE watch_key = ?").get(key) as unknown as InboxWatchRow;
+    return { row, created };
+}
+
+/** All durable watches, optionally scoped to one org (the poller's unit of work). */
+export function listInboxWatches(org?: string): InboxWatchRow[] {
+    if (org) {
+        return requireDb()
+            .prepare("SELECT * FROM inbox_watches WHERE org = ? ORDER BY pr_id, thread_id")
+            .all(org) as unknown as InboxWatchRow[];
+    }
+    return requireDb().prepare("SELECT * FROM inbox_watches ORDER BY org, pr_id, thread_id").all() as unknown as InboxWatchRow[];
 }
 
 function normalizeSourceId(value: unknown): string {

@@ -15,6 +15,7 @@ export function el<T extends HTMLElement = HTMLElement>(html: string): T {
 /** The main content area plus the filter-bar controls (present in index.html). */
 export const view = $("#view") as HTMLElement;
 export const filterbar = $("#filterbar") as HTMLElement;
+export const bulkReviewHost = $("#bulkReviewHost") as HTMLElement;
 export const orgFilter = $("#orgFilter") as HTMLSelectElement;
 export const projectFilter = $("#projectFilter") as HTMLSelectElement;
 export const assignFilter = $("#assignFilter") as HTMLElement;

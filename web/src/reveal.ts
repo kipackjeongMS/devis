@@ -1,7 +1,7 @@
 // Jumping from a summary row to the real comment in the diff. Changed files are
 // collapsed with lazily-loaded diffs, so revealing a finding has to expand its
 // file and wait for the diff before the anchored card exists to scroll to.
-import type { Finding } from "./types.js";
+import type { Finding, Thread } from "./types.js";
 
 /** A `.file` box that can expand and lazy-load its diff on demand (see diff.ts). */
 export interface RevealableFile extends HTMLElement {
@@ -44,6 +44,27 @@ export async function revealFinding(finding: Finding): Promise<boolean> {
       : null);
 
   const target = anchored || box;
+  target.scrollIntoView({ block: "center", behavior: reducedMotion() ? "auto" : "smooth" });
+  flash(target);
+  return true;
+}
+
+/** Reveal a real ADO thread from the sticky comments drawer. */
+export async function revealThread(thread: Thread): Promise<boolean> {
+  let scope: ParentNode = document;
+  if (thread.filePath) {
+    const file = document.querySelector<RevealableFile>(
+      `.file[data-path="${CSS.escape(thread.filePath)}"]`
+    );
+    if (!file) return false;
+    if (file._ensureOpen) await file._ensureOpen();
+    if (!file.isConnected) return false;
+    scope = file;
+  }
+  const target = scope.querySelector<HTMLElement>(
+    `.thread[data-thread-id="${CSS.escape(String(thread.id))}"]`
+  );
+  if (!target) return false;
   target.scrollIntoView({ block: "center", behavior: reducedMotion() ? "auto" : "smooth" });
   flash(target);
   return true;

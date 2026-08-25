@@ -1,5 +1,5 @@
-// Humanize a staged AI review comment into a natural, plain-English note before
-// it is posted to ADO. Generation runs headlessly via `copilot -p` (print mode)
+// Optionally rephrase a staged review comment before it is posted to ADO.
+// Generation runs headlessly via `copilot -p` (print mode)
 // as a throwaway subprocess — it produces NO visible session in the app, and the
 // arbitrary comment text is passed as a single argv element (execFile, no shell)
 // so quotes/newlines/special chars can't break out. Mirrors the subprocess
