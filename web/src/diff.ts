@@ -9,6 +9,8 @@ import { renderThread, buildComposerRow, renderStagedFinding } from "./threads.j
 import { installSelectionToolbar } from "./selection.js";
 import { openAskModal } from "./ask.js";
 import { reviewStateKey } from "./reviewKey.js";
+import { canonicalReviewFilePath } from "./reviewPath.js";
+import { icon } from "./icons.js";
 import type { RevealableFile } from "./reveal.js";
 import type { PR, Detail, FileChange, Diff, DiffLine, Thread, Finding } from "./types.js";
 
@@ -16,7 +18,12 @@ import type { PR, Detail, FileChange, Diff, DiffLine, Thread, Finding } from "./
 function stagedForFile(pr: PR, filePath: string): Finding[] {
   const review = state.reviews ? state.reviews[reviewStateKey(pr)] : undefined;
   const list = (review && review.findingsList) || [];
-  return list.filter((f) => f && !f.posted && f.file === filePath);
+  return list.filter(
+    (f) =>
+      f &&
+      !f.posted &&
+      canonicalReviewFilePath(f.file) === canonicalReviewFilePath(filePath)
+  );
 }
 
 export function chgClass(t: string | undefined): [string, string] {
@@ -30,10 +37,15 @@ export function renderFile(pr: PR, detail: Detail, file: FileChange, threads: Th
   const [cls, label] = chgClass(file.changeType);
   const box = el<RevealableFile>(`<div class="file"></div>`);
   box.dataset.path = file.path; // lookup key for revealFinding()
+  const slash = file.path.lastIndexOf("/");
+  const name = file.path.slice(slash + 1);
+  const dir = slash > 0 ? file.path.slice(0, slash).replace(/^\/+/, "") : "";
   const head = el(
     `<button type="button" class="file-head" aria-expanded="false">
-       <span class="file-chev">▶</span>
-       <span class="file-path">${esc(file.path)}</span>
+       <span class="file-chev" aria-hidden="true">${icon("chevron")}</span>
+       <span class="file-path" title="${esc(file.path)}"><span class="file-name">${esc(name)}</span>${
+         dir ? `<span class="file-dir"><bdi>${esc(dir)}</bdi></span>` : ""
+       }</span>
        ${threads.length ? '<span class="file-cmt-dot" title="' + threads.length + ' comment(s)"></span>' : ""}
        <span class="chg ${cls}">${esc(label)}</span>
      </button>`
@@ -54,7 +66,7 @@ export function renderFile(pr: PR, detail: Detail, file: FileChange, threads: Th
       const staged = stagedForFile(pr, file.path);
       if (staged.length && !head.querySelector(".file-ai-dot")) {
         head.querySelector(".file-path")!.after(
-          el(`<span class="file-ai-dot" title="${staged.length} staged AI comment(s)">✦ ${staged.length}</span>`)
+          el(`<span class="file-ai-dot" title="${staged.length} staged AI comment(s)">${icon("sparkle")}${staged.length}</span>`)
         );
       }
       // File-level threads (no line) render above the diff; line threads render inline.
@@ -187,7 +199,7 @@ export function renderDiff(
     const count = tbody.querySelectorAll(`tr.thread-row[data-anchor="${k}"]`).length;
     let bubble = gutter.querySelector(".cmt-bubble") as HTMLElement | null;
     if (!bubble) {
-      gutter.innerHTML = `<button class="cmt-bubble" tabindex="-1" title="Toggle comments">💬<span class="n"></span></button>`;
+      gutter.innerHTML = `<button class="cmt-bubble" tabindex="-1" title="Toggle comments" aria-label="Toggle comments">${icon("chat")}<span class="n"></span></button>`;
       bubble = gutter.querySelector(".cmt-bubble") as HTMLElement;
     }
     (bubble.querySelector(".n") as HTMLElement).textContent = count > 1 ? String(count) : "";
@@ -231,7 +243,7 @@ export function renderDiff(
   }
 
   // Open the inline comment composer for a line/range (invoked from the
-  // selection toolbar's 💬 action).
+  // selection toolbar's comment action).
   function openComposer(side: string, start: number, end: number): void {
     clearCompose();
     highlight(side, start, end);
@@ -265,7 +277,7 @@ export function renderDiff(
     bubble.classList.toggle("off", hidden);
   });
 
-  // Highlight text in the diff to reveal a ? (ask Copilot) / 💬 (comment) toolbar.
+  // Highlight text in the diff to reveal an Ask Copilot / comment toolbar.
   installSelectionToolbar(tbody, {
     onComment: (s) => {
       window.getSelection()?.removeAllRanges();

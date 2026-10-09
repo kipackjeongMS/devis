@@ -4,10 +4,11 @@
 import { postJSON } from "./api.js";
 import { state } from "./state.js";
 import { openDetail } from "./detail.js";
-import { esc, timeAgo } from "./util.js";
+import { esc, plainSnippet, timeAgo } from "./util.js";
 import { requestNotifyPermission } from "./notifyWatch.js";
 import { matchNotificationPr } from "./inboxRoute.js";
 import type { Notification } from "./types.js";
+import { icon } from "./icons.js";
 
 let items: Notification[] = [];
 let unread = 0;
@@ -31,7 +32,10 @@ export function initInbox(): void {
     if (flyout && !flyout.contains(t) && bell && !bell.contains(t)) close();
   });
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && open) close(true);
+    if (e.key === "Escape" && open) {
+      e.preventDefault(); // consumed: the reading pane must not also close
+      close(true);
+    }
   });
   window.addEventListener("resize", () => {
     if (open) position();
@@ -108,13 +112,13 @@ function close(restoreFocus = false): void {
 function position(): void {
   if (!bell || !flyout) return;
   const r = bell.getBoundingClientRect();
-  const topbarBottom = document.querySelector(".topbar")?.getBoundingClientRect().bottom || r.bottom;
+  const titlebarBottom = document.querySelector(".titlebar")?.getBoundingClientRect().bottom || r.bottom;
   const width = Math.min(380, window.innerWidth - 24);
   const left = Math.min(
     Math.max(12, r.right - width),
     window.innerWidth - width - 12
   );
-  flyout.style.top = `${Math.round(Math.max(r.bottom, topbarBottom) + 6)}px`;
+  flyout.style.top = `${Math.round(Math.max(r.bottom, titlebarBottom) + 4)}px`;
   flyout.style.left = `${Math.round(left)}px`;
   flyout.style.right = "auto";
 }
@@ -139,9 +143,10 @@ function renderList(): void {
 }
 
 function rowHtml(n: Notification): string {
-  const ico = n.kind === "reply" ? "↩" : "💬";
+  const ico = icon(n.kind === "reply" ? "reply" : "chat");
   const unreadCls = n.unread ? " unread" : "";
   const title = n.title || `PR #${n.pr_id || ""}`;
+  const snip = plainSnippet(n.snippet);
   return (
     `<button type="button" class="inbox-row${unreadCls}" data-id="${esc(n.id)}">` +
     `<span class="inbox-row-ico">${ico}</span>` +
@@ -149,7 +154,7 @@ function rowHtml(n: Notification): string {
     `<span class="inbox-row-top"><span class="inbox-actor">${esc(n.actor || "")}</span>` +
     `<span class="inbox-time">${esc(timeAgo(n.created_at || undefined))}</span></span>` +
     `<span class="inbox-row-title">${esc(title)}</span>` +
-    (n.snippet ? `<span class="inbox-row-snip">${esc(n.snippet)}</span>` : "") +
+    (snip ? `<span class="inbox-row-snip">${esc(snip)}</span>` : "") +
     `</span>` +
     (n.unread ? `<span class="inbox-dot"></span>` : "") +
     `</button>`

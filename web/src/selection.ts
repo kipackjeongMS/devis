@@ -1,7 +1,8 @@
 // Text-selection actions for the diff: pick a comment anchor from selected rows,
-// read the selected code, and drive a small floating toolbar (? = ask Copilot,
-// 💬 = add comment). chooseAnchor is kept dependency-free so it unit-tests under
-// plain node; the rest is thin DOM glue.
+// read the selected code, and drive a small floating toolbar (Ask Copilot / add
+// comment). chooseAnchor is kept DOM-free so it unit-tests under plain node; the
+// rest is thin DOM glue.
+import { icon } from "./icons.js";
 
 export interface AnchorRow {
   side: string; // "left" | "right"
@@ -81,8 +82,12 @@ function ensureToolbar(): HTMLElement {
   tb.className = "sel-toolbar";
   tb.hidden = true;
   tb.innerHTML =
-    '<button class="sel-btn sel-ask" title="Ask Copilot about this selection">?</button>' +
-    '<button class="sel-btn sel-comment" title="Add a comment on this selection">💬</button>';
+    '<button type="button" class="sel-btn sel-ask" title="Ask Copilot about this selection" aria-label="Ask Copilot about this selection">' +
+    icon("sparkle") +
+    "</button>" +
+    '<button type="button" class="sel-btn sel-comment" title="Add a comment on this selection" aria-label="Add a comment on this selection">' +
+    icon("chat") +
+    "</button>";
   // Keep the text selection alive when the toolbar is clicked.
   tb.addEventListener("mousedown", (e) => e.preventDefault());
   tb.querySelector(".sel-ask")!.addEventListener("click", () => {
@@ -114,7 +119,9 @@ function ensureToolbar(): HTMLElement {
     if (!s || s.isCollapsed || s.rangeCount === 0 || !s.getRangeAt(0).intersectsNode(trackedTbody)) hideToolbar();
   });
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") hideToolbar();
+    if (e.key !== "Escape" || !toolbar || toolbar.hidden) return;
+    e.preventDefault(); // consumed: the reading pane must not also close
+    hideToolbar();
   });
   return tb;
 }

@@ -1,11 +1,10 @@
 // Thin fetch wrapper: parses JSON, surfaces API error messages as thrown Errors.
 //
 // Also detects a stale connection: the loopback server binds a fresh
-// ephemeral port on every extension (re)start, but this page caches the URL
-// from whenever the canvas panel was opened. If the extension process gets
-// reloaded, this page is left talking to a dead/mismatched server. bindIdentity()
-// captures who we're bound to at boot; any later failure re-pings to tell a
-// genuine app error apart from "the extension moved on without me".
+// ephemeral port on every app start, but this page keeps the URL it loaded
+// from. If that server goes away, this page is left talking to a
+// dead/mismatched server. bindIdentity() captures who we're bound to at boot;
+// any later failure re-pings to tell a genuine app error apart from a lost server.
 import { showStaleBanner } from "./staleBanner.js";
 
 interface PingResult {
@@ -57,7 +56,7 @@ async function checkStale(): Promise<boolean> {
   }
 }
 
-const STALE_MSG = "Extension was reloaded — close and reopen this panel to reconnect.";
+const STALE_MSG = "Lost the connection to the local server — restart the app to reconnect.";
 
 export async function api(path: string, opts?: RequestInit): Promise<any> {
   let r: Response;

@@ -1,7 +1,8 @@
 // Jumping from a summary row to the real comment in the diff. Changed files are
 // collapsed with lazily-loaded diffs, so revealing a finding has to expand its
 // file and wait for the diff before the anchored card exists to scroll to.
-import type { Finding, Thread } from "./types.js";
+import { canonicalReviewFilePath } from "./reviewPath.js";
+import type { Finding, SemanticFinding, Thread } from "./types.js";
 
 /** A `.file` box that can expand and lazy-load its diff on demand (see diff.ts). */
 export interface RevealableFile extends HTMLElement {
@@ -25,9 +26,12 @@ function flash(target: HTMLElement): void {
  * when the file isn't on the page at all.
  */
 export async function revealFinding(finding: Finding): Promise<boolean> {
-  if (!finding.file) return false;
-  const box = document.querySelector<RevealableFile>(
-    `.file[data-path="${CSS.escape(finding.file)}"]`
+  const findingPath = canonicalReviewFilePath(finding.file);
+  if (!findingPath) return false;
+  const box = Array.from(
+    document.querySelectorAll<RevealableFile>(".file[data-path]")
+  ).find(
+    (candidate) => canonicalReviewFilePath(candidate.dataset.path) === findingPath
   );
   if (!box) return false;
   if (box._ensureOpen) await box._ensureOpen();
@@ -44,6 +48,22 @@ export async function revealFinding(finding: Finding): Promise<boolean> {
       : null);
 
   const target = anchored || box;
+  target.scrollIntoView({ block: "center", behavior: reducedMotion() ? "auto" : "smooth" });
+  flash(target);
+  return true;
+}
+
+/** Reveal a PR-level semantic finding in the Copilot review panel. */
+export function revealSemanticFinding(finding: SemanticFinding): boolean {
+  const target = document.querySelector<HTMLElement>(
+    `[data-semantic-finding-id="${CSS.escape(String(finding.id))}"]`
+  );
+  if (!target) return false;
+
+  const panel = target.closest<HTMLElement>(".rev-panel");
+  panel?.classList.remove("collapsed");
+  panel?.querySelector(".rev-toggle")?.setAttribute("aria-expanded", "true");
+
   target.scrollIntoView({ block: "center", behavior: reducedMotion() ? "auto" : "smooth" });
   flash(target);
   return true;

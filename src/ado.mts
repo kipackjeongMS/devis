@@ -5,6 +5,13 @@
 import https from "node:https";
 import type { IncomingHttpHeaders, OutgoingHttpHeaders } from "node:http";
 import { getAzToken } from "./azauth.mjs";
+import {
+    buildLifecyclePatch,
+    type CompletionOptionsInput,
+    type LifecycleAction,
+    type ThreadStatus,
+    type Vote,
+} from "./pr-actions.mjs";
 
 const ADO_RESOURCE = "499b84ac-1321-427f-aa17-267ca6975798"; // Azure DevOps app id
 const API = "api-version=7.1";
@@ -45,7 +52,6 @@ export interface Pr {
     myVote: number; // current user's own vote (0 when not an individual reviewer)
     iCommented: boolean; // current user left at least one non-system comment
     plateDismissed?: boolean; // populated by the API from the local preference store
-    activityError?: string; // surfaced by /api/prs without hiding the core PR list
     sourceRef: string;
     targetRef: string;
     url: string;
@@ -107,6 +113,13 @@ export interface PrDetail {
     reviewers: Reviewer[];
     myVote: number; // current user's own vote (0 when not an individual reviewer)
     iCommented: boolean; // current user left at least one (non-system) comment
+    autoCompleteSetBy?: string; // display name of whoever enabled auto-complete
+    completionOptions?: {
+        mergeStrategy?: string;
+        deleteSourceBranch?: boolean;
+        transitionWorkItems?: boolean;
+        mergeCommitMessage?: string;
+    };
 }
 
 export interface DiffOp {
@@ -224,8 +237,6 @@ const repoBase = (org: string, project: string, repoId: string): string =>
 // Public API
 // ---------------------------------------------------------------------------
 const _meCache = new Map<string, Me>(); // org -> { id, name }
-const COMMENT_ACTIVITY_TTL_MS = 60 * 1000;
-const _commentActivityCache = new Map<string, { value: boolean; expiresAt: number }>();
 
 export async function getMe(org: string): Promise<Me> {
     const cached = _meCache.get(org);
@@ -288,45 +299,21 @@ function mapPr(org: string, pr: any, mine: boolean, meId: string | undefined): P
     };
 }
 
-async function hasCommentedOnPr(pr: Pr, meId: string, refresh: boolean): Promise<boolean> {
+/** Whether `meId` authored any non-system comment on the PR (one threads fetch). */
+export async function hasCommentedOnPr(pr: Pr, meId: string): Promise<boolean> {
     if (!pr.project || !pr.repoId) return false;
-    const key = `${pr.org}\n${pr.project}\n${pr.repoId}\n${pr.id}\n${meId}`;
-    const cached = _commentActivityCache.get(key);
-    if (!refresh && cached && cached.expiresAt > Date.now()) return cached.value;
-
     const base = `${repoBase(pr.org, pr.project, pr.repoId)}/pullRequests/${pr.id}`;
     const data = await adoJson("GET", `${base}/threads?${API}`);
-    const value = ((data.value || []) as any[]).some((t) =>
+    return ((data.value || []) as any[]).some((t) =>
         ((t.comments || []) as any[]).some(
             (c) => c.commentType !== "system" && c.author?.id === meId,
         ),
     );
-    _commentActivityCache.set(key, { value, expiresAt: Date.now() + COMMENT_ACTIVITY_TTL_MS });
-    return value;
-}
-
-async function addCommentActivity(prs: Pr[], meId: string, refresh: boolean): Promise<void> {
-    // A non-zero vote already qualifies the PR for My Plate, so only scan the
-    // remaining PRs. Keep the ADO fan-out bounded for large configured projects.
-    const pending = prs.filter((pr) => pr.myVote === 0);
-    let next = 0;
-    const worker = async (): Promise<void> => {
-        while (next < pending.length) {
-            const pr = pending[next++];
-            try {
-                pr.iCommented = await hasCommentedOnPr(pr, meId, refresh);
-            } catch (e) {
-                pr.activityError = `PR #${pr.id} comment activity: ${(e as Error).message}`;
-            }
-        }
-    };
-    const workerCount = Math.min(6, pending.length);
-    await Promise.all(Array.from({ length: workerCount }, () => worker()));
 }
 
 // All active PRs where the current user is a reviewer OR the author, for one org
 // (two parallel calls, merged and deduped — a PR can match both).
-export async function listAssignedPRs(org: string, refreshActivity = false): Promise<Pr[]> {
+export async function listAssignedPRs(org: string): Promise<Pr[]> {
     const me = await getMe(org);
     const base = `${orgBase(org)}/_apis/git/pullrequests`;
     const q = `searchCriteria.status=active&$top=200&${API}`;
@@ -343,7 +330,6 @@ export async function listAssignedPRs(org: string, refreshActivity = false): Pro
     const prs = [...byId.values()].map((pr) =>
         mapPr(org, pr, reviewerIds.has(pr.pullRequestId), me.id),
     );
-    await addCommentActivity(prs, me.id, refreshActivity);
     return prs;
 }
 
@@ -352,7 +338,7 @@ export async function listAssignedPRs(org: string, refreshActivity = false): Pro
 // set, plus the reviewer=me subset (ADO expands group/team reviewers server-side,
 // so a PR assigned to me via a group is still correctly flagged `mine`) — the
 // full set already contains PRs I authored, so mapPr folds those in too.
-export async function listActivePRs(org: string, project: string, refreshActivity = false): Promise<Pr[]> {
+export async function listActivePRs(org: string, project: string): Promise<Pr[]> {
     const me = await getMe(org);
     const base = `${orgBase(org)}/${enc(project)}/_apis/git/pullrequests`;
     const q = `searchCriteria.status=active&$top=200&${API}`;
@@ -364,7 +350,6 @@ export async function listActivePRs(org: string, project: string, refreshActivit
     const prs = ((allData.value || []) as any[]).map((pr) =>
         mapPr(org, pr, mineIds.has(pr.pullRequestId), me.id),
     );
-    await addCommentActivity(prs, me.id, refreshActivity);
     return prs;
 }
 
@@ -443,11 +428,21 @@ export async function getPrDetail(org: string, project: string, repoId: string, 
     const status: string | undefined = prObj?.status;
     const isDraft: boolean | undefined = prObj?.isDraft;
     const myVote = myVoteOf(reviewers, me.id);
+    const autoCompleteSetBy: string | undefined = prObj?.autoCompleteSetBy?.displayName || undefined;
+    const completionOptions = prObj?.completionOptions
+        ? {
+              mergeStrategy: prObj.completionOptions.mergeStrategy,
+              deleteSourceBranch: prObj.completionOptions.deleteSourceBranch,
+              transitionWorkItems: prObj.completionOptions.transitionWorkItems,
+              mergeCommitMessage: prObj.completionOptions.mergeCommitMessage,
+          }
+        : undefined;
     const last = (iters.value || [])[iters.value.length - 1];
     if (!last)
         return {
             description, files: [], threads: [], commits: {},
             status, isDraft, reviewers, myVote, iCommented: false,
+            autoCompleteSetBy, completionOptions,
         };
     const src = last.sourceRefCommit?.commitId;
     const mbase = last.commonRefCommit?.commitId;
@@ -481,6 +476,8 @@ export async function getPrDetail(org: string, project: string, repoId: string, 
         reviewers,
         myVote,
         iCommented,
+        autoCompleteSetBy,
+        completionOptions,
     };
 }
 
@@ -625,6 +622,53 @@ export async function createGeneralThread(
         status: "active",
     });
     return normalizeThread(created);
+}
+
+/** Resolve or reactivate a comment thread. */
+export async function updateThreadStatus(
+    org: string,
+    project: string,
+    repoId: string,
+    prId: string | number,
+    threadId: string | number,
+    status: ThreadStatus,
+): Promise<{ id: number; status: string }> {
+    const url = `${repoBase(org, project, repoId)}/pullRequests/${enc(String(prId))}/threads/${enc(String(threadId))}?${API}`;
+    const updated = await adoJson("PATCH", url, { status });
+    return { id: updated?.id ?? Number(threadId), status: updated?.status || status };
+}
+
+/** Cast the current user's vote; ADO adds them as a reviewer if needed. */
+export async function setMyVote(
+    org: string,
+    project: string,
+    repoId: string,
+    prId: string | number,
+    vote: Vote,
+): Promise<{ vote: number }> {
+    const me = await getMe(org);
+    const url = `${repoBase(org, project, repoId)}/pullRequests/${enc(String(prId))}/reviewers/${enc(me.id)}?${API}`;
+    const updated = await adoJson("PUT", url, { vote });
+    return { vote: typeof updated?.vote === "number" ? updated.vote : vote };
+}
+
+/** Complete, auto-complete, draft, abandon, or reactivate a PR. */
+export async function updatePrLifecycle(
+    org: string,
+    project: string,
+    repoId: string,
+    prId: string | number,
+    action: LifecycleAction,
+    options?: CompletionOptionsInput,
+): Promise<{ status?: string; isDraft?: boolean }> {
+    const url = `${repoBase(org, project, repoId)}/pullRequests/${enc(String(prId))}?${API}`;
+    const me = await getMe(org);
+    // Completing must name the exact source commit the user saw, so ADO refuses a stale merge.
+    const lastMergeSourceCommit =
+        action === "complete" ? (await adoJson("GET", url))?.lastMergeSourceCommit?.commitId : undefined;
+    const body = buildLifecyclePatch(action, { options, lastMergeSourceCommit, meId: me.id });
+    const updated = await adoJson("PATCH", url, body);
+    return { status: updated?.status, isDraft: updated?.isDraft };
 }
 
 // ---------------------------------------------------------------------------

@@ -1,18 +1,13 @@
-// Review-results store (the extension's OWN private SQLite file — never the
-// CLI's shared data.db). A background review agent POSTs its finished result to
-// /api/review-result; the canvas polls /api/review-result?prId=… to render it.
-// Zero-dependency: node:sqlite is a Node built-in (experimental; warns on stderr
-// only, which does not disturb the JSON-RPC stdout pipe).
+// Review-results store (the app's OWN private SQLite file — never the CLI's
+// shared data.db). Reviewer sessions publish through the publish_review tool;
+// the UI polls /api/review-result?prId=… to render the result.
+// Zero-dependency: node:sqlite is a Node built-in.
 
 import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import {
-    normalizeIsoTimestamp,
-    validateTeamsReviewEvidence,
-    type TeamsReviewEvidence,
-} from "./teams-review-intake.mjs";
+import { canonicalReviewFilePath } from "./review-path.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, "data");
@@ -79,14 +74,7 @@ export interface ReviewRow {
 export type ReviewListItem = Pick<
     ReviewRow,
     "review_key" | "pr_id" | "org" | "project" | "repo" | "repo_id" | "status" | "summary" | "dismissed" | "updated_at"
-> & ReviewAutomationProvenance;
-
-export interface ReviewAutomationProvenance {
-    automation_source: "teams" | null;
-    automation_requester: string | null;
-    automation_source_url: string | null;
-    automation_requested_at: string | null;
-}
+>;
 
 export interface ReviewIdentity {
     prId: string | number;
@@ -134,60 +122,6 @@ export interface ReviewJobInput {
     reviewModel?: string | null;
 }
 
-export type TeamsReviewRequestStatus = "pending" | "queued" | "skipped" | "error";
-
-export interface TeamsReviewIntakeStateRow {
-    source_id: string;
-    watermark: string;
-    scan_token: string | null;
-    scan_from: string | null;
-    scan_to: string | null;
-    seeded_at: string;
-    last_scan_at: string | null;
-    created_at: string;
-    updated_at: string;
-}
-
-export interface TeamsReviewRequestRow {
-    source_id: string;
-    source_message_id: string;
-    source_message_url: string;
-    sender: string;
-    sent_at: string;
-    excerpt: string;
-    pr_url: string;
-    org: string;
-    project: string;
-    repo: string;
-    repo_id: string | null;
-    pr_id: number;
-    status: TeamsReviewRequestStatus;
-    linked_run_id: string | null;
-    error: string | null;
-    retryable: number;
-    attempt_count: number;
-    created_at: string;
-    updated_at: string;
-}
-
-export interface TeamsReviewRequestOutcome {
-    status: TeamsReviewRequestStatus;
-    linkedRunId?: string | null;
-    error?: string | null;
-    retryable?: boolean;
-    repoId?: string | null;
-}
-
-export interface PersistTeamsReviewScanInput {
-    sourceId: string;
-    expectedWatermark: string;
-    scanToken: string;
-    nextWatermark: string;
-    complete: boolean;
-    requests: readonly TeamsReviewEvidence[];
-    scannedAt?: string;
-}
-
 /** The POST payload an agent (or the canvas) writes; only `prId` is required. */
 export interface ReviewInput {
     prId: string | number;
@@ -207,9 +141,8 @@ export interface ReviewInput {
     error?: string | null;
     runId?: string | null;
     /**
-     * Copilot session that performed the review. Sourced from the publishing
-     * extension process (never from agent input), so it is only set on the
-     * canvas-action publish path.
+     * Copilot session that performed the review. Taken from the publish_review
+     * tool invocation (never from agent input), so it is only set on that path.
      */
     reviewerSessionId?: string | null;
 }
@@ -383,6 +316,20 @@ async function initializeDb(): Promise<DatabaseSync> {
                 read_at    TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications(created_at DESC);
+            -- Whether the current user commented on a PR, persisted so /api/prs
+            -- doesn't re-fetch every PR's threads on each load.
+            CREATE TABLE IF NOT EXISTS pr_comment_activity (
+                org        TEXT NOT NULL,
+                project    TEXT NOT NULL,
+                repo_id    TEXT NOT NULL,
+                pr_id      TEXT NOT NULL,
+                me_id      TEXT NOT NULL,
+                commented  INTEGER NOT NULL,
+                checked_at INTEGER NOT NULL,
+                PRIMARY KEY (org, me_id, project, repo_id, pr_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_pr_comment_activity_checked
+                ON pr_comment_activity(checked_at);
             CREATE TABLE IF NOT EXISTS inbox_meta (
                 key   TEXT PRIMARY KEY,
                 value TEXT
@@ -484,60 +431,6 @@ async function initializeDb(): Promise<DatabaseSync> {
         connection.exec(
             "UPDATE review_jobs SET task_prompt = NULL WHERE status IN ('done','error')",
         );
-        connection.exec(`
-            CREATE TABLE IF NOT EXISTS teams_review_intake_state (
-                source_id     TEXT PRIMARY KEY,
-                watermark     TEXT NOT NULL,
-                scan_token    TEXT,
-                scan_from     TEXT,
-                scan_to       TEXT,
-                seeded_at     TEXT NOT NULL,
-                last_scan_at  TEXT,
-                created_at    TEXT NOT NULL,
-                updated_at    TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS teams_review_requests (
-                source_id           TEXT NOT NULL,
-                source_message_id   TEXT NOT NULL,
-                source_message_url  TEXT NOT NULL,
-                sender              TEXT NOT NULL,
-                sent_at             TEXT NOT NULL,
-                excerpt             TEXT NOT NULL,
-                pr_url              TEXT NOT NULL,
-                org                 TEXT NOT NULL,
-                project             TEXT NOT NULL,
-                repo                TEXT NOT NULL,
-                repo_id             TEXT,
-                pr_id               INTEGER NOT NULL CHECK (pr_id > 0),
-                status              TEXT NOT NULL DEFAULT 'pending'
-                                    CHECK (status IN ('pending','queued','skipped','error')),
-                linked_run_id       TEXT,
-                error               TEXT,
-                retryable           INTEGER NOT NULL DEFAULT 1 CHECK (retryable IN (0,1)),
-                attempt_count       INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
-                created_at          TEXT NOT NULL,
-                updated_at          TEXT NOT NULL,
-                PRIMARY KEY (source_id, source_message_id)
-            );
-            CREATE INDEX IF NOT EXISTS idx_teams_review_requests_status
-            ON teams_review_requests(status, retryable, sent_at);
-            CREATE INDEX IF NOT EXISTS idx_teams_review_requests_pr
-            ON teams_review_requests(org, project, repo, pr_id, sent_at);
-            CREATE INDEX IF NOT EXISTS idx_teams_review_requests_run
-            ON teams_review_requests(linked_run_id, status, sent_at);
-        `);
-        const intakeStateCols = connection
-            .prepare("PRAGMA table_info(teams_review_intake_state)")
-            .all() as Array<{ name: string }>;
-        if (!intakeStateCols.some((column) => column.name === "scan_token")) {
-            connection.exec("ALTER TABLE teams_review_intake_state ADD COLUMN scan_token TEXT");
-        }
-        if (!intakeStateCols.some((column) => column.name === "scan_from")) {
-            connection.exec("ALTER TABLE teams_review_intake_state ADD COLUMN scan_from TEXT");
-        }
-        if (!intakeStateCols.some((column) => column.name === "scan_to")) {
-            connection.exec("ALTER TABLE teams_review_intake_state ADD COLUMN scan_to TEXT");
-        }
         connection.exec("COMMIT");
         db = connection;
         return connection;
@@ -597,102 +490,24 @@ export function listReviews(): ReviewListItem[] {
     return requireDb()
         .prepare(
             `SELECT review_key, pr_id, org, project, repo, repo_id, status, summary,
-                    dismissed, updated_at,
-                    CASE WHEN EXISTS (
-                        SELECT 1 FROM teams_review_requests provenance
-                        WHERE provenance.linked_run_id = reviews.run_id
-                          AND provenance.status = 'queued'
-                    ) THEN 'teams' ELSE NULL END AS automation_source,
-                    (
-                        SELECT sender FROM teams_review_requests provenance
-                        WHERE provenance.linked_run_id = reviews.run_id
-                          AND provenance.status = 'queued'
-                        ORDER BY sent_at ASC, source_message_id ASC LIMIT 1
-                    ) AS automation_requester,
-                    (
-                        SELECT source_message_url FROM teams_review_requests provenance
-                        WHERE provenance.linked_run_id = reviews.run_id
-                          AND provenance.status = 'queued'
-                        ORDER BY sent_at ASC, source_message_id ASC LIMIT 1
-                    ) AS automation_source_url,
-                    (
-                        SELECT sent_at FROM teams_review_requests provenance
-                        WHERE provenance.linked_run_id = reviews.run_id
-                          AND provenance.status = 'queued'
-                        ORDER BY sent_at ASC, source_message_id ASC LIMIT 1
-                    ) AS automation_requested_at
+                    dismissed, updated_at
              FROM reviews ORDER BY updated_at DESC`,
         )
         .all() as unknown as ReviewListItem[];
 }
 
 export function listActiveReviewJobs(): Array<
-    Pick<ReviewJobRow, "pr_id" | "org" | "project" | "repo" | "repo_id" | "status"> &
-        ReviewAutomationProvenance
+    Pick<ReviewJobRow, "pr_id" | "org" | "project" | "repo" | "repo_id" | "status">
 > {
     return requireDb()
         .prepare(
-            `SELECT pr_id, org, project, repo, repo_id, status,
-                    CASE WHEN EXISTS (
-                        SELECT 1 FROM teams_review_requests provenance
-                        WHERE provenance.linked_run_id = review_jobs.run_id
-                          AND provenance.status = 'queued'
-                    ) THEN 'teams' ELSE NULL END AS automation_source,
-                    (
-                        SELECT sender FROM teams_review_requests provenance
-                        WHERE provenance.linked_run_id = review_jobs.run_id
-                          AND provenance.status = 'queued'
-                        ORDER BY sent_at ASC, source_message_id ASC LIMIT 1
-                    ) AS automation_requester,
-                    (
-                        SELECT source_message_url FROM teams_review_requests provenance
-                        WHERE provenance.linked_run_id = review_jobs.run_id
-                          AND provenance.status = 'queued'
-                        ORDER BY sent_at ASC, source_message_id ASC LIMIT 1
-                    ) AS automation_source_url,
-                    (
-                        SELECT sent_at FROM teams_review_requests provenance
-                        WHERE provenance.linked_run_id = review_jobs.run_id
-                          AND provenance.status = 'queued'
-                        ORDER BY sent_at ASC, source_message_id ASC LIMIT 1
-                    ) AS automation_requested_at
+            `SELECT pr_id, org, project, repo, repo_id, status
              FROM review_jobs
              WHERE status IN ('queued','dispatching','created','running')`,
         )
         .all() as unknown as Array<
-        Pick<ReviewJobRow, "pr_id" | "org" | "project" | "repo" | "repo_id" | "status"> &
-            ReviewAutomationProvenance
+        Pick<ReviewJobRow, "pr_id" | "org" | "project" | "repo" | "repo_id" | "status">
     >;
-}
-
-export function getReviewAutomationProvenance(runId: string | null): ReviewAutomationProvenance {
-    if (!runId) {
-        return {
-            automation_source: null,
-            automation_requester: null,
-            automation_source_url: null,
-            automation_requested_at: null,
-        };
-    }
-    const row = requireDb()
-        .prepare(
-            `SELECT 'teams' AS automation_source,
-                    sender AS automation_requester,
-                    source_message_url AS automation_source_url,
-                    sent_at AS automation_requested_at
-             FROM teams_review_requests
-             WHERE linked_run_id = ? AND status = 'queued'
-             ORDER BY sent_at ASC, source_message_id ASC LIMIT 1`,
-        )
-        .get(runId) as ReviewAutomationProvenance | undefined;
-    return (
-        row || {
-            automation_source: null,
-            automation_requester: null,
-            automation_source_url: null,
-            automation_requested_at: null,
-        }
-    );
 }
 
 export function getReviewJob(runId: string): ReviewJobRow | null {
@@ -1036,6 +851,99 @@ export function failReviewBatch(
     }
 }
 
+/** The unfinished review job a reviewer session was created for. */
+export function getActiveReviewJobBySession(appSessionId: string): ReviewJobRow | null {
+    return (
+        (requireDb()
+            .prepare(
+                `SELECT * FROM review_jobs
+                 WHERE app_session_id = ? AND status IN ('dispatching','created','running')
+                 ORDER BY created_at DESC LIMIT 1`,
+            )
+            .get(appSessionId) as ReviewJobRow | undefined) || null
+    );
+}
+
+/**
+ * Return unfinished jobs started by an earlier app process to the queue. Their
+ * reviewer sessions ended with that process, so each restarts from its stored
+ * task; a job whose task is gone can only fail.
+ */
+export function requeueOrphanedReviewJobs(runnerId: string): number {
+    const connection = requireDb();
+    connection.exec("BEGIN IMMEDIATE");
+    try {
+        const rows = connection
+            .prepare(
+                `SELECT * FROM review_jobs
+                 WHERE status IN ('dispatching','created','running')
+                   AND dispatcher_session_id <> ?`,
+            )
+            .all(runnerId) as unknown as ReviewJobRow[];
+        const now = new Date().toISOString();
+        for (const row of rows) {
+            if (row.task_prompt) {
+                connection
+                    .prepare(
+                        `UPDATE review_jobs
+                         SET status = 'queued', dispatcher_session_id = ?, batch_id = NULL,
+                             app_session_id = NULL, error = NULL, updated_at = ?
+                         WHERE run_id = ?`,
+                    )
+                    .run(runnerId, now, row.run_id);
+                upsertReview({ ...jobReviewInput(row), status: "queued", error: null });
+            } else {
+                const error = "The review was interrupted and its task is no longer available.";
+                connection
+                    .prepare(
+                        `UPDATE review_jobs SET status = 'error', error = ?, updated_at = ?
+                         WHERE run_id = ?`,
+                    )
+                    .run(error, now, row.run_id);
+                upsertReview({ ...jobReviewInput(row), status: "error", error });
+            }
+        }
+        connection.exec("COMMIT");
+        return rows.length;
+    } catch (e) {
+        connection.exec("ROLLBACK");
+        throw e;
+    }
+}
+
+/** Fail a job whose reviewer ended without publishing. Returns false once it has finished. */
+export function failActiveReviewJob(runId: string, error: string): boolean {
+    const connection = requireDb();
+    connection.exec("BEGIN IMMEDIATE");
+    try {
+        const info = connection
+            .prepare(
+                `UPDATE review_jobs
+                 SET status = 'error', task_prompt = NULL, error = ?, updated_at = ?
+                 WHERE run_id = ? AND status IN ('dispatching','created','running')`,
+            )
+            .run(error, new Date().toISOString(), runId);
+        const changed = Number(info.changes || 0) === 1;
+        if (changed) {
+            const row = getReviewJob(runId)!;
+            const current = getReview(jobReviewInput(row));
+            if (!current?.run_id || current.run_id === runId) {
+                upsertReview({ ...jobReviewInput(row), status: "error", error });
+            }
+        }
+        connection.exec("COMMIT");
+        return changed;
+    } catch (e) {
+        connection.exec("ROLLBACK");
+        throw e;
+    }
+}
+
+export function isReviewJobActive(runId: string): boolean {
+    const status = getReviewJob(runId)?.status;
+    return status === "dispatching" || status === "created" || status === "running";
+}
+
 /** Release capacity held by sessions that were never acknowledged, started, or completed. */
 export function expireStaleReviewJobs(nowMs = Date.now()): number {
     const cutoffs: Array<{ status: ReviewJobStatus; before: string; message: string }> = [
@@ -1161,7 +1069,7 @@ function normalizeFindings(list: Finding[]): Finding[] {
         .filter((f) => f && typeof f.comment === "string" && f.comment.trim() !== "")
         .map((f, i) => ({
             id: f.id != null && String(f.id).trim() !== "" ? String(f.id) : "f" + i,
-            file: f.file ?? null,
+            file: canonicalReviewFilePath(f.file) || null,
             line: f.line ?? null,
             endLine: f.endLine ?? null,
             side: f.side ?? (f.line != null ? "right" : null),
@@ -1194,7 +1102,14 @@ function normalizeSemanticFindings(list: SemanticFinding[]): SemanticFinding[] {
             title: finding.title,
             comment: finding.comment,
             files: Array.isArray(finding.files)
-                ? [...new Set(finding.files.filter((file) => typeof file === "string" && file.trim()))]
+                ? [
+                      ...new Set(
+                          finding.files
+                              .filter((file) => typeof file === "string" && file.trim())
+                              .map((file) => canonicalReviewFilePath(file))
+                              .filter(Boolean),
+                      ),
+                  ]
                 : [],
             humanizedComment: finding.humanizedComment ?? null,
             posted: !!finding.posted,
@@ -1537,6 +1452,58 @@ export function setMeta(key: string, value: string): void {
 }
 
 // ---------------------------------------------------------------------------
+// Per-PR "I commented" activity cache (see comment-activity.mts).
+// ---------------------------------------------------------------------------
+export interface CommentActivityRow {
+    org: string;
+    project: string;
+    repoId: string;
+    prId: string;
+    meId: string;
+    commented: boolean;
+    checkedAt: number; // epoch ms when the observation started
+}
+
+export function listCommentActivity(org: string, meId: string): CommentActivityRow[] {
+    const rows = requireDb()
+        .prepare(
+            `SELECT org, project, repo_id, pr_id, me_id, commented, checked_at
+             FROM pr_comment_activity WHERE org = ? AND me_id = ?`,
+        )
+        .all(org, meId) as any[];
+    return rows.map((r) => ({
+        org: r.org,
+        project: r.project,
+        repoId: r.repo_id,
+        prId: r.pr_id,
+        meId: r.me_id,
+        commented: !!r.commented,
+        checkedAt: Number(r.checked_at),
+    }));
+}
+
+/** Upsert one observation; an older observation never overwrites a newer one. */
+export function saveCommentActivity(row: CommentActivityRow): void {
+    requireDb()
+        .prepare(
+            `INSERT INTO pr_comment_activity
+                 (org, project, repo_id, pr_id, me_id, commented, checked_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT (org, me_id, project, repo_id, pr_id) DO UPDATE SET
+                 commented = excluded.commented, checked_at = excluded.checked_at
+             WHERE excluded.checked_at >= pr_comment_activity.checked_at`,
+        )
+        .run(row.org, row.project, row.repoId, row.prId, row.meId, row.commented ? 1 : 0, row.checkedAt);
+}
+
+export function pruneCommentActivity(olderThanMs: number): number {
+    const info = requireDb()
+        .prepare("DELETE FROM pr_comment_activity WHERE checked_at < ?")
+        .run(olderThanMs);
+    return Number(info.changes ?? 0);
+}
+
+// ---------------------------------------------------------------------------
 // Durable inbox watches — the set of PRs/threads the poller must keep
 // checking for new peer activity, independent of whether ADO's "active PRs"
 // listing still returns them (a completed PR still needs its watched thread
@@ -1665,325 +1632,4 @@ export function listInboxWatches(org?: string): InboxWatchRow[] {
             .all(org) as unknown as InboxWatchRow[];
     }
     return requireDb().prepare("SELECT * FROM inbox_watches ORDER BY org, pr_id, thread_id").all() as unknown as InboxWatchRow[];
-}
-
-function normalizeSourceId(value: unknown): string {
-    if (typeof value !== "string" || !value.trim()) {
-        throw new Error("sourceId is required");
-    }
-    const sourceId = value.trim();
-    if (sourceId.length > 500) throw new Error("sourceId exceeds 500 characters");
-    return sourceId;
-}
-
-export function getTeamsReviewIntakeState(sourceId: string): TeamsReviewIntakeStateRow | null {
-    return (
-        (requireDb()
-            .prepare("SELECT * FROM teams_review_intake_state WHERE source_id = ?")
-            .get(normalizeSourceId(sourceId)) as TeamsReviewIntakeStateRow | undefined) || null
-    );
-}
-
-/** Seed a source at the current watermark without backfilling historical messages. */
-export function seedTeamsReviewIntakeState(
-    sourceId: string,
-    watermark: string,
-): TeamsReviewIntakeStateRow {
-    const normalizedSourceId = normalizeSourceId(sourceId);
-    const normalizedWatermark = normalizeIsoTimestamp(watermark, "watermark");
-    const now = new Date().toISOString();
-    requireDb()
-        .prepare(
-            `INSERT OR IGNORE INTO teams_review_intake_state
-             (source_id, watermark, scan_token, scan_from, scan_to,
-              seeded_at, last_scan_at, created_at, updated_at)
-             VALUES (?, ?, NULL, NULL, NULL, ?, NULL, ?, ?)`,
-        )
-        .run(normalizedSourceId, normalizedWatermark, now, now, now);
-    return getTeamsReviewIntakeState(normalizedSourceId)!;
-}
-
-export function issueTeamsReviewScan(
-    sourceId: string,
-    expectedWatermark: string,
-    scanToken: string,
-    from: string,
-    to: string,
-): TeamsReviewIntakeStateRow {
-    const scanLeaseMs = 30 * 60 * 1000;
-    const normalizedSourceId = normalizeSourceId(sourceId);
-    const normalizedExpected = normalizeIsoTimestamp(expectedWatermark, "expectedWatermark");
-    const normalizedFrom = normalizeIsoTimestamp(from, "from");
-    const normalizedTo = normalizeIsoTimestamp(to, "to");
-    if (!scanToken.trim()) throw new Error("scanToken is required");
-    if (Date.parse(normalizedTo) > Date.now()) {
-        throw new Error("Teams review intake scan window cannot end in the future");
-    }
-    if (
-        Date.parse(normalizedFrom) > Date.parse(normalizedTo) ||
-        Date.parse(normalizedExpected) > Date.parse(normalizedTo)
-    ) {
-        throw new Error("Teams review intake scan window is invalid");
-    }
-    let existing = getTeamsReviewIntakeState(normalizedSourceId);
-    if (!existing) throw new Error(`Teams review intake source is not seeded: ${normalizedSourceId}`);
-    if (existing.watermark !== normalizedExpected) {
-        throw new Error("Teams review intake watermark changed before scan issuance");
-    }
-    if (existing.scan_token) {
-        if (Date.parse(existing.updated_at) >= Date.now() - scanLeaseMs) return existing;
-        requireDb()
-            .prepare(
-                `UPDATE teams_review_intake_state
-                 SET scan_token = NULL, scan_from = NULL, scan_to = NULL, updated_at = ?
-                 WHERE source_id = ? AND watermark = ? AND scan_token = ? AND updated_at = ?`,
-            )
-            .run(
-                new Date().toISOString(),
-                normalizedSourceId,
-                normalizedExpected,
-                existing.scan_token,
-                existing.updated_at,
-            );
-        existing = getTeamsReviewIntakeState(normalizedSourceId);
-        if (!existing || existing.scan_token) {
-            throw new Error("Teams review intake scan changed during lease recovery");
-        }
-    }
-    const now = new Date().toISOString();
-    const info = requireDb()
-        .prepare(
-            `UPDATE teams_review_intake_state
-             SET scan_token = ?, scan_from = ?, scan_to = ?, updated_at = ?
-             WHERE source_id = ? AND watermark = ? AND scan_token IS NULL`,
-        )
-        .run(
-            scanToken.trim(),
-            normalizedFrom,
-            normalizedTo,
-            now,
-            normalizedSourceId,
-            normalizedExpected,
-        );
-    if (Number(info.changes) !== 1) {
-        throw new Error("Teams review intake scan changed during issuance");
-    }
-    return getTeamsReviewIntakeState(normalizedSourceId)!;
-}
-
-export function getTeamsReviewRequest(
-    sourceId: string,
-    sourceMessageId: string,
-): TeamsReviewRequestRow | null {
-    const normalizedMessageId = normalizeSourceId(sourceMessageId);
-    return (
-        (requireDb()
-            .prepare(
-                `SELECT * FROM teams_review_requests
-                 WHERE source_id = ? AND source_message_id = ?`,
-            )
-            .get(normalizeSourceId(sourceId), normalizedMessageId) as
-            | TeamsReviewRequestRow
-            | undefined) || null
-    );
-}
-
-export function listRetryableTeamsReviewRequests(sourceId: string): TeamsReviewRequestRow[] {
-    return requireDb()
-        .prepare(
-            `SELECT * FROM teams_review_requests
-             WHERE source_id = ? AND (status = 'pending' OR (status = 'error' AND retryable = 1))
-             ORDER BY sent_at ASC, source_message_id ASC`,
-        )
-        .all(normalizeSourceId(sourceId)) as unknown as TeamsReviewRequestRow[];
-}
-
-/**
- * Persist every message before advancing the source watermark. Replayed messages
- * are returned unchanged, so their prior queue outcome is never repeated.
- */
-export function persistTeamsReviewScan(input: PersistTeamsReviewScanInput): {
-    inserted: TeamsReviewRequestRow[];
-    duplicates: TeamsReviewRequestRow[];
-    state: TeamsReviewIntakeStateRow;
-} {
-    const sourceId = normalizeSourceId(input.sourceId);
-    const expectedWatermark = normalizeIsoTimestamp(input.expectedWatermark, "expectedWatermark");
-    const nextWatermark = normalizeIsoTimestamp(input.nextWatermark, "nextWatermark");
-    const scannedAt = normalizeIsoTimestamp(input.scannedAt || new Date().toISOString(), "scannedAt");
-    const scanToken = input.scanToken.trim();
-    if (!scanToken) throw new Error("scanToken is required");
-    if (Date.parse(nextWatermark) < Date.parse(expectedWatermark)) {
-        throw new Error("nextWatermark cannot precede expectedWatermark");
-    }
-
-    const requests = input.requests.map((request) => {
-        const validation = validateTeamsReviewEvidence(request);
-        if (!validation.ok) throw new Error(validation.error);
-        if (validation.value.sourceId !== sourceId) {
-            throw new Error("request sourceId does not match scan sourceId");
-        }
-        return validation.value;
-    });
-
-    const connection = requireDb();
-    const insert = connection.prepare(
-        `INSERT OR IGNORE INTO teams_review_requests
-         (source_id, source_message_id, source_message_url, sender, sent_at, excerpt,
-          pr_url, org, project, repo, repo_id, pr_id, status, linked_run_id, error,
-          retryable, attempt_count, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 'pending', NULL, NULL, 1, 0, ?, ?)`,
-    );
-    const inserted: TeamsReviewRequestRow[] = [];
-    const duplicates: TeamsReviewRequestRow[] = [];
-    connection.exec("BEGIN IMMEDIATE");
-    try {
-        const state = getTeamsReviewIntakeState(sourceId);
-        if (!state) throw new Error(`Teams review intake source is not seeded: ${sourceId}`);
-        if (state.watermark !== expectedWatermark) {
-            throw new Error("Teams review intake watermark changed during scan");
-        }
-        if (
-            state.scan_token !== scanToken ||
-            !state.scan_from ||
-            !state.scan_to ||
-            state.scan_to !== nextWatermark
-        ) {
-            throw new Error("Teams review intake scan token or window does not match the issued scan");
-        }
-        if (Date.parse(state.scan_to) > Date.parse(scannedAt)) {
-            throw new Error("Teams review intake scan window cannot end in the future");
-        }
-        for (const request of requests) {
-            const sentAt = Date.parse(request.sentAt);
-            if (sentAt < Date.parse(state.scan_from) || sentAt > Date.parse(state.scan_to)) {
-                throw new Error("Teams review evidence timestamp is outside the issued scan window");
-            }
-        }
-
-        for (const request of requests) {
-            const info = insert.run(
-                sourceId,
-                request.sourceMessageId,
-                request.sourceMessageUrl,
-                request.sender,
-                request.sentAt,
-                request.excerpt,
-                request.prUrl,
-                request.pr.org,
-                request.pr.project,
-                request.pr.repo,
-                request.pr.prId,
-                scannedAt,
-                scannedAt,
-            );
-            const row = getTeamsReviewRequest(sourceId, request.sourceMessageId)!;
-            (Number(info.changes) === 1 ? inserted : duplicates).push(row);
-        }
-
-        if (input.complete) {
-            const update = connection
-                .prepare(
-                    `UPDATE teams_review_intake_state
-                     SET watermark = ?, scan_token = NULL, scan_from = NULL, scan_to = NULL,
-                         last_scan_at = ?, updated_at = ?
-                     WHERE source_id = ? AND watermark = ? AND scan_token = ?`,
-                )
-                .run(
-                    nextWatermark,
-                    scannedAt,
-                    scannedAt,
-                    sourceId,
-                    expectedWatermark,
-                    scanToken,
-                );
-            if (Number(update.changes) !== 1) {
-                throw new Error("Teams review intake watermark changed during scan");
-            }
-        } else {
-            requireDb()
-                .prepare(
-                    `UPDATE teams_review_intake_state
-                     SET last_scan_at = ?, updated_at = ?
-                     WHERE source_id = ? AND watermark = ? AND scan_token = ?`,
-                )
-                .run(scannedAt, scannedAt, sourceId, expectedWatermark, scanToken);
-        }
-        connection.exec("COMMIT");
-        return {
-            inserted,
-            duplicates,
-            state: getTeamsReviewIntakeState(sourceId)!,
-        };
-    } catch (error) {
-        connection.exec("ROLLBACK");
-        throw error;
-    }
-}
-
-export function recordTeamsReviewRequestOutcome(
-    sourceId: string,
-    sourceMessageId: string,
-    outcome: TeamsReviewRequestOutcome,
-): TeamsReviewRequestRow {
-    const normalizedSourceId = normalizeSourceId(sourceId);
-    const normalizedMessageId = normalizeSourceId(sourceMessageId);
-    if (outcome.status === "pending") {
-        throw new Error("Use retryTeamsReviewRequest to return an error to pending");
-    }
-    const linkedRunId = outcome.linkedRunId?.trim() || null;
-    const error = outcome.error?.trim() || null;
-    const repoId = outcome.repoId?.trim() || null;
-    if (outcome.status === "queued" && !linkedRunId) {
-        throw new Error("linkedRunId is required for a queued request");
-    }
-    if (outcome.status === "error" && !error) {
-        throw new Error("error is required for a failed request");
-    }
-    const retryable = outcome.status === "error" && outcome.retryable !== false ? 1 : 0;
-    const info = requireDb()
-        .prepare(
-            `UPDATE teams_review_requests
-             SET status = ?, linked_run_id = ?, error = ?, retryable = ?,
-                 repo_id = COALESCE(?, repo_id), attempt_count = attempt_count + 1,
-                 updated_at = ?
-             WHERE source_id = ? AND source_message_id = ?
-               AND status IN ('pending','error')`,
-        )
-        .run(
-            outcome.status,
-            linkedRunId,
-            error,
-            retryable,
-            repoId,
-            new Date().toISOString(),
-            normalizedSourceId,
-            normalizedMessageId,
-        );
-    if (Number(info.changes) !== 1) {
-        const existing = getTeamsReviewRequest(normalizedSourceId, normalizedMessageId);
-        if (!existing) throw new Error("Teams review request not found");
-        throw new Error(`Teams review request is already ${existing.status}`);
-    }
-    return getTeamsReviewRequest(normalizedSourceId, normalizedMessageId)!;
-}
-
-export function retryTeamsReviewRequest(
-    sourceId: string,
-    sourceMessageId: string,
-): TeamsReviewRequestRow {
-    const normalizedSourceId = normalizeSourceId(sourceId);
-    const normalizedMessageId = normalizeSourceId(sourceMessageId);
-    const info = requireDb()
-        .prepare(
-            `UPDATE teams_review_requests
-             SET status = 'pending', linked_run_id = NULL, error = NULL, updated_at = ?
-             WHERE source_id = ? AND source_message_id = ?
-               AND status = 'error' AND retryable = 1`,
-        )
-        .run(new Date().toISOString(), normalizedSourceId, normalizedMessageId);
-    if (Number(info.changes) !== 1) {
-        throw new Error("Teams review request is not in a retryable error state");
-    }
-    return getTeamsReviewRequest(normalizedSourceId, normalizedMessageId)!;
 }

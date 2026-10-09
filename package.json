@@ -2,15 +2,25 @@
   "name": "ado-pr-ops",
   "version": "1.0.0",
   "private": true,
-  "description": "GitHub Copilot CLI canvas extension: Azure DevOps PR operations (list, review, bridge).",
+  "productName": "ADO PR Ops",
+  "description": "Desktop console for reviewing Azure DevOps pull requests with GitHub Copilot.",
+  "main": "main.mjs",
   "scripts": {
     "build:backend": "tsc -p tsconfig.backend.json",
     "build:web": "tsc -p tsconfig.web.json",
     "build": "npm run build:backend && npm run build:web",
-    "typecheck": "tsc -p tsconfig.backend.json --noEmit && tsc -p tsconfig.web.json --noEmit"
+    "typecheck": "tsc -p tsconfig.backend.json --noEmit && tsc -p tsconfig.web.json --noEmit",
+    "start": "npm run build && electron .",
+    "package": "npm run build && node scripts/package-desktop.mjs",
+    "deploy": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/deploy-desktop.ps1"
   },
   "devDependencies": {
-    "typescript": "^5.6.3",
-    "@types/node": "^22.9.0"
+    "@electron/packager": "20.3.0",
+    "@types/node": "^22.9.0",
+    "electron": "44.5.1",
+    "typescript": "^5.6.3"
+  },
+  "dependencies": {
+    "@github/copilot-sdk": "1.0.18"
   }
 }

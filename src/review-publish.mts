@@ -1,10 +1,106 @@
+// Validation and persistence for the `publish_review` tool a reviewer session
+// calls when its review is complete.
+
 import {
     ensureDb,
     publishReviewJobRun,
     type Finding,
     type SemanticFinding,
 } from "./store.mjs";
-import type { PrCanvasTarget } from "./canvas-target.mjs";
+
+/** The PR a reviewer session was started for; publishes must match it exactly. */
+export interface ReviewPublishTarget {
+    prId: string;
+    org: string;
+    project: string;
+    repoId: string;
+    /** The run the session was started for, when known. */
+    runId?: string;
+}
+
+export const PUBLISH_REVIEW_SCHEMA = {
+    type: "object",
+    additionalProperties: false,
+    required: ["prId", "runId", "org", "project", "repoId", "status"],
+    properties: {
+        prId: {
+            oneOf: [
+                { type: "integer", minimum: 1 },
+                { type: "string", pattern: "^[1-9][0-9]*$" },
+            ],
+        },
+        runId: { type: "string", minLength: 1 },
+        org: { type: "string" },
+        project: { type: "string" },
+        repoId: { type: "string" },
+        repo: { type: "string" },
+        title: { type: "string" },
+        status: { type: "string", enum: ["done", "error"] },
+        summary: { type: "string" },
+        story: { type: "string" },
+        error: { type: "string" },
+        findings: {
+            type: "array",
+            items: {
+                type: "object",
+                additionalProperties: false,
+                required: [
+                    "file",
+                    "line",
+                    "side",
+                    "severity",
+                    "comment",
+                    "technicalExplanation",
+                ],
+                properties: {
+                    file: { type: "string", minLength: 1 },
+                    line: { type: "integer", minimum: 1 },
+                    endLine: { type: ["integer", "null"], minimum: 1 },
+                    side: { type: "string", enum: ["left", "right"] },
+                    severity: {
+                        type: "string",
+                        enum: ["critical", "high", "medium", "low", "nit"],
+                    },
+                    title: { type: ["string", "null"] },
+                    comment: { type: "string", minLength: 1 },
+                    technicalExplanation: { type: "string", minLength: 1 },
+                },
+            },
+        },
+        semanticFindings: {
+            type: "array",
+            items: {
+                type: "object",
+                additionalProperties: false,
+                required: ["category", "severity", "title", "comment"],
+                properties: {
+                    category: {
+                        type: "string",
+                        enum: [
+                            "intent",
+                            "architecture",
+                            "behavior",
+                            "contract",
+                            "compatibility",
+                            "operability",
+                            "testing",
+                        ],
+                    },
+                    severity: {
+                        type: "string",
+                        enum: ["critical", "high", "medium", "low"],
+                    },
+                    title: { type: "string", minLength: 1 },
+                    comment: { type: "string", minLength: 1 },
+                    files: {
+                        type: "array",
+                        items: { type: "string", minLength: 1 },
+                    },
+                },
+            },
+        },
+    },
+} as const;
 
 type JsonRecord = Record<string, unknown>;
 
@@ -110,17 +206,17 @@ function parseSemanticFinding(value: unknown, index: number): SemanticFinding {
     };
 }
 
-/** Validate a child-session canvas action and persist its completed review. */
-export async function publishCanvasReview(
+/** Validate a reviewer session's `publish_review` call and persist its review. */
+export async function publishReview(
     input: unknown,
-    target: PrCanvasTarget,
+    target: ReviewPublishTarget,
     reviewerSessionId: string | null,
 ): Promise<{
     ok: true;
     prId: string;
     status: "done" | "error";
 }> {
-    const record = asRecord(input, "publishReview input");
+    const record = asRecord(input, "publish_review input");
     const rawPrId = record.prId;
     const prId =
         typeof rawPrId === "number" && Number.isSafeInteger(rawPrId) && rawPrId > 0
@@ -137,9 +233,10 @@ export async function publishCanvasReview(
         prId !== target.prId ||
         org !== target.org ||
         project !== target.project ||
-        repoId !== target.repoId
+        repoId !== target.repoId ||
+        (target.runId !== undefined && runId !== target.runId)
     ) {
-        throw new Error("publishReview input does not match this canvas target");
+        throw new Error("publish_review input does not match this review's PR");
     }
 
     const status = requiredString(record, "status");
@@ -180,8 +277,8 @@ export async function publishCanvasReview(
         findings,
         semanticFindings,
         error,
-        // Taken from the publishing extension process, not from `input`: the
-        // reviewing agent cannot forge or omit it.
+        // Taken from the tool invocation, not from `input`: the reviewing
+        // agent cannot forge or omit it.
         reviewerSessionId,
     });
     return { ok: true, prId, status };

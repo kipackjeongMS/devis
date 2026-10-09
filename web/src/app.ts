@@ -1,16 +1,17 @@
 // Entry module: boot sequence, PR loading, org filter, settings screen, and the
 // top-level event wiring. This is the only module with module-eval side effects
 // (the final boot() call), so import order stays free of runtime cycles.
-import { $, view, filterbar, orgFilter, projectFilter, assignFilter, el, renderError } from "./dom.js";
+import { $, view, filterbar, orgFilter, projectFilter, assignFilter, el, renderError, setPage } from "./dom.js";
 import { esc } from "./util.js";
 import { getJSON, postJSON, bindIdentity } from "./api.js";
 import { state, loadReviews } from "./state.js";
 import { toast } from "./toast.js";
 import { renderList } from "./list.js";
 import { openDetail } from "./detail.js";
-import { renderRollouts } from "./rollouts.js";
 import { initInbox } from "./inboxPanel.js";
 import { startInboxWatch, refreshInbox } from "./inboxWatch.js";
+import { initReadingPane, closePane } from "./readingPane.js";
+import { icon } from "./icons.js";
 import type { Assignment, PR } from "./types.js";
 
 interface CanvasPrTarget {
@@ -43,6 +44,11 @@ async function resolveCanvasTarget(target: CanvasPrTarget): Promise<PR> {
 
 // ---------- boot ----------
 async function boot(): Promise<void> {
+  // The desktop shell overlays the caption buttons (wco) and may paint Mica behind the page.
+  const shellKind = new URLSearchParams(window.location.search).get("shell");
+  if (shellKind) document.documentElement.classList.add("wco");
+  if (shellKind === "mica") document.documentElement.classList.add("mica");
+  initReadingPane();
   await bindIdentity();
   let target: CanvasPrTarget | null;
   try {
@@ -76,6 +82,7 @@ async function boot(): Promise<void> {
 }
 
 async function loadPRs(refreshActivity = false, stopPolling = true): Promise<void> {
+  setPage("queue");
   view.innerHTML = '<div class="loading"><span class="spinner"></span> Loading pull requests…</div>';
   try {
     const [res] = await Promise.all([
@@ -86,14 +93,37 @@ async function loadPRs(refreshActivity = false, stopPolling = true): Promise<voi
     if (res.errors && res.errors.length) toast(res.errors[0], "err");
     setupFilters();
     renderList(stopPolling);
+    if (res.activityPending > 0) void loadCommentActivity();
   } catch (e: any) {
     renderError("Failed to load PRs: " + e.message);
   }
 }
 
+// Phase 2 of the PR list: the server checks uncached "I commented" flags in the
+// background; merge the settled result in without blocking the first paint.
+async function loadCommentActivity(): Promise<void> {
+  try {
+    const res = await getJSON("/api/pr-activity");
+    const commented = new Set(
+      (res.commented || []).map((r: any) => JSON.stringify([r.org, r.project, r.repoId, String(r.prId)]))
+    );
+    let changed = false;
+    for (const pr of state.prs) {
+      if (!pr.iCommented && commented.has(JSON.stringify([pr.org, pr.project, pr.repoId, String(pr.id)]))) {
+        pr.iCommented = true;
+        changed = true;
+      }
+    }
+    if (res.errors && res.errors.length) toast(res.errors[0], "err");
+    if (changed && !filterbar.hidden) renderList(false);
+  } catch (e) {
+    toast("Could not load comment activity: " + (e as Error).message, "err");
+  }
+}
+
 // ---------- filters ----------
 function setupFilters(): void {
-  filterbar.hidden = currentView !== "prs";
+  filterbar.hidden = false;
   populateOrgFilter();
   populateProjectFilter();
   updateAssignment();
@@ -132,8 +162,8 @@ function populateProjectFilter(): void {
   projectFilter.disabled = projects.length === 0;
 }
 
-// Refresh the Me / Not me / All segmented control counts + active state within
-// the current org+project scope.
+// Refresh the Me / Not me / All queue switch counts + pressed state within the
+// current org+project scope.
 function updateAssignment(): void {
   let scoped = state.org === "all" ? state.prs : state.prs.filter((p) => p.org === state.org);
   if (state.project !== "all") scoped = scoped.filter((p) => p.project === state.project);
@@ -144,26 +174,38 @@ function updateAssignment(): void {
     const label = key === "mine" ? "Me" : key === "notmine" ? "Not me" : "All";
     btn.innerHTML = `${label}<span class="seg-n">${counts[key]}</span>`;
     btn.classList.toggle("active", state.assignment === key);
+    btn.setAttribute("aria-pressed", String(state.assignment === key));
   }
+}
+
+// Return from settings to the queue (only meaningful once an org is configured).
+function showQueue(): void {
+  if (!(state.config.organizations || []).length) return;
+  setPage("queue");
+  filterbar.hidden = false;
+  renderList();
 }
 
 // ---------- settings ----------
 function renderSettings(): void {
+  closePane();
+  setPage("settings");
   filterbar.hidden = true;
   view.innerHTML = "";
   const wrap = el(`<div class="settings"></div>`);
   wrap.appendChild(
     el(
-      `<div class="settings-heading">
-         <h1>Review Console settings</h1>
-         <p>Configure the Azure DevOps scopes and review defaults used by this workspace.</p>
-       </div>`
+      `<header class="settings-heading">
+         <h1>Settings</h1>
+         <p>Azure DevOps scopes and review defaults for this machine.</p>
+       </header>`
     )
   );
-  wrap.appendChild(el(`<h2>Organizations &amp; projects</h2>`));
-  wrap.appendChild(
+  const scopes = el(`<section class="settings-group" aria-labelledby="settingsScopes"></section>`);
+  scopes.appendChild(el(`<h2 id="settingsScopes">Organizations &amp; projects</h2>`));
+  scopes.appendChild(
     el(
-      `<div class="desc">Azure DevOps organizations to pull PRs from. Add <b>projects</b> under an org to load <b>all active PRs</b> in those projects; leave projects empty to load only PRs where you're a reviewer. Auth uses your local <code>az</code> login.</div>`
+      `<div class="desc">Add <b>projects</b> under an org to load <b>all active PRs</b> in those projects; leave projects empty to load only PRs where you're a reviewer. Auth uses your local <code>az</code> login.</div>`
     )
   );
 
@@ -179,7 +221,9 @@ function renderSettings(): void {
     orgs.forEach((o, i) => {
       const card = el(`<div class="org-card"></div>`);
       const head = el(`<div class="org-row"><span class="name">${esc(o)}</span></div>`);
-      const rm = el(`<button class="remove-btn" title="Remove org">✕</button>`);
+      const rm = el(
+        `<button type="button" class="remove-btn" title="Remove organization" aria-label="Remove organization ${esc(o)}">${icon("dismiss")}</button>`
+      );
       rm.addEventListener("click", () => {
         orgs.splice(i, 1);
         delete projects[o];
@@ -194,7 +238,9 @@ function renderSettings(): void {
       if (!list.length) chips.appendChild(el(`<span class="proj-empty">Assigned-to-me only</span>`));
       list.forEach((proj, j) => {
         const chip = el(`<span class="proj-chip">${esc(proj)}</span>`);
-        const x = el(`<button class="chip-x" title="Remove project">✕</button>`);
+        const x = el(
+          `<button type="button" class="chip-x" title="Remove project" aria-label="Remove project ${esc(proj)}">${icon("dismiss")}</button>`
+        );
         x.addEventListener("click", () => {
           list.splice(j, 1);
           paint();
@@ -205,7 +251,7 @@ function renderSettings(): void {
       projWrap.appendChild(chips);
 
       const addRow = el(
-        `<div class="proj-add"><input type="text" placeholder="Add project (e.g. Azure AppConfig)" /><button class="btn sm">Add</button></div>`
+        `<div class="proj-add"><input type="text" placeholder="Add project (e.g. Azure AppConfig)" aria-label="Add project to ${esc(o)}" /><button type="button" class="btn sm">Add</button></div>`
       );
       const pin = addRow.querySelector("input") as HTMLInputElement;
       const pbtn = addRow.querySelector("button") as HTMLButtonElement;
@@ -228,12 +274,12 @@ function renderSettings(): void {
     });
   }
   paint();
-  wrap.appendChild(listEl);
+  scopes.appendChild(listEl);
 
   const add = el(
     `<div class="org-add">
-       <input type="text" placeholder="Add organization (e.g. msazure)" />
-       <button class="btn">Add org</button>
+       <input type="text" placeholder="Add organization (e.g. msazure)" aria-label="Add organization" />
+       <button type="button" class="btn">Add org</button>
      </div>`
   );
   const input = add.querySelector("input") as HTMLInputElement;
@@ -252,63 +298,94 @@ function renderSettings(): void {
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter") doAdd();
   });
-  wrap.appendChild(add);
+  scopes.appendChild(add);
+  wrap.appendChild(scopes);
+
+  const review = el(`<section class="settings-group" aria-labelledby="settingsReview"></section>`);
+  review.appendChild(el(`<h2 id="settingsReview">Copilot review</h2>`));
+  wrap.appendChild(review);
 
   // ---- PR review model selector ----
   let selectedModel = state.config.reviewModel || "";
-  wrap.appendChild(el(`<h2 class="settings-section-title">PR review model</h2>`));
-  wrap.appendChild(
-    el(
-      `<div class="desc">AI model used for background PR reviews. <b>Auto</b> lets Copilot pick. Models are discovered from the Copilot CLI.</div>`
-    )
+  const modelCard = settingsCard(
+    "sparkle",
+    "PR review model",
+    "Used for background PR reviews. Auto lets Copilot pick. Discovered live from the Copilot CLI.",
+    "settingsModel"
   );
-  const modelRow = el(`<div class="org-add"></div>`);
-  const modelSelect = el(`<select class="filter-select settings-model-select"></select>`) as HTMLSelectElement;
-  modelSelect.innerHTML = `<option value="">Auto (let Copilot pick)</option>`;
-  modelSelect.value = "";
+  const modelRow = modelCard.querySelector<HTMLElement>(".settings-card-control")!;
+  const modelSelect = el(
+    `<select class="filter-select settings-model-select" aria-labelledby="settingsModel"></select>`
+  ) as HTMLSelectElement;
+  modelSelect.innerHTML = `<option value="">Loading available Copilot models…</option>`;
+  modelSelect.disabled = true;
   modelRow.appendChild(modelSelect);
-  const refreshModels = el(`<button class="btn sm" title="Re-probe models from CLI">⟳</button>`) as HTMLButtonElement;
+  const refreshModels = el(
+    `<button type="button" class="icon-btn" title="Refresh models from Copilot" aria-label="Refresh available Copilot models">${icon("sync")}</button>`
+  ) as HTMLButtonElement;
   modelRow.appendChild(refreshModels);
-  wrap.appendChild(modelRow);
+  review.appendChild(modelCard);
+  const modelStatus = el(`<div class="settings-model-status" role="status" hidden></div>`);
+  review.appendChild(modelStatus);
 
-  // Populate models async (non-blocking)
+  // Populate from the same live SDK catalog that backs Copilot's model picker.
   const loadModels = async (refresh = false): Promise<void> => {
+    modelSelect.disabled = true;
+    refreshModels.disabled = true;
+    refreshModels.setAttribute("aria-busy", "true");
+    modelStatus.hidden = true;
     try {
       const { models } = await getJSON(`/api/models${refresh ? "?refresh=1" : ""}`);
+      if (!Array.isArray(models) || !models.length) throw new Error("Copilot returned no available models");
+      const unavailableSelection = selectedModel && !models.includes(selectedModel);
+      if (unavailableSelection) selectedModel = "";
       const opts = `<option value="">Auto (let Copilot pick)</option>` +
         (models as string[]).map((m: string) => `<option value="${esc(m)}">${esc(m)}</option>`).join("");
       modelSelect.innerHTML = opts;
       modelSelect.value = selectedModel;
-    } catch { /* leave auto-only if probe fails */ }
+      if (unavailableSelection) {
+        modelStatus.textContent = "The previously selected model is no longer available. Auto will be used.";
+        modelStatus.classList.add("warn");
+        modelStatus.hidden = false;
+      }
+    } catch (error) {
+      selectedModel = "";
+      modelSelect.innerHTML = `<option value="">Auto (model catalog unavailable)</option>`;
+      modelSelect.value = "";
+      modelStatus.textContent = `Could not load Copilot models: ${(error as Error).message}`;
+      modelStatus.classList.add("warn");
+      modelStatus.hidden = false;
+    } finally {
+      modelSelect.disabled = false;
+      refreshModels.disabled = false;
+      refreshModels.removeAttribute("aria-busy");
+    }
   };
-  loadModels();
+  void loadModels();
   modelSelect.addEventListener("change", () => { selectedModel = modelSelect.value; });
-  refreshModels.addEventListener("click", () => {
-    refreshModels.disabled = true;
-    loadModels(true).finally(() => { refreshModels.disabled = false; });
-  });
+  refreshModels.addEventListener("click", () => { void loadModels(true); });
 
   // ---- Reviews markdown folder ----
   let reviewsDir = state.config.reviewsDir || "";
-  wrap.appendChild(el(`<h2 class="settings-section-title">Reviews folder</h2>`));
-  wrap.appendChild(
-    el(
-      `<div class="desc">Optional. Completed reviews are also saved as Markdown at <code>&lt;folder&gt;/&lt;RepoName&gt;/&lt;prId&gt;-&lt;title&gt;.md</code> — handy for an Obsidian vault. Leave empty to disable. The app's SQLite store stays the source of truth either way.</div>`
-    )
+  const dirCard = settingsCard(
+    "folder",
+    "Reviews folder",
+    "Optional. Completed reviews are also saved as Markdown at <code>&lt;folder&gt;/&lt;RepoName&gt;/&lt;prId&gt;-&lt;title&gt;.md</code>, handy for an Obsidian vault. Leave empty to disable; the app's SQLite store stays the source of truth.",
+    "settingsFolder",
+    true
   );
-  const dirRow = el(`<div class="org-add"></div>`);
   const dirInput = el(
-    `<input type="text" class="settings-folder-input" placeholder="e.g. C:\\Users\\you\\OneDrive\\PRReviews" />`
+    `<input type="text" class="settings-folder-input" aria-labelledby="settingsFolder" placeholder="e.g. C:\\Users\\you\\OneDrive\\PRReviews" />`
   ) as HTMLInputElement;
   dirInput.value = reviewsDir;
   dirInput.addEventListener("input", () => {
     reviewsDir = dirInput.value;
   });
-  dirRow.appendChild(dirInput);
-  wrap.appendChild(dirRow);
+  dirCard.querySelector<HTMLElement>(".settings-card-control")!.appendChild(dirInput);
+  review.appendChild(dirCard);
 
-  const actions = el(`<div class="org-add settings-actions"></div>`);
-  const save = el(`<button class="btn">Save</button>`) as HTMLButtonElement;
+  const actions = el(`<div class="settings-actions"></div>`);
+  const save = el(`<button type="button" class="btn accent">Save</button>`) as HTMLButtonElement;
   save.addEventListener("click", async () => {
     save.disabled = true;
     try {
@@ -322,56 +399,42 @@ function renderSettings(): void {
       save.disabled = false;
     }
   });
-  const cancel = el(`<button class="btn ghost">Cancel</button>`);
-  cancel.addEventListener("click", () => {
-    if ((state.config.organizations || []).length) {
-      filterbar.hidden = currentView !== "prs";
-      renderList();
-    }
-  });
+  const cancel = el(`<button type="button" class="btn ghost">Cancel</button>`) as HTMLButtonElement;
+  cancel.disabled = !(state.config.organizations || []).length;
+  cancel.addEventListener("click", showQueue);
   actions.appendChild(cancel);
   actions.appendChild(save);
   wrap.appendChild(actions);
 
   view.appendChild(wrap);
+  view.scrollTop = 0;
 }
 
-// ---------- top-level view switch (Pull requests <-> Rollouts) ----------
-type ViewName = "prs" | "rollouts";
-let currentView: ViewName = "prs";
-
-function setView(v: ViewName): void {
-  currentView = v;
-  for (const btn of document.querySelectorAll<HTMLButtonElement>(".nav-btn")) {
-    btn.classList.toggle("active", btn.dataset.view === v);
-  }
-  const settingsBtn = $("#btnSettings") as HTMLButtonElement;
-  if (v === "rollouts") {
-    filterbar.hidden = true;
-    settingsBtn.style.display = "none";
-    renderRollouts();
-  } else {
-    settingsBtn.style.display = "";
-    if ((state.config.organizations || []).length) {
-      filterbar.hidden = false;
-      renderList();
-    } else {
-      renderSettings();
-    }
-  }
+// A Windows Settings-style card: icon, title + description, and a control slot
+// (beside the text, or below it when `stacked` for wide inputs).
+function settingsCard(
+  name: Parameters<typeof icon>[0],
+  title: string,
+  descHtml: string,
+  titleId: string,
+  stacked = false
+): HTMLElement {
+  return el(
+    `<div class="settings-card${stacked ? " stacked" : ""}">` +
+      `<span class="settings-card-icon" aria-hidden="true">${icon(name)}</span>` +
+      `<div class="settings-card-text"><h3 id="${titleId}">${esc(title)}</h3><p>${descHtml}</p></div>` +
+      `<div class="settings-card-control"></div>` +
+      `</div>`
+  );
 }
 
 // ---------- events ----------
 $("#btnSettings").addEventListener("click", renderSettings);
 $("#btnRefresh").addEventListener("click", () => {
   void refreshInbox();
-  if (currentView === "rollouts") return void renderRollouts();
   if ((state.config.organizations || []).length) loadPRs(true);
   else boot();
 });
-for (const btn of document.querySelectorAll<HTMLButtonElement>(".nav-btn")) {
-  btn.addEventListener("click", () => setView((btn.dataset.view as ViewName) || "prs"));
-}
 orgFilter.addEventListener("change", () => {
   state.org = orgFilter.value;
   state.project = "all";
@@ -392,7 +455,11 @@ assignFilter.addEventListener("click", (e) => {
   renderList();
 });
 window.addEventListener("ado-pr-updated", () => {
-  if (currentView === "prs") renderList(false);
+  if (document.body.dataset.page !== "settings") renderList(false);
+});
+// Opening a PR (e.g. from the inbox) while on settings returns to the queue.
+window.addEventListener("ado-pr-open", (e) => {
+  if ((e as CustomEvent).detail && document.body.dataset.page === "settings") showQueue();
 });
 
 boot();

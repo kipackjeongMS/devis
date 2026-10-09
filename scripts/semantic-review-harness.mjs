@@ -23,7 +23,7 @@ legacyDb.close();
 let store;
 try {
     store = await import("../store.mjs");
-    const { publishCanvasReview } = await import("../canvas-review.mjs");
+    const { publishReview } = await import("../review-publish.mjs");
     const { buildReviewTask } = await import("../review-task.mjs");
     const { renderMarkdown } = await import("../reviews-md.mjs");
     await store.ensureDb();
@@ -33,7 +33,7 @@ try {
     store.upsertReview({ ...target, repo: "repo-a", status: "running", runId: "run-1" });
     store.upsertReview({ ...otherTarget, repo: "repo-b", status: "done", findings: [] });
 
-    await publishCanvasReview(
+    await publishReview(
         {
             ...target,
             repo: "repo-a",
@@ -80,7 +80,8 @@ try {
     assert.equal(semanticFindings.length, 1);
     assert.equal(semanticFindings[0].id, "s0");
     assert.equal(semanticFindings[0].posted, false);
-    assert.deepEqual(semanticFindings[0].files, ["src/store.mts", "src/api.mts"]);
+    // Files are stored in ADO's canonical leading-slash form so they match diff paths.
+    assert.deepEqual(semanticFindings[0].files, ["/src/store.mts", "/src/api.mts"]);
 
     const humanized = store.setSemanticFindingHumanizedComment(
         target,
@@ -106,7 +107,6 @@ try {
     const prompt = buildReviewTask({
         prId: "42",
         prContext: "# PR context",
-        canvasInstanceId: "canvas-1",
         org: "org",
         project: "project",
         repo: "repo-a",
@@ -123,10 +123,23 @@ try {
     assert.match(prompt, /plain English/i);
     assert.match(prompt, /technicalExplanation/);
     assert.match(prompt, /in-depth technical explanation/i);
+    assert.match(prompt, /`publish_review` tool/);
+    assert.doesNotMatch(prompt, /invoke_canvas_action|canvas/i);
 
     await assert.rejects(
         () =>
-            publishCanvasReview(
+            publishReview(
+                { ...target, runId: "run-other", status: "error", error: "x" },
+                { ...target, runId: "run-1" },
+                "reviewer-session",
+            ),
+        /does not match this review's PR/,
+        "a session may only publish the run it was started for",
+    );
+
+    await assert.rejects(
+        () =>
+            publishReview(
                 {
                     ...target,
                     runId: "run-1",
@@ -153,7 +166,7 @@ try {
 
     await assert.rejects(
         () =>
-            publishCanvasReview(
+            publishReview(
                 {
                     ...target,
                     runId: "run-1",

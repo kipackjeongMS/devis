@@ -1,22 +1,25 @@
-// JSON API router. Kept pure of transport concerns: extension.mts wires this into
-// the loopback server and injects the live session via setSession().
+// JSON API router. Kept pure of transport concerns: server.mts wires this into
+// the loopback server.
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { SessionRef } from "@github/copilot-sdk/extension";
-import { sendJson, readBody } from "./http.mjs";
+import { sendJson, sendBuffer, readBody } from "./http.mjs";
 import { readConfig, writeConfig } from "./config.mjs";
-import { ensureDb, getReview, getReviewAutomationProvenance, listReviews, listActiveReviewJobs, upsertReview, publishReviewRun, expireStaleReviews, markFindingPosted, markSemanticFindingPosted, setFindingHumanizedComment, setSemanticFindingHumanizedComment, setDismissed, listPlateDismissals, setPlateDismissed, listNotifications, unreadCount, markNotificationsRead, markAllNotificationsRead, reviewIdentityKey, legacyReviewKey, type ReviewIdentity } from "./store.mjs";
+import { ensureDb, getReview, listReviews, listActiveReviewJobs, upsertReview, publishReviewRun, expireStaleReviews, markFindingPosted, markSemanticFindingPosted, setFindingHumanizedComment, setSemanticFindingHumanizedComment, setDismissed, listPlateDismissals, setPlateDismissed, listNotifications, unreadCount, markNotificationsRead, markAllNotificationsRead, reviewIdentityKey, legacyReviewKey, pruneCommentActivity, type ReviewIdentity } from "./store.mjs";
+import { commentActivity } from "./comment-activity.mjs";
 import type { Finding, SemanticFinding } from "./store.mjs";
 import { writeReviewMarkdown } from "./reviews-md.mjs";
 import { scanInbox, recordWatchFromAdoWrite } from "./inbox.mjs";
 import { rephraseComment, buildRephrasePrompt, cleanRephrase } from "./rephrase.mjs";
-import { runInReviewerSession, asReviewerSessionId } from "./reviewer-session.mjs";
-import { queueReviewJobs, setReviewDispatchSession } from "./review-dispatch.mjs";
-import { queueReviewTargets } from "./review-task.mjs";
 import {
-    getTeamsReviewIntakeState,
-    ingestTeamsReviewRequests,
-} from "./teams-review-intake.mjs";
+    asReviewerSessionId,
+    getReviewerChat,
+    reviewerSessionExists,
+    openReviewerTerminal,
+    runInReviewerSession,
+    sendReviewerChat,
+} from "./reviewer-session.mjs";
+import { runOneShot } from "./copilot-runtime.mjs";
+import { queueReviewTargets } from "./review-task.mjs";
 import {
     listAssignedPRs,
     listActivePRs,
@@ -26,36 +29,29 @@ import {
     postReply,
     createThread,
     createGeneralThread,
+    updateThreadStatus,
+    setMyVote,
+    updatePrLifecycle,
     type Pr,
 } from "./ado.mjs";
+import { parseThreadStatus, parseVote, parseLifecycleAction, parseCompletionOptions } from "./pr-actions.mjs";
 import { parsePrCanvasTarget } from "./canvas-target.mjs";
-import { getServiceGroupRollouts, getRolloutGrid } from "./ev2.mjs";
 import { getAvailableModels } from "./models.mjs";
+import {
+    getPrDescriptionImage,
+    PrDescriptionImageError,
+} from "./pr-description-image.mjs";
 
-// The active CLI session, injected after joinSession resolves. The bridge
-// endpoint pushes prompts through it.
-let sessionRef: SessionRef | null = null;
-
-export function setSession(s: SessionRef | null): void {
-    sessionRef = s;
-    setReviewDispatchSession(s);
-}
-
-// Identifies this server's process instance. The loopback server binds an
-// ephemeral port fresh on every extension (re)start, but a webview panel
-// caches the URL from whenever it was opened. If the extension process gets
-// reloaded, old panels are left pointing at a dead/stale port. Rather than
-// let that surface as a confusing raw 404 ("no such endpoint") or network
-// error, the webview pings this route at boot and again on failures to tell
-// "genuine app error" apart from "I'm talking to a server instance that no
-// longer matches the one I loaded against" — see web/src/api.ts.
+// Identifies this server's process instance. The webview pings this route at
+// boot and again on failures to tell "genuine app error" apart from "I'm
+// talking to a server instance that no longer matches the one I loaded
+// against" — see web/src/api.ts.
 const STARTED_AT = Date.now();
 
 // ---- "Ask Copilot about this selection" round-trip -------------------------
-// session.send() is fire-and-forget (the model answers in the chat), so to show
-// the answer back in the canvas modal we register a pending ask, tell the agent
-// to POST its answer to /api/ask-result, and let the modal poll for it. Asks are
-// ephemeral (one session, in-process) — an in-memory map is enough; no DB.
+// An ask runs in a headless session in the background; the modal polls
+// /api/ask-result until the answer lands. Asks are ephemeral (in-process), so
+// an in-memory map is enough; no DB.
 interface AskEntry {
     status: "pending" | "done" | "error";
     answer?: string;
@@ -74,8 +70,8 @@ function pruneAsks(): void {
 // Follow-ups (Elaborate, rephrase-before-post) are answered by the Copilot
 // session that actually produced the PR's review, so they inherit its context.
 // The client names only the PR; the session id is looked up here from the row
-// this extension stamped at publish time. That way nothing on the loopback port
-// can steer a `copilot --resume` run into a session of its choosing.
+// stamped at publish time. That way nothing on the loopback port can steer a
+// follow-up into a session of its choosing.
 function asReviewIdentity(value: Record<string, unknown>): ReviewIdentity {
     return {
         prId: value.prId == null ? "" : String(value.prId),
@@ -85,14 +81,45 @@ function asReviewIdentity(value: Record<string, unknown>): ReviewIdentity {
     };
 }
 
+const COMMENT_ACTIVITY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+// Best-effort: the ADO write (or read) already succeeded, so never fail the request.
+async function noteCommentActivity(value: Record<string, unknown>, commented: boolean): Promise<void> {
+    const ref = {
+        org: String(value.org ?? ""),
+        project: String(value.project ?? ""),
+        repoId: String(value.repoId ?? ""),
+        prId: String(value.prId ?? ""),
+    };
+    if (!ref.org || !ref.project || !ref.repoId || !ref.prId) return;
+    try {
+        await ensureDb();
+        await commentActivity.record(ref, commented);
+    } catch (e) {
+        console.error(`[comment-activity] record failed: ${(e as Error).message}`);
+    }
+}
+
 async function reviewerSessionFor(identity: ReviewIdentity): Promise<string | null> {
     if (String(identity.prId).trim() === "") return null;
     try {
         await ensureDb();
-        return asReviewerSessionId(getReview(identity)?.reviewer_session_id);
+        return await availableReviewerSession(getReview(identity)?.reviewer_session_id);
     } catch (e) {
         console.error(`[reviewer-session] lookup failed: ${(e as Error).message}`);
         return null;
+    }
+}
+
+/** The recorded reviewer session, or null when it is invalid or the CLI deleted it. */
+async function availableReviewerSession(value: unknown): Promise<string | null> {
+    const sessionId = asReviewerSessionId(value);
+    if (!sessionId) return null;
+    try {
+        return (await reviewerSessionExists(sessionId)) ? sessionId : null;
+    } catch {
+        // The CLI is unreachable; let the follow-up surface that error.
+        return sessionId;
     }
 }
 
@@ -118,8 +145,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
 
         // ---- available AI models for PR review ----
         if (p === "/api/models" && req.method === "GET") {
-            const refresh = q.get("refresh") === "1";
-            return sendJson(res, 200, { models: await getAvailableModels(refresh) });
+            return sendJson(res, 200, { models: await getAvailableModels() });
         }
 
         // ---- active PRs across all configured (org, project) scopes ----
@@ -139,11 +165,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
                         tasks.push(
                             (async () => {
                                 try {
-                                    const found = await listActivePRs(org, project, refreshActivity);
+                                    const found = await listActivePRs(org, project);
                                     prs.push(...found);
-                                    for (const pr of found) {
-                                        if (pr.activityError) errors.push(`${org}/${project}: ${pr.activityError}`);
-                                    }
                                 } catch (e) {
                                     errors.push(`${org}/${project}: ${(e as Error).message}`);
                                 }
@@ -154,11 +177,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
                     tasks.push(
                         (async () => {
                             try {
-                                const found = await listAssignedPRs(org, refreshActivity);
+                                const found = await listAssignedPRs(org);
                                 prs.push(...found);
-                                for (const pr of found) {
-                                    if (pr.activityError) errors.push(`${org}: ${pr.activityError}`);
-                                }
                             } catch (e) {
                                 errors.push(`${org}: ${(e as Error).message}`);
                             }
@@ -176,7 +196,18 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
                     dismissed.has(legacyReviewKey(pr.id));
             }
             prs.sort((a, b) => new Date(b.created).getTime() - new Date(a.created).getTime());
-            return sendJson(res, 200, { prs, errors });
+            pruneCommentActivity(Date.now() - COMMENT_ACTIVITY_RETENTION_MS);
+            // Phase 1: cached "I commented" values only; stale PRs are checked in the
+            // background and the client collects them from /api/pr-activity.
+            const activityPending = await commentActivity.apply(prs, refreshActivity);
+            return sendJson(res, 200, { prs, errors, activityPending });
+        }
+
+        // ---- phase 2 of /api/prs: settled "I commented" activity ----
+        if (p === "/api/pr-activity" && req.method === "GET") {
+            const cfg = await readConfig();
+            await ensureDb();
+            return sendJson(res, 200, await commentActivity.settle(cfg.organizations));
         }
 
         // ---- resolve one PR summary for a canvas deep-link ----
@@ -211,7 +242,36 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
             const detail = await getPrDetail(
                 q.get("org")!, q.get("project")!, q.get("repoId")!, q.get("id")!,
             );
+            // Threads were fetched only when the PR has an iteration.
+            if (detail.commits?.iteration != null) {
+                await noteCommentActivity(
+                    { org: q.get("org"), project: q.get("project"), repoId: q.get("repoId"), prId: q.get("id") },
+                    detail.iCommented,
+                );
+            }
             return sendJson(res, 200, detail);
+        }
+
+        // ---- authenticated images embedded in PR descriptions ----
+        if (p === "/api/pr-description-image" && req.method === "GET") {
+            const org = q.get("org") || "";
+            const source = q.get("url") || "";
+            if (!org.trim() || !source.trim()) {
+                return sendJson(res, 400, { error: "org and url are required" });
+            }
+            try {
+                const image = await getPrDescriptionImage(org, source);
+                return sendBuffer(res, 200, image.body, image.contentType, {
+                    "Cache-Control": "private, max-age=300",
+                    "Cross-Origin-Resource-Policy": "same-origin",
+                    "X-Content-Type-Options": "nosniff",
+                });
+            } catch (error) {
+                if (error instanceof PrDescriptionImageError) {
+                    return sendJson(res, error.status, { error: error.message });
+                }
+                throw error;
+            }
         }
 
         // ---- lazy per-file diff ----
@@ -236,6 +296,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
                 org: b.org, project: b.project, repoId: b.repoId, prId: b.prId, threadId: b.threadId,
                 commentId: created?.id, publishedAt: created?.publishedDate ?? null,
             });
+            await noteCommentActivity(b, true);
             return sendJson(res, 200, created);
         }
 
@@ -250,88 +311,117 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
                 org: b.org, project: b.project, repoId: b.repoId, prId: b.prId, threadId: created.id,
                 commentId: created.comments?.[0]?.id, publishedAt: created.comments?.[0]?.published ?? null,
             });
+            await noteCommentActivity(b, true);
             return sendJson(res, 200, created);
         }
 
-        // ---- durable, bounded dispatch into independent app-managed sessions ----
-        if (p === "/api/review/queue" && req.method === "POST") {
-            return sendJson(res, 200, await queueReviewJobs(await readBody(req)));
+        // ---- PR/thread state changes (ADO writes — user-initiated from the PR detail) ----
+        if (p === "/api/thread-status" && req.method === "POST") {
+            const b = await readBody(req);
+            let status;
+            try {
+                status = parseThreadStatus(b.status);
+            } catch (e) {
+                return sendJson(res, 400, { error: (e as Error).message });
+            }
+            return sendJson(res, 200, await updateThreadStatus(b.org, b.project, b.repoId, b.prId, b.threadId, status));
         }
+        if (p === "/api/pr-vote" && req.method === "POST") {
+            const b = await readBody(req);
+            let vote;
+            try {
+                vote = parseVote(b.vote);
+            } catch (e) {
+                return sendJson(res, 400, { error: (e as Error).message });
+            }
+            return sendJson(res, 200, await setMyVote(b.org, b.project, b.repoId, b.prId, vote));
+        }
+        if (p === "/api/pr-lifecycle" && req.method === "POST") {
+            const b = await readBody(req);
+            let action;
+            try {
+                action = parseLifecycleAction(b.action);
+                if (action === "complete" || action === "autoComplete") parseCompletionOptions(b.options);
+            } catch (e) {
+                return sendJson(res, 400, { error: (e as Error).message });
+            }
+            return sendJson(res, 200, await updatePrLifecycle(b.org, b.project, b.repoId, b.prId, action, b.options));
+        }
+
+        // ---- durable, bounded review queue run by the desktop review runner ----
         if (p === "/api/review/queue-targets" && req.method === "POST") {
             return sendJson(res, 200, await queueReviewTargets(await readBody(req)));
         }
-        if (p === "/api/teams-review-intake/state" && req.method === "POST") {
-            return sendJson(res, 200, await getTeamsReviewIntakeState(await readBody(req)));
-        }
-        if (p === "/api/teams-review-intake/ingest" && req.method === "POST") {
-            const body = await readBody(req);
-            const canvasInstanceId =
-                typeof body.canvasInstanceId === "string" ? body.canvasInstanceId.trim() : "";
-            if (!canvasInstanceId) {
-                return sendJson(res, 400, { error: "canvasInstanceId required" });
-            }
-            const { canvasInstanceId: _canvasInstanceId, ...intake } = body;
-            return sendJson(
-                res,
-                200,
-                await ingestTeamsReviewRequests(intake, canvasInstanceId),
-            );
-        }
 
-        // ---- bridge a prompt into the Copilot CLI session ----
-        if (p === "/api/bridge" && req.method === "POST") {
+        // ---- chat with the session that reviewed a PR ----
+        if (p === "/api/reviewer-chat" && req.method === "GET") {
+            const identity = {
+                prId: q.get("prId") || "",
+                org: q.get("org"),
+                project: q.get("project"),
+                repoId: q.get("repoId"),
+            };
+            const sessionId = await reviewerSessionFor(identity);
+            if (!sessionId) return sendJson(res, 404, { error: "The Copilot session that reviewed this PR is no longer available." });
+            return sendJson(res, 200, await getReviewerChat(sessionId, identity));
+        }
+        if (p === "/api/reviewer-chat" && req.method === "POST") {
             const b = await readBody(req);
-            if (!b.prompt || !String(b.prompt).trim()) return sendJson(res, 400, { error: "empty prompt" });
-            if (!sessionRef || typeof sessionRef.send !== "function") {
-                return sendJson(res, 503, { error: "session not available" });
+            const text = typeof b.text === "string" ? b.text.trim() : "";
+            if (!text) return sendJson(res, 400, { error: "empty message" });
+            if (text.length > 20_000) return sendJson(res, 400, { error: "message is too long" });
+            const identity = asReviewIdentity(b);
+            const sessionId = await reviewerSessionFor(identity);
+            if (!sessionId) return sendJson(res, 404, { error: "The Copilot session that reviewed this PR is no longer available." });
+            sendReviewerChat(sessionId, identity, text);
+            return sendJson(res, 200, { ok: true });
+        }
+        if (p === "/api/reviewer-terminal" && req.method === "POST") {
+            const b = await readBody(req);
+            const identity = asReviewIdentity(b);
+            const sessionId = await reviewerSessionFor(identity);
+            if (!sessionId) return sendJson(res, 404, { error: "The Copilot session that reviewed this PR is no longer available." });
+            try {
+                await openReviewerTerminal(sessionId, `PR #${identity.prId} reviewer`);
+            } catch (e) {
+                return sendJson(res, 409, { error: (e as Error).message });
             }
-            await sessionRef.send({ prompt: String(b.prompt) });
             return sendJson(res, 200, { ok: true });
         }
 
-        // ---- "Ask Copilot" about a diff selection: register + send ----
-        // Two transports. When the PR has a recorded reviewer session and the
-        // caller supplied a prompt suitable for it, the prompt is resumed inside
-        // that session and its reply fills the ask entry directly. Otherwise it
-        // goes to the local chat session and the agent POSTs its answer back to
-        // /api/ask-result.
+        // ---- "Ask Copilot" about a diff selection ----
+        // When the PR has a recorded reviewer session and the caller supplied a
+        // prompt suitable for it, the prompt runs inside that session.
+        // Otherwise it runs in a throwaway session. Either way the reply fills
+        // the ask entry the modal polls.
         if (p === "/api/ask" && req.method === "POST") {
             const b = await readBody(req);
             const askId = b.askId != null ? String(b.askId).trim() : "";
             if (!askId) return sendJson(res, 400, { error: "askId required" });
             if (!b.prompt || !String(b.prompt).trim()) return sendJson(res, 400, { error: "empty prompt" });
             pruneAsks();
+            const identity = asReviewIdentity(b);
             const reviewerPrompt = b.reviewerPrompt != null ? String(b.reviewerPrompt).trim() : "";
-            const reviewerSessionId = reviewerPrompt ? await reviewerSessionFor(asReviewIdentity(b)) : null;
-            if (reviewerSessionId) {
-                asks.set(askId, { status: "pending", ts: Date.now() });
-                void runInReviewerSession({ sessionId: reviewerSessionId, prompt: reviewerPrompt })
-                    .then((answer) => asks.set(askId, { status: "done", answer, ts: Date.now() }))
-                    .catch((e: Error) =>
-                        asks.set(askId, { status: "error", error: e.message || "reviewer session failed", ts: Date.now() }),
-                    );
-                return sendJson(res, 200, { ok: true, via: "reviewer-session" });
-            }
-            if (!sessionRef || typeof sessionRef.send !== "function") {
-                return sendJson(res, 503, { error: "session not available" });
-            }
+            const reviewerSessionId = reviewerPrompt ? await reviewerSessionFor(identity) : null;
+            const answer = reviewerSessionId
+                ? runInReviewerSession({ ...identity, sessionId: reviewerSessionId, prompt: reviewerPrompt })
+                : runOneShot(String(b.prompt), {
+                      // Only inline code selections: a file attachment would let
+                      // the caller pull arbitrary local files into the prompt.
+                      attachments: Array.isArray(b.attachments)
+                          ? b.attachments.filter(
+                                (a: unknown) =>
+                                    !!a && typeof a === "object" && (a as { type?: unknown }).type === "selection",
+                            )
+                          : undefined,
+                  });
             asks.set(askId, { status: "pending", ts: Date.now() });
-            await sessionRef.send({
-                prompt: String(b.prompt),
-                attachments: Array.isArray(b.attachments) ? b.attachments : undefined,
-            });
-            return sendJson(res, 200, { ok: true, via: "session" });
-        }
-        // The agent POSTs its answer here; the modal reads it back.
-        if (p === "/api/ask-result" && req.method === "POST") {
-            const b = await readBody(req);
-            const askId = b.askId != null ? String(b.askId).trim() : "";
-            if (!askId) return sendJson(res, 400, { error: "askId required" });
-            const entry: AskEntry = b.error
-                ? { status: "error", error: String(b.error), ts: Date.now() }
-                : { status: "done", answer: String(b.answer ?? ""), ts: Date.now() };
-            asks.set(askId, entry);
-            return sendJson(res, 200, { ok: true });
+            void answer
+                .then((text) => asks.set(askId, { status: "done", answer: text, ts: Date.now() }))
+                .catch((e: Error) =>
+                    asks.set(askId, { status: "error", error: e.message || "Copilot did not answer", ts: Date.now() }),
+                );
+            return sendJson(res, 200, { ok: true, via: reviewerSessionId ? "reviewer-session" : "fresh" });
         }
         // The modal polls this until the answer (or error) arrives.
         if (p === "/api/ask-result" && req.method === "GET") {
@@ -358,10 +448,10 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
             ) {
                 return sendJson(res, 409, { error: "stale review run" });
             }
-            // reviewer_session_id is stamped from this extension's own session on
-            // the canvas-action publish path. Accepting it over HTTP would let the
-            // reviewing agent — or anything else that reaches the loopback port —
-            // pick which session later follow-ups resume into, so drop it here.
+            // reviewer_session_id is stamped only by the publish_review tool,
+            // from the tool invocation itself. Accepting it over HTTP would let
+            // anything that reaches the loopback port pick which session later
+            // follow-ups resume into, so drop it here.
             const { reviewerSessionId: _clientSuppliedSession, ...safe } = b;
             const merged =
                 (status === "done" || status === "error") && b.runId
@@ -387,14 +477,17 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
         if (p === "/api/review-result" && req.method === "GET") {
             await ensureDb();
             expireStaleReviews();
-            return sendJson(res, 200, {
-                review: shapeReview(getReview({
-                    prId: q.get("prId") || "",
-                    org: q.get("org"),
-                    project: q.get("project"),
-                    repoId: q.get("repoId"),
-                })),
-            });
+            const review = shapeReview(getReview({
+                prId: q.get("prId") || "",
+                org: q.get("org"),
+                project: q.get("project"),
+                repoId: q.get("repoId"),
+            }));
+            // Hide follow-up affordances (chat, terminal) for a deleted session.
+            if (review?.reviewer_session_id) {
+                review.reviewer_session_id = await availableReviewerSession(review.reviewer_session_id);
+            }
+            return sendJson(res, 200, { review });
         }
         // All stored reviews (compact — for list badges).
         if (p === "/api/review-results" && req.method === "GET") {
@@ -434,6 +527,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
             if (b.findingId != null) {
                 markFindingPosted(asReviewIdentity(b), String(b.findingId));
             }
+            await noteCommentActivity(b, true);
             return sendJson(res, 200, created);
         }
 
@@ -465,14 +559,14 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
                 commentId: created.comments?.[0]?.id,
                 publishedAt: created.comments?.[0]?.published ?? null,
             });
+            await noteCommentActivity(b, true);
             return sendJson(res, 200, created);
         }
 
         // ---- optionally rephrase a staged finding before posting ----
         // Preferred: resume the session that produced the review, so the rewrite
         // knows why the comment was written. Otherwise (legacy reviews, or that
-        // session is gone) fall back to a throwaway headless `copilot -p`.
-        // Neither path creates a visible chat session.
+        // session is gone) fall back to a throwaway headless session.
         if (p === "/api/rephrase" && req.method === "POST") {
             const b = await readBody(req);
             if (!b.comment || !String(b.comment).trim()) return sendJson(res, 400, { error: "empty comment" });
@@ -503,6 +597,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
                 let text = "";
                 try {
                     const reply = await runInReviewerSession({
+                        ...identity,
                         sessionId: reviewerSessionId,
                         prompt: buildRephrasePrompt(input),
                     });
@@ -535,18 +630,6 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
             return sendJson(res, 200, { unread: unreadCount() });
         }
 
-        // ---- Ev2 rollouts: all service groups, status-enriched summaries ----
-        // Lightweight "Release Dashboard" — auth via the same az login as ADO.
-        if (p === "/api/ev2/rollouts" && req.method === "GET") {
-            return sendJson(res, 200, await getServiceGroupRollouts());
-        }
-
-        // ---- Ev2 rollout: lazy per-rollout stage/region grid (heavy embed detail) ----
-        if (p === "/api/ev2/rollout" && req.method === "GET") {
-            const grid = await getRolloutGrid(q.get("serviceGroup")!, q.get("id")!);
-            return sendJson(res, 200, grid);
-        }
-
         return sendJson(res, 404, { error: "no such endpoint" });
     } catch (e) {
         return sendJson(res, 500, { error: (e as Error).message || String(e) });
@@ -577,7 +660,6 @@ function shapeReview(row: ReturnType<typeof getReview>): Record<string, unknown>
     }
     return {
         ...rest,
-        ...getReviewAutomationProvenance(row.run_id),
         findingsList,
         semanticFindingsList,
     };

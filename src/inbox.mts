@@ -44,8 +44,7 @@ import {
 } from "./store.mjs";
 
 /** ADO calls scanInbox needs, factored out so a test harness can inject a fake
- *  ADO layer instead of hitting the network (same shape as
- *  TeamsReviewIntakeDependencies in teams-review-intake.mts). */
+ *  ADO layer instead of hitting the network. */
 export interface InboxAdoDependencies {
     getMe: typeof getMe;
     listAuthoredPRs: typeof listAuthoredPRs;

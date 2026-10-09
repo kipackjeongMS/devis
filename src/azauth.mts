@@ -1,5 +1,5 @@
 // Shared Azure AD token acquisition via the local user's `az` login.
-// One cache per resource (ADO, Ev2, …) so every backend module mints tokens the
+// One cache per resource so every backend module mints tokens the
 // same way — no PAT, no client secret, no MSAL. Dependency-free: node built-ins.
 
 import { execFile } from "node:child_process";

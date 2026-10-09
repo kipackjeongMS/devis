@@ -1,15 +1,11 @@
 // Optionally rephrase a staged review comment before it is posted to ADO.
-// Generation runs headlessly via `copilot -p` (print mode)
-// as a throwaway subprocess — it produces NO visible session in the app, and the
-// arbitrary comment text is passed as a single argv element (execFile, no shell)
-// so quotes/newlines/special chars can't break out. Mirrors the subprocess
-// pattern already used by models.mts.
+// Generation runs in a throwaway headless SDK session that is deleted
+// afterwards, so it leaves nothing behind in the session list.
 //
 // When the review recorded which session produced it, api.mts instead runs
 // buildRephrasePrompt inside that session (see reviewer-session.mts) and falls
 // back to this throwaway path.
-import { execFile } from "node:child_process";
-import { tmpdir } from "node:os";
+import { runOneShot } from "./copilot-runtime.mjs";
 
 export interface RephraseInput {
     comment: string;
@@ -43,27 +39,10 @@ export function cleanRephrase(out: string): string {
     return text;
 }
 
-export function rephraseComment(input: RephraseInput): Promise<string> {
-    const model = (input.model && input.model.trim()) || "auto";
-    const args = [
-        "-p", buildRephrasePrompt(input),
-        "--model", model,
-        "-s",
-        "--no-color",
-        "--no-custom-instructions",
-        "--allow-all-tools",
-    ];
-    return new Promise((resolve, reject) => {
-        execFile(
-            "copilot",
-            args,
-            { timeout: 90_000, maxBuffer: 4 << 20, cwd: tmpdir(), windowsHide: true },
-            (err, stdout) => {
-                if (err) return reject(new Error(err.message || "rephrase failed"));
-                const text = cleanRephrase(stdout);
-                if (!text) return reject(new Error("empty rephrase"));
-                resolve(text);
-            },
-        );
-    });
+export async function rephraseComment(input: RephraseInput): Promise<string> {
+    const text = cleanRephrase(
+        await runOneShot(buildRephrasePrompt(input), { model: input.model, timeoutMs: 90_000 }),
+    );
+    if (!text) throw new Error("empty rephrase");
+    return text;
 }

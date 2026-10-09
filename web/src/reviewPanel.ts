@@ -2,6 +2,8 @@
 // the list badge in sync, polls while running, and renders the semantic story +
 // implementation summary. Findings are componentized as staged inline diff comments.
 import { getJSON, postJSON } from "./api.js";
+import { toast } from "./toast.js";
+import { reviewerChatSection } from "./reviewerChat.js";
 import { el } from "./dom.js";
 import { esc, timeAgo } from "./util.js";
 import { state, scheduleReviewPoll } from "./state.js";
@@ -10,6 +12,8 @@ import { renderMermaid } from "./mermaid.js";
 import { openRephraseModal } from "./rephraseModal.js";
 import type { PR, Review, SemanticFinding } from "./types.js";
 import { reviewStateKey } from "./reviewKey.js";
+import { refreshSeverityLights } from "./severityLights.js";
+import { icon } from "./icons.js";
 
 const SEMANTIC_SEVERITY_RANK: Record<string, number> = {
   critical: 0,
@@ -38,6 +42,7 @@ function semanticFindingCard(pr: PR, finding: SemanticFinding): HTMLElement {
        </div>
      </article>`
   );
+  card.setAttribute("data-semantic-finding-id", finding.id);
   const comment = card.querySelector(".semantic-comment") as HTMLElement;
   comment.innerHTML = renderMarkdown(finding.comment);
   const files = card.querySelector(".semantic-files") as HTMLElement;
@@ -74,6 +79,7 @@ function semanticFindingCard(pr: PR, finding: SemanticFinding): HTMLElement {
           content: text,
         });
         finding.posted = true;
+        refreshSeverityLights();
         card.classList.add("posted");
         postButton.disabled = true;
         postButton.textContent = "Posted";
@@ -81,23 +87,6 @@ function semanticFindingCard(pr: PR, finding: SemanticFinding): HTMLElement {
     });
   });
   return card;
-}
-
-function provenanceChip(review: Review): string {
-  if (
-    review.automation_source !== "teams" ||
-    !review.automation_requester ||
-    !review.automation_source_url
-  ) {
-    return "";
-  }
-  return (
-    '<a class="rev-provenance" href="' +
-    esc(review.automation_source_url) +
-    '" target="_blank" rel="noreferrer" title="Open the Teams review request">Teams · ' +
-    esc(review.automation_requester) +
-    " ↗</a>"
-  );
 }
 
 // Populate (and, while running, poll) the background-review panel for one PR.
@@ -138,7 +127,7 @@ export async function refreshReviewPanel(
   if (review.status === "queued") {
     panel.className = "rev-panel queued";
     panel.innerHTML =
-      '<div class="rev-head">◷ Review queued' + provenanceChip(review) + "</div>" +
+      '<div class="rev-head">' + icon("clock") + 'Review queued</div>' +
       '<div class="rev-note">Waiting for an independent reviewer session to become available.</div>';
     scheduleReviewPoll(() => refreshReviewPanel(pr, panel, onUpdate), 4000);
     return;
@@ -147,9 +136,7 @@ export async function refreshReviewPanel(
   if (review.status === "running") {
     panel.className = "rev-panel running";
     panel.innerHTML =
-      '<div class="rev-head"><span class="spinner"></span> Copilot is reviewing this PR in the background…' +
-      provenanceChip(review) +
-      "</div>" +
+      '<div class="rev-head"><span class="spinner"></span> Copilot is reviewing this PR in the background…</div>' +
       '<div class="rev-note">Results will appear here automatically when the review completes.</div>';
     scheduleReviewPoll(() => refreshReviewPanel(pr, panel, onUpdate), 4000);
     return;
@@ -158,7 +145,7 @@ export async function refreshReviewPanel(
   if (review.status === "error") {
     panel.className = "rev-panel error";
     panel.innerHTML =
-      '<div class="rev-head">⚠ Background review failed' + provenanceChip(review) + "</div>" +
+      '<div class="rev-head">' + icon("warning") + 'Background review failed</div>' +
       '<div class="rev-note">' + esc(review.error || "Unknown error.") + "</div>";
     return;
   }
@@ -167,20 +154,21 @@ export async function refreshReviewPanel(
   panel.className = "rev-panel done";
   panel.innerHTML = "";
   const header = el(
-    '<div class="rev-head done"><span class="rev-chev">▼</span>' +
-      '<span class="rev-title">✓ Copilot review</span>' +
+    '<div class="rev-head done"><button type="button" class="rev-toggle" aria-expanded="true">' +
+      '<span class="rev-chev" aria-hidden="true">' + icon("chevron") + "</span>" +
+      '<span class="rev-title">' + icon("sparkle") + "Copilot review</span></button>" +
       (review.summary ? '<span class="rev-summary">' + esc(review.summary) + "</span>" : "") +
       (review.updated_at ? '<span class="rev-when">' + esc(timeAgo(review.updated_at)) + "</span>" : "") +
       "</div>"
   );
-  // The session that produced this review — Elaborate and Rephrase are resumed
-  // inside it, and it can be reopened later with `copilot --resume <id>`.
+  // The session that produced this review — Elaborate, Rephrase, and the
+  // reviewer chat resume it, and "Open in terminal" hands it to the CLI.
   if (review.reviewer_session_id) {
     const id = review.reviewer_session_id;
     const chip = el(
       '<button class="rev-session" title="Reviewed in Copilot session ' +
         esc(id) +
-        ' — click to copy the id">⧉ ' +
+        ' — click to copy the id">' + icon("copy") +
         esc(id.slice(0, 8)) +
         "</button>"
     ) as HTMLButtonElement;
@@ -196,12 +184,11 @@ export async function refreshReviewPanel(
     });
     header.appendChild(chip);
   }
-  const provenance = provenanceChip(review);
-  if (provenance) header.appendChild(el(provenance));
+
   const body = el('<div class="rev-body"></div>');
   header.addEventListener("click", () => {
     panel.classList.toggle("collapsed");
-    (header.querySelector(".rev-chev") as HTMLElement).textContent = panel.classList.contains("collapsed") ? "▶" : "▼";
+    header.querySelector(".rev-toggle")?.setAttribute("aria-expanded", String(!panel.classList.contains("collapsed")));
   });
 
   // Opt-in: save this review as a markdown record in the configured folder.
@@ -221,7 +208,7 @@ export async function refreshReviewPanel(
       });
       if (r.saved) {
         saveStatus.classList.add("ok");
-        saveStatus.textContent = "Saved ✓";
+        saveStatus.textContent = "Saved";
         if (r.path) saveStatus.title = r.path;
       } else {
         saveStatus.classList.add("warn");
@@ -240,6 +227,28 @@ export async function refreshReviewPanel(
     }
   });
   actions.appendChild(saveBtn);
+  if (review.reviewer_session_id) {
+    const terminalBtn = el(
+      '<button class="btn sm ghost rev-terminal" title="Continue this review session in the Copilot CLI">Open in terminal</button>'
+    ) as HTMLButtonElement;
+    terminalBtn.addEventListener("click", async () => {
+      terminalBtn.disabled = true;
+      try {
+        await postJSON("/api/reviewer-terminal", {
+          prId: pr.id,
+          org: pr.org,
+          project: pr.project,
+          repoId: pr.repoId,
+        });
+        toast("Opened the reviewer session in a terminal. Close it there before chatting here.", "ok");
+      } catch (e) {
+        toast("Could not open the terminal: " + (e as Error).message, "err");
+      } finally {
+        terminalBtn.disabled = false;
+      }
+    });
+    actions.appendChild(terminalBtn);
+  }
   actions.appendChild(saveStatus);
   body.appendChild(actions);
 
@@ -269,7 +278,7 @@ export async function refreshReviewPanel(
     const n = staged.length;
     body.appendChild(
       el(
-        '<div class="rev-staged-hint">✦ ' +
+        '<div class="rev-staged-hint">' + icon("sparkle") +
           n +
           " inline review comment" +
           (n === 1 ? "" : "s") +
@@ -277,6 +286,7 @@ export async function refreshReviewPanel(
       )
     );
   }
+  if (review.reviewer_session_id) body.appendChild(reviewerChatSection(pr));
   panel.appendChild(header);
   panel.appendChild(body);
   renderMermaid(body, true);

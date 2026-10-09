@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADO PR Ops — design system</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  /* Reference-page scaffolding only; every component below uses the app's real classes. */
+  html, body { height: auto; overflow: auto; }
+  body { display: block; }
+  .ds { max-width: 1040px; margin: 0 auto; padding: 48px 32px 96px; }
+  .ds h1 { margin: 0; font: 600 28px/36px var(--font-display); }
+  .ds-lede { max-width: 68ch; margin: 8px 0 0; color: var(--text-2); }
+  .ds section { margin-top: 48px; }
+  .ds h2 { margin: 0 0 4px; font: 600 20px/28px var(--font-display); }
+  .ds h2 + p { margin: 0 0 16px; color: var(--text-3); font-size: 13px; }
+  .ds-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
+  .ds-swatch { overflow: hidden; border: 1px solid var(--stroke-card); border-radius: var(--r-surface); background: var(--layer); }
+  .ds-chip { height: 56px; border-bottom: 1px solid var(--divider); }
+  .ds-swatch div:last-child { padding: 8px 10px; font: 12px/16px var(--mono); color: var(--text-2); }
+  .ds-swatch small { display: block; color: var(--text-3); }
+  .ds-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .ds-stage { padding: 16px; border: 1px solid var(--stroke-card); border-radius: var(--r-surface); background: var(--layer); }
+  .ds-stage + .ds-stage { margin-top: 8px; }
+  .ds-label { margin: 0 0 8px; color: var(--text-3); font-size: 12px; }
+  .ds-type > div { display: grid; grid-template-columns: 160px 1fr; align-items: baseline; gap: 16px; padding: 8px 0; border-bottom: 1px solid var(--divider); }
+  .ds-type code { color: var(--text-3); font-size: 12px; }
+  .ds-queue { width: 420px; max-width: 100%; }
+  .ds-icons { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 4px; }
+  .ds-icons span { display: flex; align-items: center; gap: 8px; padding: 8px; color: var(--text-2); font-size: 12px; }
+  .ds-flyout { position: static; visibility: visible; opacity: 1; transform: none; display: inline-block; }
+</style>
+</head>
+<body>
+<main class="ds">
+  <h1>ADO PR Ops design system</h1>
+  <p class="ds-lede">A Windows 11 Fluent 2 review desk: Mica behind the queue, a solid reading layer, cards for
+    content, flyouts and dialogs above. One cyan accent is spent on selection, the primary command and focus.
+    Severity carries its own color, and everything else stays neutral. This page renders the live
+    <code>style.css</code>, so it can't drift from the app.</p>
+
+  <section>
+    <h2>Surfaces and text</h2>
+    <p>Layers step up in lightness. Text uses three emphasis levels plus disabled.</p>
+    <div class="ds-grid" data-swatches="mica layer layer-2 layer-3 sunken flyout card text-1 text-2 text-3 text-off divider"></div>
+  </section>
+
+  <section>
+    <h2>Accent and status</h2>
+    <p>Each status pairs a foreground with a 12% tint. Severity uses <code>--sev</code> through <code>.sev-*</code> and <code>.sl-*</code>.</p>
+    <div class="ds-grid" data-swatches="accent accent-text accent-tint success success-tint caution caution-tint critical critical-tint add-bg del-bg"></div>
+  </section>
+
+  <section>
+    <h2>Type</h2>
+    <p>Segoe UI Variable for interface text and Cascadia Mono for code, IDs and paths.</p>
+    <div class="ds-type">
+      <div><code>display 28/36</code><span style="font: 600 28px/36px var(--font-display)">Pull requests</span></div>
+      <div><code>title 20/28</code><span style="font: 600 20px/28px var(--font-display)">Feature flags: server-side filter pills</span></div>
+      <div><code>body strong 14/20</code><span style="font-weight: 600">Copilot review</span></div>
+      <div><code>body 14/20</code><span>Moves feature-flag filtering to the server and paginates loading.</span></div>
+      <div><code>caption 12/16</code><span style="font-size: 12px; line-height: 16px; color: var(--text-3)">Mina Park · 3h ago</span></div>
+      <div><code>mono 12/16</code><span style="font: 12px/16px var(--mono)">user/mina/change-16776707</span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Commands</h2>
+    <p>Standard, subtle and accent buttons; icon buttons in the title bar and command bar.</p>
+    <div class="ds-stage ds-row">
+      <button type="button" class="btn">Standard</button>
+      <button type="button" class="btn accent">Accent</button>
+      <button type="button" class="btn ghost">Subtle</button>
+      <button type="button" class="btn sm">Small</button>
+      <button type="button" class="btn" disabled>Disabled</button>
+      <button type="button" class="icon-btn" aria-label="Refresh" data-icon="sync"></button>
+      <button type="button" class="icon-btn" aria-label="Settings" data-icon="settings"></button>
+      <button type="button" class="detail-icon-btn copilot-review-btn" aria-label="Copilot" data-icon="sparkle"></button>
+    </div>
+    <div class="ds-stage">
+      <p class="ds-label">Segmented filter</p>
+      <div class="seg" role="group" aria-label="Assignment">
+        <button type="button" class="seg-btn active">Me <span class="seg-n">12</span></button>
+        <button type="button" class="seg-btn">Not me <span class="seg-n">6</span></button>
+        <button type="button" class="seg-btn">All <span class="seg-n">18</span></button>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Badges</h2>
+    <p>20px tall, 4px radius. Status, my action, reviewer tally, review state, change type and severity.</p>
+    <div class="ds-stage ds-row">
+      <span class="st-badge st-draft">Draft</span>
+      <span class="st-badge st-completed">Completed</span>
+      <span class="authored-badge" data-icon="person">Author</span>
+      <span class="my-act vote-approved" data-icon="check">You approved</span>
+      <span class="my-act vote-commented" data-icon="chat">You commented</span>
+      <span class="tally vote-approved" data-icon="check">2</span>
+      <span class="tally vote-waiting" data-icon="clock">1</span>
+      <span class="tally vote-rejected" data-icon="dismiss">1</span>
+      <span class="rev-badge done" data-icon="sparkle">Reviewed</span>
+      <span class="chg chg-add">add</span><span class="chg chg-edit">edit</span><span class="chg chg-delete">del</span>
+    </div>
+    <div class="ds-stage ds-row">
+      <span class="sev-badge sev-critical">critical</span>
+      <span class="sev-badge sev-high">high</span>
+      <span class="sev-badge sev-medium">medium</span>
+      <span class="sev-badge sev-low">low</span>
+      <span class="sev-badge sev-nit">nit</span>
+      <span class="sl-row">
+        <button type="button" class="sl-light sl-critical"><span class="sl-count">2</span><span class="sl-orb"></span></button>
+        <button type="button" class="sl-light sl-high on"><span class="sl-count">1</span><span class="sl-orb"></span></button>
+        <button type="button" class="sl-light sl-medium"><span class="sl-count">4</span><span class="sl-orb"></span></button>
+      </span>
+    </div>
+  </section>
+
+  <section>
+    <h2>Queue row</h2>
+    <p>Title, then mono ID, author, age and branch (the branch truncates first), then badges. The open row gets an accent bar.</p>
+    <div class="ds-stage ds-queue">
+      <div class="pr-card is-open">
+        <button type="button" class="pr-open" aria-current="true">
+          <span class="pr-title">Feature flags: server-side filter pills with paginated loading</span>
+          <span class="pr-meta"><span class="pr-number">#16776707</span><span class="pr-author">Mina Park</span><span class="pr-age">3h ago</span><span class="branch"><code>user/mina/change-16776707</code></span></span>
+          <span class="pr-badges"><span class="my-act vote-approved" data-icon="check">You approved</span><span class="tally vote-approved" data-icon="check">2</span><span class="rev-badge done" data-icon="sparkle">Reviewed</span></span>
+        </button>
+      </div>
+      <div class="pr-card">
+        <button type="button" class="pr-open">
+          <span class="pr-title">Harden HttpUtils retry policy and surface throttling errors</span>
+          <span class="pr-meta"><span class="pr-number">#17194513</span><span class="pr-author">Tomás Novak</span><span class="pr-age">1d ago</span><span class="branch"><code>user/tomas/retry</code></span></span>
+          <span class="pr-badges"><span class="st-badge st-draft">Draft</span><span class="rev-badge running"><span class="rev-pulse" aria-hidden="true"></span>Reviewing…</span></span>
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Reviewers and files</h2>
+    <p>Persona chips carry a vote presence badge. File heads lead with the file name and drop the head of long directories.</p>
+    <div class="ds-stage">
+      <div class="reviewer-strip" style="padding-top: 0">
+        <span class="my-act vote-approved" data-icon="check">You approved</span>
+        <span class="reviewer vote-approved"><span class="persona">PR<span class="presence" data-icon="check"></span></span><span class="reviewer-name">Priya Raman</span><span class="rev-req">Required</span></span>
+        <span class="reviewer vote-waiting"><span class="persona">OB<span class="presence" data-icon="clock"></span></span><span class="reviewer-name">Owen Brooks</span></span>
+      </div>
+    </div>
+    <div class="ds-stage">
+      <div class="file">
+        <button type="button" class="file-head" aria-expanded="false"><span class="file-chev" data-icon="chevron"></span><span class="file-path"><span class="file-name">useFeatureFlagKvData.ts</span><span class="file-dir"><bdi>AppConfigPortalExtension/Client/React/Views/FeatureFlags/Hooks</bdi></span></span><span class="file-cmt-dot"></span><span class="chg chg-edit">edit</span></button>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Icons</h2>
+    <p>16px stroked outlines on <code>currentColor</code>; <code>svg.ic</code> keeps them from being filled.</p>
+    <div class="ds-stage ds-icons" id="icons"></div>
+  </section>
+
+  <section>
+    <h2>Feedback</h2>
+    <p>Toasts sit bottom-center with a status dot.</p>
+    <div class="ds-stage ds-row">
+      <div class="toast ok" style="position: static; transform: none; animation: none">Posted 3 comments to Azure DevOps</div>
+      <div class="toast err" style="position: static; transform: none; animation: none">Could not reach Azure DevOps</div>
+    </div>
+  </section>
+</main>
+<script type="module">
+  import { icon } from "./icons.js";
+  const css = getComputedStyle(document.documentElement);
+  for (const grid of document.querySelectorAll("[data-swatches]")) {
+    for (const name of grid.dataset.swatches.split(" ")) {
+      const value = css.getPropertyValue("--" + name).trim();
+      grid.insertAdjacentHTML("beforeend",
+        `<div class="ds-swatch"><div class="ds-chip" style="background: var(--${name})"></div><div>--${name}<small>${value}</small></div></div>`);
+    }
+  }
+  for (const node of document.querySelectorAll("[data-icon]")) node.insertAdjacentHTML("afterbegin", icon(node.dataset.icon));
+  const names = ["check", "dismiss", "clock", "chat", "person", "sync", "warning", "reply", "circle", "sparkle", "tray",
+    "copy", "folder", "chevron", "back", "add", "terminal", "bell", "settings", "pullRequest"];
+  document.getElementById("icons").innerHTML = names.map((n) => `<span>${icon(n)}${n}</span>`).join("");
+</script>
+</body>
+</html>

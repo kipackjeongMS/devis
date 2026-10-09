@@ -22,7 +22,6 @@ const fakePrepare = async (target, reviewModel) => ({
         repoId: target.repoId,
         title: `PR ${target.prId}`,
         taskPrompt: `prompt for ${target.prId}`,
-        targetCanvasInstanceId: `canvas-${target.prId}`,
         reviewModel,
     },
 });
@@ -44,7 +43,6 @@ const fakeQueue = async ({ jobs }) => ({
 const oversizedOrg = "o".repeat(400);
 const mixedResult = await tasks.queueReviewTargets(
     {
-        canvasInstanceId: "root-canvas",
         targets: [
             { org: "contoso", project: "proj", repoId: "repo-1", prId: "1" },
             // malformed: prId is not a positive integer string/number
@@ -87,7 +85,6 @@ assert.equal(JSON.stringify(mixedResult.failed).includes(oversizedOrg), false);
 // --- Scenario 2: every target malformed must not throw, just report failed ---
 const allMalformed = await tasks.queueReviewTargets(
     {
-        canvasInstanceId: "root-canvas",
         targets: [
             { org: "contoso", project: "proj", repoId: "repo-1", prId: "abc" },
             { org: "contoso", project: "proj", repoId: "repo-2", prId: -1 },
@@ -103,7 +100,6 @@ assert.equal(allMalformed.accepted.length, 0);
 // preparation-phase or queueing-phase failures for the remaining targets ---
 const prepFailureResult = await tasks.queueReviewTargets(
     {
-        canvasInstanceId: "root-canvas",
         targets: [
             { org: "contoso", project: "proj", repoId: "repo-1", prId: "1" },
             { org: "contoso", project: "proj", repoId: "repo-2", prId: "bad" },
@@ -128,7 +124,7 @@ assert.match(upstreamFailure.error, /upstream ADO lookup failed/);
 
 // --- Scenario 4: parseReviewTarget itself still throws on a single malformed
 // value when used directly (unit-level contract used by other callers,
-// e.g. Teams single-target retries) ---
+// e.g. single-target re-review) ---
 assert.throws(
     () => tasks.parseReviewTarget({ org: "o", project: "p", repoId: "r", prId: "nope" }),
     /prId must be a positive integer/,

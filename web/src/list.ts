@@ -1,6 +1,6 @@
-// The PR list: a review badge per PR plus the repo-grouped, collapsible card list.
-// A card click opens the PR detail in a slide-over modal (see detail.ts); the list
-// stays mounted underneath, so it needs no re-render when the modal closes.
+// The PR queue: a review badge per PR plus the repo-grouped, collapsible list.
+// A row click opens the PR in the docked reading pane (see detail.ts); the queue
+// stays mounted beside it and marks the open row.
 import { bulkReviewHost, el, view } from "./dom.js";
 import { esc, timeAgo } from "./util.js";
 import { state, stopReviewPoll } from "./state.js";
@@ -12,31 +12,29 @@ import { statusBadge, myActionBadge, reviewerTally } from "./prStatus.js";
 import { sendPrsToCopilot } from "./bridge.js";
 import { requestNotifyPermission } from "./notifyWatch.js";
 import { reviewStateKey } from "./reviewKey.js";
+import { isPaneOpen } from "./readingPane.js";
+import { icon } from "./icons.js";
+import { queueTitle } from "./shellModel.js";
 
 // A small status pill for a PR's background-review state, or "" when none.
 export function reviewBadge(pr: PR): string {
   const key = reviewStateKey(pr);
   const active = state.activeReviewJobs[key];
-  const provenance = active?.automation_source === "teams"
-    ? ` title="Requested in Teams by ${esc(active.automation_requester || "unknown requester")}"`
-    : "";
   if (active) {
-    if (active.status === "queued" || active.status === "dispatching") {
-      return `<span class="rev-badge queued"${provenance}>◷ Queued</span>`;
-    }
-    return `<span class="rev-badge running"${provenance}>⏳ Reviewing…</span>`;
+    if (active.status === "queued" || active.status === "dispatching") return QUEUED;
+    return RUNNING;
   }
   const r = state.reviews[key];
   if (!r) return "";
-  const storedProvenance = r.automation_source === "teams"
-    ? ` title="Requested in Teams by ${esc(r.automation_requester || "unknown requester")}"`
-    : "";
-  if (r.status === "queued") return `<span class="rev-badge queued"${storedProvenance}>◷ Queued</span>`;
-  if (r.status === "running") return `<span class="rev-badge running"${storedProvenance}>⏳ Reviewing…</span>`;
-  if (r.status === "done") return `<span class="rev-badge done"${storedProvenance}>✓ Reviewed</span>`;
-  if (r.status === "error") return `<span class="rev-badge error"${storedProvenance}>⚠ Review failed</span>`;
+  if (r.status === "queued") return QUEUED;
+  if (r.status === "running") return RUNNING;
+  if (r.status === "done") return `<span class="rev-badge done">${icon("sparkle")}Reviewed</span>`;
+  if (r.status === "error") return `<span class="rev-badge error">${icon("warning")}Review failed</span>`;
   return "";
 }
+
+const QUEUED = `<span class="rev-badge queued">${icon("clock")}Queued</span>`;
+const RUNNING = `<span class="rev-badge running"><span class="rev-pulse" aria-hidden="true"></span>Reviewing…</span>`;
 
 // The filter chain is split in two on purpose:
 //   scopeFilter      — org + project only. Applies to EVERYTHING, including My Plate.
@@ -84,22 +82,29 @@ function isActiveReview(pr: PR): boolean {
   return status === "queued" || status === "running";
 }
 
-// The status pill + my-action chip + compact reviewer tally shown in a card's meta
-// row. Fields are optional so older cached payloads degrade gracefully.
+// The status pill + my-action chip + compact reviewer tally shown on a row's badge
+// line. "Published" is the default state, so the queue only calls out exceptions.
+// Fields are optional so older cached payloads degrade gracefully.
 function metaBadges(p: PR): string {
   const parts: string[] = [];
-  if (p.authoredByMe) parts.push(`<span class="authored-badge">👤 Author</span>`);
+  if (p.authoredByMe) parts.push(`<span class="authored-badge">${icon("person")}Author</span>`);
   const st = statusBadge(p);
-  if (st.cls !== "st-unknown") parts.push(`<span class="st-badge ${st.cls}">${st.label}</span>`);
+  if (st.cls !== "st-unknown" && st.cls !== "st-published") {
+    parts.push(`<span class="st-badge ${st.cls}">${st.label}</span>`);
+  }
   const my = myActionBadge(p.myVote || 0, p.iCommented);
-  if (my) parts.push(`<span class="my-act ${my.cls}">${my.icon} ${my.label}</span>`);
+  if (my) parts.push(`<span class="my-act ${my.cls}">${icon(my.icon)}${my.label}</span>`);
   const t = reviewerTally(p.reviewers || []);
   const tallies: string[] = [];
-  if (t.approved) tallies.push(`<span class="tally vote-approved">✓${t.approved}</span>`);
-  if (t.rejected) tallies.push(`<span class="tally vote-rejected">✗${t.rejected}</span>`);
-  if (t.waiting) tallies.push(`<span class="tally vote-waiting">⏳${t.waiting}</span>`);
+  if (t.approved) tallies.push(tally("vote-approved", "check", t.approved, "approved"));
+  if (t.rejected) tallies.push(tally("vote-rejected", "dismiss", t.rejected, "rejected"));
+  if (t.waiting) tallies.push(tally("vote-waiting", "clock", t.waiting, "waiting for author"));
   if (tallies.length) parts.push(`<span class="rev-tally">${tallies.join("")}</span>`);
   return parts.join("");
+}
+
+function tally(cls: string, name: "check" | "dismiss" | "clock", n: number, label: string): string {
+  return `<span class="tally ${cls}" title="${n} ${label}">${icon(name)}${n}<span class="visually-hidden"> ${label}</span></span>`;
 }
 
 // One clickable, selectable PR card shared by My Plate and the main repo list.
@@ -107,20 +112,22 @@ function prCard(p: PR): HTMLElement {
   const id = prKey(p);
   const active = isActiveReview(p);
   const card = el(
-    `<div class="pr-card selectable${reviewSel.has(id) ? " selected" : ""}">` +
+    `<div class="pr-card selectable${reviewSel.has(id) ? " selected" : ""}${openKey === id ? " is-open" : ""}" data-pr-key="${esc(id)}">` +
       `<input type="checkbox" class="pr-sel" aria-label="${
         active ? `PR ${p.id} is already queued or being reviewed` : `Select PR ${p.id} for bulk review`
       }"${active ? " disabled" : ""}>` +
-      `<button type="button" class="pr-open" aria-label="Open pull request ${p.id}: ${esc(p.title)}">
-       <span class="pr-title"><span class="pr-number">#${p.id}</span>${esc(p.title)}</span>
-       <span class="pr-meta">
-         ${metaBadges(p)}
-         ${reviewBadge(p)}
-         <span class="branch"><code>${esc(p.sourceRef)}</code>→<code>${esc(p.targetRef)}</code></span>
-         <span>by ${esc(p.author)}</span>
-         <span>${esc(timeAgo(p.created))}</span>
-       </span>
-       </button></div>`
+      `<button type="button" class="pr-open" aria-label="Open pull request ${p.id}: ${esc(p.title)}"${
+        openKey === id ? ` aria-current="true"` : ""
+      }>` +
+      `<span class="pr-title">${esc(p.title)}</span>` +
+      `<span class="pr-meta">` +
+      `<span class="pr-number">#${p.id}</span>` +
+      `<span class="pr-author">${esc(p.author)}</span>` +
+      `<span class="pr-age">${esc(timeAgo(p.created))}</span>` +
+      `<span class="branch" title="${esc(p.sourceRef)} into ${esc(p.targetRef)}"><code>${esc(p.sourceRef)}</code></span>` +
+      `</span>` +
+      `<span class="pr-badges">${metaBadges(p)}${reviewBadge(p)}</span>` +
+      `</button></div>`
   );
   card.querySelector<HTMLButtonElement>(".pr-open")!.addEventListener("click", () => openDetail(p));
   const cb = card.querySelector<HTMLInputElement>(".pr-sel")!;
@@ -155,7 +162,7 @@ function renderRepoGroups(prs: PR[], container: HTMLElement, collapsed: boolean,
     const wrap = el(`<section class="repo-group${collapsed ? " collapsed" : ""}"></section>`);
     const head = el(
       `<button type="button" class="repo-head" aria-expanded="${String(!collapsed)}" aria-controls="${listId}">` +
-        `<span class="repo-chev">▶</span>` +
+        `<span class="repo-chev" aria-hidden="true">${icon("chevron")}</span>` +
         `<span class="repo-name">${esc(g.repo)}</span>` +
         `<span class="count">${g.list.length}</span>` +
         `<span class="proj">${esc(g.project)}</span></button>`
@@ -330,8 +337,28 @@ async function removeSelected(): Promise<void> {
   }
 }
 
+// The row whose PR is open in the reading pane (prKey), tracked across re-renders.
+let openKey: string | null = null;
+
+function markOpenRow(): void {
+  view.querySelectorAll<HTMLElement>(".pr-card").forEach((card) => {
+    const open = card.dataset.prKey === openKey;
+    card.classList.toggle("is-open", open);
+    const btn = card.querySelector<HTMLButtonElement>(".pr-open");
+    if (open) btn?.setAttribute("aria-current", "true");
+    else btn?.removeAttribute("aria-current");
+  });
+}
+
+window.addEventListener("ado-pr-open", (e) => {
+  const pr = (e as CustomEvent<PR | null>).detail;
+  openKey = pr ? prKey(pr) : null;
+  markOpenRow();
+});
+
 export function renderList(stopPolling = true): void {
-  if (stopPolling) stopReviewPoll();
+  // The open PR's review poll keeps running while the queue re-renders beside it.
+  if (stopPolling && !isPaneOpen()) stopReviewPoll();
 
   // My Plate obeys scope only (org/project); the main list also obeys assignment.
   const scoped = scopeFilter(state.prs);
@@ -367,7 +394,8 @@ export function renderList(stopPolling = true): void {
     const sec = el(`<section class="plate-group"></section>`);
     const head = el(
       `<button type="button" class="plate-head" aria-expanded="true" aria-controls="plateBody">` +
-        `<span class="repo-chev">▶</span>` +
+        `<span class="repo-chev" aria-hidden="true">${icon("chevron")}</span>` +
+        `<span class="plate-icon" aria-hidden="true">${icon("tray")}</span>` +
         `<span class="plate-name">My Plate</span>` +
         `<span class="count">${plate.length}</span></button>`
     );
@@ -395,6 +423,11 @@ export function renderList(stopPolling = true): void {
     view.appendChild(sec);
   }
 
+  if (rest.length) {
+    view.appendChild(
+      el(`<h2 class="queue-title">${esc(queueTitle(state.assignment))}<span class="count">${rest.length}</span></h2>`)
+    );
+  }
   renderRepoGroups(rest, view, true, "queue");
   syncBulkBar();
   syncPlateBar();

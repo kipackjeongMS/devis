@@ -19,9 +19,17 @@ export const bulkReviewHost = $("#bulkReviewHost") as HTMLElement;
 export const orgFilter = $("#orgFilter") as HTMLSelectElement;
 export const projectFilter = $("#projectFilter") as HTMLSelectElement;
 export const assignFilter = $("#assignFilter") as HTMLElement;
+export const listPane = $("#listPane") as HTMLElement;
+export const readingPane = $("#readingPane") as HTMLElement;
+
+/** Switch the shell between the queue (list + reading pane) and the settings page. */
+export function setPage(page: "queue" | "settings"): void {
+  document.body.dataset.page = page;
+}
 
 /** Replace the view with a full-panel error/empty state. */
 export function renderError(msg: string): void {
+  setPage("queue");
   filterbar.hidden = true;
   view.innerHTML =
     `<div class="empty">${esc(msg)}<div class="hint">Check that you are logged in with <code>az login</code>.</div></div>`;

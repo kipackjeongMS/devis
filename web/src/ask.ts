@@ -2,13 +2,13 @@
 // it stacks above the PR-detail slide-over) that sends the selected code + a
 // question to Copilot and renders the answer back in place.
 //
-// Two transports, both polled via /api/ask-result:
-//   - default: session.send() is fire-and-forget, so the agent is handed a
-//     callback URL + askId and POSTs its answer back.
+// The server answers in one of two places and fills the entry polled via
+// /api/ask-result:
+//   - default: a throwaway headless Copilot session.
 //   - Elaborate on a finding whose review recorded a reviewer session: the
-//     server resumes that session and fills the answer itself, so the prompt
-//     carries no callback instructions.
+//     server resumes that session, which already holds the PR context.
 import { el } from "./dom.js";
+import { icon } from "./icons.js";
 import { esc } from "./util.js";
 import { postJSON, getJSON } from "./api.js";
 import { toast } from "./toast.js";
@@ -18,7 +18,8 @@ import type { PR, FileChange, Finding } from "./types.js";
 import type { DiffSelection } from "./selection.js";
 
 const POLL_MS = 2000;
-const MAX_POLLS = 60; // ~2 min
+// A fresh session has to start before it answers; the server gives up at 3 min.
+const MAX_POLLS = 100; // ~3.3 min
 // Resuming the reviewer session replays its history before it answers, so give
 // that path a longer budget than a live in-session reply.
 const MAX_POLLS_REVIEWER = 150; // ~5 min
@@ -29,36 +30,16 @@ function newAskId(): string {
   return Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
 }
 
-// Shared trailing instructions: how the agent publishes its answer back to the
-// canvas (POST { askId, answer } to the callback URL) so the poller can pick it
-// up. Reused verbatim by both the ask and elaborate prompts.
-function callbackInstructions(askId: string, callbackUrl: string): string {
-  return (
-    "Answer this question concisely and directly in Markdown (you may use a small " +
-    "```mermaid fenced diagram if it genuinely aids understanding). When done, publish your " +
-    `answer back to the ADO DevOps canvas by POSTing JSON to ${callbackUrl} using your ` +
-    "`powershell` tool. Shape: { askId, answer } — set askId='" +
-    askId +
-    "' and answer=<your Markdown answer>. Build it safely so newlines/quotes survive, e.g. " +
-    "`$body = @{ askId='" +
-    askId +
-    "'; answer=$answerText } | ConvertTo-Json -Depth 6; Invoke-RestMethod -Uri '" +
-    callbackUrl +
-    "' -Method Post -ContentType 'application/json' -Body $body`. If you cannot answer, POST { askId:'" +
-    askId +
-    "', error:'<reason>' } instead. Keep any chat reply to a one-line acknowledgment — the answer belongs in the canvas."
-  );
-}
-
+const ANSWER_INSTRUCTIONS =
+  "Answer concisely and directly in Markdown (you may use a small ```mermaid fenced diagram " +
+  "if it genuinely aids understanding). Output only the answer — no preamble, no restatement of the question.";
 // The selected code travels as a `selection` attachment (see buildAskAttachment)
 // instead of being inlined here, so the prompt just references it.
 function buildAskPrompt(
   pr: PR,
   file: FileChange,
   sel: DiffSelection,
-  question: string,
-  askId: string,
-  callbackUrl: string
+  question: string
 ): string {
   const { side, startLine, endLine } = sel.anchor;
   const loc = endLine > startLine ? `${startLine}–${endLine}` : `${startLine}`;
@@ -70,19 +51,17 @@ function buildAskPrompt(
     ``,
     `Question: ${question}`,
     ``,
-    callbackInstructions(askId, callbackUrl),
+    ANSWER_INSTRUCTIONS,
   ].join("\n");
 }
 
 // Prompt for the Elaborate flow: hands the agent the staged AI comment and its
-// location, asks for a deeper explanation, then the shared callback block.
+// location and asks for a deeper explanation.
 function buildElaboratePrompt(
   pr: PR,
   file: FileChange,
   finding: Finding,
-  question: string,
-  askId: string,
-  callbackUrl: string
+  question: string
 ): string {
   return [
     `The user wants a deeper explanation of an AI-generated code review comment on Azure DevOps PR #${pr.id} ("${pr.title}").`,
@@ -91,13 +70,12 @@ function buildElaboratePrompt(
     ``,
     `The user's follow-up: ${question}`,
     ``,
-    callbackInstructions(askId, callbackUrl),
+    ANSWER_INSTRUCTIONS,
   ].join("\n");
 }
 
 // Same request, addressed to the session that actually produced the review. It
-// already holds the diffs and the reasoning behind the comment, and the server
-// reads its reply straight off the resumed run — so no callback block.
+// already holds the diffs and the reasoning behind the comment.
 function buildReviewerElaboratePrompt(
   pr: PR,
   file: FileChange,
@@ -167,13 +145,13 @@ interface AskOptions {
   placeholder: string; // textarea placeholder
   initialQuestion?: string; // prefilled (and selected) question text
   sendLabel: string; // send button label
-  buildPrompt: (question: string, askId: string, callbackUrl: string) => string;
+  buildPrompt: (question: string) => string;
   attachments?: unknown[]; // SDK attachments to send with the prompt
   /**
    * Set both to offer the reviewer-session transport. The client names only the
    * PR — the server looks up the session that produced its review and, if there
-   * is one, resumes it with buildReviewerPrompt() instead of pushing
-   * buildPrompt() into the local chat session. Naming the PR rather than the
+   * is one, resumes it with buildReviewerPrompt() instead of answering
+   * buildPrompt() in a fresh session. Naming the PR rather than the
    * session keeps the resume target unforgeable from here.
    */
   prId?: string | number;
@@ -194,7 +172,7 @@ function openAsk(opts: AskOptions): void {
     `<div class="ask-head">` +
     `<span class="ask-title">${esc(opts.title)}</span>` +
     `<span class="ask-loc">${esc(opts.loc)}</span>` +
-    `<button class="ask-close" title="Close (Esc)" aria-label="Close">✕</button>` +
+    `<button type="button" class="ask-close" title="Close (Esc)" aria-label="Close">${icon("dismiss")}</button>` +
     `</div>` +
     `<pre class="ask-snippet${opts.contextClass ? " " + opts.contextClass : ""}"><code>${esc(opts.context)}</code></pre>` +
     `<textarea class="ask-q" rows="3" placeholder="${esc(opts.placeholder)}"></textarea>` +
@@ -220,7 +198,9 @@ function openAsk(opts: AskOptions): void {
     overlay.remove();
   }
   function onKey(e: KeyboardEvent): void {
-    if (e.key === "Escape") close();
+    if (e.key !== "Escape") return;
+    e.preventDefault(); // consumed: the reading pane must not also close
+    close();
   }
   document.addEventListener("keydown", onKey);
   overlay.addEventListener("mousedown", (e) => {
@@ -235,13 +215,12 @@ function openAsk(opts: AskOptions): void {
     sendBtn.disabled = true;
     ta.disabled = true;
     const askId = newAskId();
-    const callbackUrl = window.location.origin + "/api/ask-result";
     answer.hidden = false;
     answer.className = "ask-answer loading-ans";
     answer.innerHTML = '<span class="spinner"></span> Asking Copilot…';
     const body: Record<string, unknown> = {
       askId,
-      prompt: opts.buildPrompt(question, askId, callbackUrl),
+      prompt: opts.buildPrompt(question),
       attachments: opts.attachments ?? [],
     };
     if (opts.prId != null && opts.buildReviewerPrompt) {
@@ -253,7 +232,7 @@ function openAsk(opts: AskOptions): void {
     }
     // The server picks the transport and reports it back, so the wait budget and
     // wording match the path that actually ran.
-    let via = "session";
+    let via = "fresh";
     try {
       const res: any = await postJSON("/api/ask", body);
       if (res && typeof res.via === "string") via = res.via;
@@ -301,7 +280,7 @@ function openAsk(opts: AskOptions): void {
     answer.className = "ask-answer err-ans";
     answer.textContent = reviewer
       ? "The reviewer session didn't respond in time."
-      : "Copilot didn't respond in time. It may still reply in the chat.";
+      : "Copilot didn't respond in time.";
     resetInput(opts.sendLabel);
   }
 
@@ -332,7 +311,7 @@ export function openAskModal(pr: PR, file: FileChange, sel: DiffSelection): void
     context: sel.snippet,
     placeholder: "Ask a question about this code…",
     sendLabel: "Ask Copilot",
-    buildPrompt: (q, id, url) => buildAskPrompt(pr, file, sel, q, id, url),
+    buildPrompt: (q) => buildAskPrompt(pr, file, sel, q),
     attachments: [buildAskAttachment(file, sel)],
   });
 }
@@ -362,6 +341,6 @@ export function openElaborateModal(pr: PR, file: FileChange, finding: Finding): 
     project: pr.project,
     repoId: pr.repoId,
     buildReviewerPrompt: (q) => buildReviewerElaboratePrompt(pr, file, finding, q),
-    buildPrompt: (q, id, url) => buildElaboratePrompt(pr, file, finding, q, id, url),
+    buildPrompt: (q) => buildElaboratePrompt(pr, file, finding, q),
   });
 }

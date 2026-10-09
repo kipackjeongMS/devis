@@ -3,6 +3,7 @@
 // is optional and uses the recorded reviewer session when one is available.
 // Reuses the .ask-* dialog styles so it stacks above the PR-detail slide-over.
 import { el } from "./dom.js";
+import { icon } from "./icons.js";
 import { esc } from "./util.js";
 import { postJSON } from "./api.js";
 
@@ -34,7 +35,7 @@ export function openRephraseModal(opts: RephraseOptions): void {
     `<div class="ask-head">` +
     `<span class="ask-title">Review &amp; post</span>` +
     `<span class="ask-loc">${esc(opts.loc)}</span>` +
-    `<button class="ask-close" title="Close (Esc)" aria-label="Close">✕</button>` +
+    `<button type="button" class="ask-close" title="Close (Esc)" aria-label="Close">${icon("dismiss")}</button>` +
     `</div>` +
     `<div class="rp-label">Copilot review</div>` +
     `<pre class="ask-snippet prose"><code>${esc(original)}</code></pre>` +
@@ -64,7 +65,9 @@ export function openRephraseModal(opts: RephraseOptions): void {
     overlay.remove();
   }
   function onKey(e: KeyboardEvent): void {
-    if (e.key === "Escape") close();
+    if (e.key !== "Escape") return;
+    e.preventDefault(); // consumed: the reading pane must not also close
+    close();
   }
   document.addEventListener("keydown", onKey);
   overlay.addEventListener("mousedown", (e) => {

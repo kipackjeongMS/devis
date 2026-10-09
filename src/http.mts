@@ -3,7 +3,7 @@
 
 import { readFile } from "node:fs/promises";
 import { normalize, join } from "node:path";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from "node:http";
 
 const MIME: Record<string, string> = {
     ".html": "text/html; charset=utf-8",
@@ -19,6 +19,21 @@ export function sendJson(res: ServerResponse, status: number, obj: unknown): voi
         "Content-Length": buf.length,
     });
     res.end(buf);
+}
+
+export function sendBuffer(
+    res: ServerResponse,
+    status: number,
+    body: Buffer,
+    contentType: string,
+    headers: OutgoingHttpHeaders = {},
+): void {
+    res.writeHead(status, {
+        ...headers,
+        "Content-Type": contentType,
+        "Content-Length": body.length,
+    });
+    res.end(body);
 }
 
 export function readBody(req: IncomingMessage): Promise<any> {

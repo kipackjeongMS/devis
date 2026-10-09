@@ -3,6 +3,7 @@
 // and are responsible for escaping any user-supplied text (e.g. reviewer names).
 
 import type { Reviewer } from "./types.js";
+import type { IconName } from "./icons.js";
 
 /** The effective lifecycle label for a PR. Draft wins over the raw status. */
 export function statusBadge(p: { status?: string; isDraft?: boolean }): {
@@ -23,23 +24,23 @@ export function statusBadge(p: { status?: string; isDraft?: boolean }): {
 }
 
 /** Icon + label + css class for a single reviewer vote value. */
-export function voteBadge(vote: number): { icon: string; label: string; cls: string } {
-  if (vote >= 10) return { icon: "✓", label: "Approved", cls: "vote-approved" };
-  if (vote === 5) return { icon: "✓", label: "Approved with suggestions", cls: "vote-approved" };
-  if (vote <= -10) return { icon: "✗", label: "Rejected", cls: "vote-rejected" };
-  if (vote <= -5) return { icon: "⏳", label: "Waiting for author", cls: "vote-waiting" };
-  return { icon: "○", label: "No vote", cls: "vote-none" };
+export function voteBadge(vote: number): { icon: IconName; label: string; cls: string } {
+  if (vote >= 10) return { icon: "check", label: "Approved", cls: "vote-approved" };
+  if (vote === 5) return { icon: "check", label: "Approved with suggestions", cls: "vote-approved" };
+  if (vote <= -10) return { icon: "dismiss", label: "Rejected", cls: "vote-rejected" };
+  if (vote <= -5) return { icon: "clock", label: "Waiting for author", cls: "vote-waiting" };
+  return { icon: "circle", label: "No vote", cls: "vote-none" };
 }
 
 /** The current user's own action chip, or null when they haven't voted/commented. */
 export function myActionBadge(
   myVote: number,
   iCommented?: boolean,
-): { icon: string; label: string; cls: string } | null {
-  if (myVote >= 5) return { icon: "✓", label: "You approved", cls: "vote-approved" };
-  if (myVote <= -10) return { icon: "✗", label: "You rejected", cls: "vote-rejected" };
-  if (myVote <= -5) return { icon: "⏳", label: "You're waiting", cls: "vote-waiting" };
-  if (iCommented) return { icon: "💬", label: "You commented", cls: "vote-commented" };
+): { icon: IconName; label: string; cls: string } | null {
+  if (myVote >= 5) return { icon: "check", label: "You approved", cls: "vote-approved" };
+  if (myVote <= -10) return { icon: "dismiss", label: "You rejected", cls: "vote-rejected" };
+  if (myVote <= -5) return { icon: "clock", label: "You're waiting", cls: "vote-waiting" };
+  if (iCommented) return { icon: "chat", label: "You commented", cls: "vote-commented" };
   return null;
 }
 

@@ -1,0 +1,219 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-07-31T18:26:50.764-07:00",
+  "title": "Design System: ADO PR Ops",
+  "extensions": {
+    "colorMeta": {
+      "canvas": {
+        "role": "neutral",
+        "displayName": "Midnight Canvas",
+        "canonical": "#0d1117",
+        "tonalRamp": ["oklch(15% 0.012 255)", "oklch(25% 0.012 255)", "oklch(35% 0.012 255)", "oklch(47% 0.012 255)", "oklch(59% 0.012 255)", "oklch(71% 0.012 255)", "oklch(83% 0.012 255)", "oklch(95% 0.012 255)"]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Workbench Surface",
+        "canonical": "#161b22",
+        "tonalRamp": ["oklch(15% 0.015 255)", "oklch(25% 0.015 255)", "oklch(35% 0.015 255)", "oklch(47% 0.015 255)", "oklch(59% 0.015 255)", "oklch(71% 0.015 255)", "oklch(83% 0.015 255)", "oklch(95% 0.015 255)"]
+      },
+      "surface-raised": {
+        "role": "neutral",
+        "displayName": "Raised Graphite",
+        "canonical": "#1c2230",
+        "tonalRamp": ["oklch(15% 0.021 260)", "oklch(25% 0.021 260)", "oklch(35% 0.021 260)", "oklch(47% 0.021 260)", "oklch(59% 0.021 260)", "oklch(71% 0.021 260)", "oklch(83% 0.021 260)", "oklch(95% 0.021 260)"]
+      },
+      "border": {
+        "role": "neutral",
+        "displayName": "Structural Border",
+        "canonical": "#2a3038",
+        "tonalRamp": ["oklch(15% 0.012 255)", "oklch(25% 0.012 255)", "oklch(35% 0.012 255)", "oklch(47% 0.012 255)", "oklch(59% 0.012 255)", "oklch(71% 0.012 255)", "oklch(83% 0.012 255)", "oklch(95% 0.012 255)"]
+      },
+      "border-soft": {
+        "role": "neutral",
+        "displayName": "Soft Divider",
+        "canonical": "#21262d",
+        "tonalRamp": ["oklch(15% 0.010 255)", "oklch(25% 0.010 255)", "oklch(35% 0.010 255)", "oklch(47% 0.010 255)", "oklch(59% 0.010 255)", "oklch(71% 0.010 255)", "oklch(83% 0.010 255)", "oklch(95% 0.010 255)"]
+      },
+      "text": {
+        "role": "neutral",
+        "displayName": "Primary Ink",
+        "canonical": "#e6edf3",
+        "tonalRamp": ["oklch(15% 0.009 250)", "oklch(25% 0.009 250)", "oklch(35% 0.009 250)", "oklch(47% 0.009 250)", "oklch(59% 0.009 250)", "oklch(71% 0.009 250)", "oklch(83% 0.009 250)", "oklch(95% 0.009 250)"]
+      },
+      "text-muted": {
+        "role": "neutral",
+        "displayName": "Muted Steel",
+        "canonical": "#9aa5b1",
+        "tonalRamp": ["oklch(15% 0.015 250)", "oklch(25% 0.015 250)", "oklch(35% 0.015 250)", "oklch(47% 0.015 250)", "oklch(59% 0.015 250)", "oklch(71% 0.015 250)", "oklch(83% 0.015 250)", "oklch(95% 0.015 250)"]
+      },
+      "text-faint": {
+        "role": "neutral",
+        "displayName": "Faint Slate",
+        "canonical": "#6e7681",
+        "tonalRamp": ["oklch(15% 0.012 250)", "oklch(25% 0.012 250)", "oklch(35% 0.012 250)", "oklch(47% 0.012 250)", "oklch(59% 0.012 250)", "oklch(71% 0.012 250)", "oklch(83% 0.012 250)", "oklch(95% 0.012 250)"]
+      },
+      "azure-signal": {
+        "role": "primary",
+        "displayName": "Azure Signal",
+        "canonical": "#4c8dff",
+        "tonalRamp": ["oklch(15% 0.22 257)", "oklch(25% 0.22 257)", "oklch(35% 0.22 257)", "oklch(47% 0.22 257)", "oklch(59% 0.22 257)", "oklch(71% 0.20 257)", "oklch(83% 0.15 257)", "oklch(95% 0.06 257)"]
+      },
+      "azure-action": {
+        "role": "primary",
+        "displayName": "Azure Action",
+        "canonical": "#1f6feb",
+        "tonalRamp": ["oklch(15% 0.20 257)", "oklch(25% 0.20 257)", "oklch(35% 0.20 257)", "oklch(47% 0.20 257)", "oklch(59% 0.20 257)", "oklch(71% 0.18 257)", "oklch(83% 0.13 257)", "oklch(95% 0.05 257)"]
+      },
+      "on-accent": {
+        "role": "neutral",
+        "displayName": "On-Accent White",
+        "canonical": "#ffffff",
+        "tonalRamp": ["oklch(15% 0 0)", "oklch(25% 0 0)", "oklch(35% 0 0)", "oklch(47% 0 0)", "oklch(59% 0 0)", "oklch(71% 0 0)", "oklch(83% 0 0)", "oklch(100% 0 0)"]
+      },
+      "success-surface": {
+        "role": "secondary",
+        "displayName": "Added Depth",
+        "canonical": "#12261a",
+        "tonalRamp": ["oklch(15% 0.05 145)", "oklch(25% 0.05 145)", "oklch(35% 0.05 145)", "oklch(47% 0.05 145)", "oklch(59% 0.05 145)", "oklch(71% 0.05 145)", "oklch(83% 0.04 145)", "oklch(95% 0.02 145)"]
+      },
+      "success": {
+        "role": "secondary",
+        "displayName": "Success Green",
+        "canonical": "#2ea043",
+        "tonalRamp": ["oklch(15% 0.15 145)", "oklch(25% 0.15 145)", "oklch(35% 0.15 145)", "oklch(47% 0.15 145)", "oklch(59% 0.15 145)", "oklch(71% 0.13 145)", "oklch(83% 0.09 145)", "oklch(95% 0.04 145)"]
+      },
+      "danger-surface": {
+        "role": "secondary",
+        "displayName": "Removed Depth",
+        "canonical": "#2a1518",
+        "tonalRamp": ["oklch(15% 0.05 25)", "oklch(25% 0.05 25)", "oklch(35% 0.05 25)", "oklch(47% 0.05 25)", "oklch(59% 0.05 25)", "oklch(71% 0.05 25)", "oklch(83% 0.04 25)", "oklch(95% 0.02 25)"]
+      },
+      "danger": {
+        "role": "secondary",
+        "displayName": "Danger Red",
+        "canonical": "#f85149",
+        "tonalRamp": ["oklch(15% 0.20 25)", "oklch(25% 0.20 25)", "oklch(35% 0.20 25)", "oklch(47% 0.20 25)", "oklch(59% 0.20 25)", "oklch(71% 0.18 25)", "oklch(83% 0.12 25)", "oklch(95% 0.05 25)"]
+      },
+      "warning": {
+        "role": "secondary",
+        "displayName": "Review Amber",
+        "canonical": "#d29922",
+        "tonalRamp": ["oklch(15% 0.15 85)", "oklch(25% 0.15 85)", "oklch(35% 0.15 85)", "oklch(47% 0.15 85)", "oklch(59% 0.15 85)", "oklch(71% 0.13 85)", "oklch(83% 0.09 85)", "oklch(95% 0.04 85)"]
+      }
+    },
+    "typographyMeta": {
+      "headline": { "displayName": "Headline", "purpose": "Detail titles and settings headings." },
+      "title": { "displayName": "Title", "purpose": "Groups, panels, and important row labels." },
+      "body": { "displayName": "Body", "purpose": "Default controls, descriptions, and review content." },
+      "label": { "displayName": "Label", "purpose": "Compact statuses and scanning labels." },
+      "code": { "displayName": "Code", "purpose": "Diffs, paths, branches, line numbers, and exact identifiers." }
+    },
+    "shadows": [
+      { "name": "focused-group", "value": "0 2px 12px rgba(0, 0, 0, 0.25)", "purpose": "A single important grouped region such as My Plate." },
+      { "name": "floating-control", "value": "0 4px 16px rgba(1, 4, 9, 0.5)", "purpose": "Compact selection toolbars." },
+      { "name": "flyout", "value": "0 8px 24px rgba(0, 0, 0, 0.4)", "purpose": "Inboxes and toast feedback." },
+      { "name": "drawer", "value": "-12px 0 34px rgba(1, 4, 9, 0.5)", "purpose": "Full-height PR detail." },
+      { "name": "dialog", "value": "0 12px 40px rgba(1, 4, 9, 0.6)", "purpose": "Focused modal tasks above the detail drawer." }
+    ],
+    "motion": [
+      { "name": "state-fast", "value": "120ms ease", "purpose": "Hover and compact state feedback." },
+      { "name": "state-standard", "value": "160ms ease", "purpose": "Flyout and popover opacity changes." },
+      { "name": "drawer", "value": "260ms cubic-bezier(.22, .61, .36, 1)", "purpose": "PR detail spatial continuity." },
+      { "name": "reduced-motion", "value": "none", "purpose": "Remove nonessential animation under prefers-reduced-motion." }
+    ],
+    "breakpoints": [
+      { "name": "compact", "value": "520px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Initiates a primary review or save action.",
+      "html": "<button class=\"ds-btn-primary\">Review PR with Copilot</button>",
+      "css": ".ds-btn-primary { background: var(--accent-dim, #1f6feb); color: #fff; border: 0; padding: 6px 12px; border-radius: var(--radius-sm, 6px); font: 500 13px/1.5 -apple-system, \"Segoe UI\", system-ui, sans-serif; cursor: pointer; transition: background 120ms ease; } .ds-btn-primary:hover { background: var(--accent, #4c8dff); } .ds-btn-primary:focus-visible { outline: 2px solid var(--accent, #4c8dff); outline-offset: 2px; } .ds-btn-primary:active { background: var(--accent-dim, #1f6feb); }"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Supports secondary actions without competing with the primary path.",
+      "html": "<button class=\"ds-btn-ghost\">Refresh</button>",
+      "css": ".ds-btn-ghost { background: transparent; color: var(--text-dim, #9aa5b1); border: 1px solid var(--border, #2a3038); padding: 6px 12px; border-radius: var(--radius-sm, 6px); font: 500 13px/1.5 -apple-system, \"Segoe UI\", system-ui, sans-serif; cursor: pointer; transition: color 120ms ease, border-color 120ms ease, background 120ms ease; } .ds-btn-ghost:hover { color: var(--text, #e6edf3); border-color: var(--accent-dim, #1f6feb); background: var(--bg-elev2, #1c2230); } .ds-btn-ghost:focus-visible { outline: 2px solid var(--accent, #4c8dff); outline-offset: 2px; }"
+    },
+    {
+      "name": "Text Field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Compact technical input for organizations, projects, and review settings.",
+      "html": "<input class=\"ds-input\" value=\"Azure AppConfig\" aria-label=\"Project\">",
+      "css": ".ds-input { width: 240px; background: var(--bg, #0d1117); color: var(--text, #e6edf3); border: 1px solid var(--border, #2a3038); border-radius: var(--radius-sm, 6px); padding: 6px 8px; font: 13px/1.5 -apple-system, \"Segoe UI\", system-ui, sans-serif; } .ds-input:hover { border-color: var(--text-faint, #6e7681); } .ds-input:focus-visible { outline: 2px solid var(--accent, #4c8dff); outline-offset: 1px; border-color: var(--accent-dim, #1f6feb); }"
+    },
+    {
+      "name": "View Navigation",
+      "kind": "nav",
+      "refersTo": "nav-active",
+      "description": "Stable segmented navigation between pull requests and rollouts.",
+      "html": "<nav class=\"ds-nav\" aria-label=\"View\"><button class=\"ds-nav-item ds-active\">Pull requests</button><button class=\"ds-nav-item\">Rollouts</button></nav>",
+      "css": ".ds-nav { display: inline-flex; gap: 2px; padding: 2px; background: var(--bg-elev2, #1c2230); border: 1px solid var(--border, #2a3038); border-radius: var(--radius-sm, 6px); } .ds-nav-item { background: transparent; color: var(--text-dim, #9aa5b1); border: 0; padding: 5px 12px; border-radius: 4px; font: 500 13px/1.5 -apple-system, \"Segoe UI\", system-ui, sans-serif; cursor: pointer; } .ds-nav-item:hover { color: var(--text, #e6edf3); } .ds-nav-item:focus-visible { outline: 2px solid var(--accent, #4c8dff); outline-offset: 1px; } .ds-nav-item.ds-active { background: var(--accent-dim, #1f6feb); color: #fff; }"
+    },
+    {
+      "name": "Status Badge",
+      "kind": "chip",
+      "refersTo": "status",
+      "description": "Pairs a semantic dot and text label with a full border.",
+      "html": "<span class=\"ds-status ds-success\"><span class=\"ds-status-dot\" aria-hidden=\"true\"></span>Succeeded</span>",
+      "css": ".ds-status { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px; border: 1px solid var(--border, #2a3038); border-radius: 999px; background: var(--bg-elev2, #1c2230); color: var(--text-dim, #9aa5b1); font: 600 11px/1.5 -apple-system, \"Segoe UI\", system-ui, sans-serif; } .ds-status-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; } .ds-status.ds-success { color: var(--add-line, #2ea043); border-color: var(--add-line, #2ea043); }"
+    },
+    {
+      "name": "Pull Request Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "A scan-first summary that keeps title, state, branch, author, and age in one compact unit.",
+      "html": "<article class=\"ds-pr-card\" tabindex=\"0\"><div class=\"ds-pr-title\">Improve rollout failure visibility</div><div class=\"ds-pr-meta\"><span class=\"ds-pr-id\">#1842</span><code>feature/status</code><span>by Ada</span><span>12m ago</span></div></article>",
+      "css": ".ds-pr-card { width: min(560px, 100%); background: var(--bg-elev, #161b22); color: var(--text, #e6edf3); border: 1px solid var(--border-soft, #21262d); border-radius: var(--radius, 10px); padding: 12px 14px; cursor: pointer; transition: background 120ms ease, border-color 120ms ease; } .ds-pr-card:hover { background: var(--bg-elev2, #1c2230); border-color: var(--accent-dim, #1f6feb); } .ds-pr-card:focus-visible { outline: 2px solid var(--accent, #4c8dff); outline-offset: 2px; } .ds-pr-title { margin-bottom: 6px; font: 500 13px/1.5 -apple-system, \"Segoe UI\", system-ui, sans-serif; } .ds-pr-meta { display: flex; flex-wrap: wrap; gap: 8px 12px; color: var(--text-faint, #6e7681); font: 12px/1.5 -apple-system, \"Segoe UI\", system-ui, sans-serif; } .ds-pr-meta code { padding: 1px 6px; border-radius: 4px; background: var(--bg-elev2, #1c2230); color: var(--text-dim, #9aa5b1); } .ds-pr-id { color: var(--accent, #4c8dff); }"
+    },
+    {
+      "name": "Copilot Review Panel",
+      "kind": "custom",
+      "description": "Progressively reveals review status, summary, and staged findings without leaving the PR.",
+      "html": "<section class=\"ds-review\"><header class=\"ds-review-head\"><span aria-hidden=\"true\">&#10003;</span><strong>Copilot review</strong><span class=\"ds-review-summary\">2 findings staged</span></header><div class=\"ds-review-body\">Findings appear inline beside the changed evidence.</div></section>",
+      "css": ".ds-review { overflow: hidden; background: var(--bg-elev2, #1c2230); color: var(--text, #e6edf3); border: 1px solid var(--add-line, #2ea043); border-radius: var(--radius-sm, 6px); font: 13px/1.5 -apple-system, \"Segoe UI\", system-ui, sans-serif; } .ds-review-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; cursor: pointer; } .ds-review-head:hover { background: var(--bg-elev, #161b22); } .ds-review-head:focus-visible { outline: 2px solid var(--accent, #4c8dff); outline-offset: -2px; } .ds-review-head strong { color: var(--add-line, #2ea043); font-weight: 600; } .ds-review-summary { color: var(--text-dim, #9aa5b1); } .ds-review-body { padding: 8px 12px 12px; border-top: 1px solid var(--border, #2a3038); color: var(--text-dim, #9aa5b1); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Review Console",
+    "overview": "ADO PR Ops is a compact engineering workbench built for sustained attention. Midnight Workbench neutrals reduce glare and separate hierarchy through tonal layers, while Azure Signal blue marks the current view, selected evidence, and actions that move work forward. The system is focused, trustworthy, and efficient. It favors familiar controls, explicit state, progressive disclosure, and dense but readable information. It rejects noisy monitoring dashboards packed with decorative widgets, competing colors, and weak hierarchy.",
+    "keyCharacteristics": [
+      "Dark, restrained, and task-first.",
+      "Compact spacing with stable alignment and clear grouping.",
+      "Semantic color is reserved for state and risk.",
+      "Progressive detail preserves list and review context.",
+      "Motion is brief and communicates state changes only."
+    ],
+    "rules": [
+      { "name": "The Signal Rarity Rule", "body": "Azure Signal and semantic colors identify actions, selection, risk, or state; they are never decorative background color.", "section": "colors" },
+      { "name": "The Layer Before Shadow Rule", "body": "Use Midnight Canvas, Workbench Surface, and Raised Graphite to establish hierarchy before adding elevation.", "section": "colors" },
+      { "name": "The Technical Identity Rule", "body": "Monospace communicates exact values, not atmosphere; never use it for ordinary navigation or explanatory prose.", "section": "typography" },
+      { "name": "The Compact Hierarchy Rule", "body": "Create emphasis with weight, color, and grouping before increasing type size.", "section": "typography" },
+      { "name": "The Earned Elevation Rule", "body": "A shadow means the surface has left document flow or temporarily owns focus; static list content stays border-and-tone based.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do use Azure Signal (#4c8dff) and Azure Action (#1f6feb) for current selection, primary actions, and actionable links.",
+      "Do establish hierarchy with the three neutral layers before adding a shadow.",
+      "Do pair success, warning, and danger color with text, an icon, or an explicit label.",
+      "Do keep review evidence near its source line and preserve the user's list, filter, and scroll context.",
+      "Do use visible keyboard focus, semantic labels, readable contrast, and reduced-motion alternatives.",
+      "Do keep most state transitions between 120ms and 260ms and limit them to feedback or spatial continuity."
+    ],
+    "donts": [
+      "Don't build a noisy monitoring dashboard packed with decorative widgets, competing colors, and weak hierarchy.",
+      "Don't turn review metadata into a wall of equal-weight badges; title, risk, evidence, and next action come first.",
+      "Don't use Azure Signal or semantic colors as decoration on inactive surfaces.",
+      "Don't use a colored border-left or border-right thicker than 1px as a card, callout, or status accent; use a full border, dot, icon, or tinted surface.",
+      "Don't introduce glass effects, gradient text, decorative motion, or oversized product typography.",
+      "Don't use faint text for essential labels, placeholder instructions, or actionable content."
+    ]
+  }
+}

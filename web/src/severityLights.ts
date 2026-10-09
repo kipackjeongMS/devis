@@ -8,9 +8,9 @@ import { el } from "./dom.js";
 import { esc } from "./util.js";
 import { state } from "./state.js";
 import { toast } from "./toast.js";
-import { revealFinding } from "./reveal.js";
+import { revealFinding, revealSemanticFinding } from "./reveal.js";
 import { reviewStateKey } from "./reviewKey.js";
-import type { PR, Finding } from "./types.js";
+import type { PR, Finding, SemanticFinding } from "./types.js";
 
 /** Rendered left-to-right, most severe first. */
 const LEVELS = [
@@ -34,10 +34,22 @@ function bucket(severity?: string | null): string {
   return ALIASES[String(severity || "").trim().toLowerCase()] || "nit";
 }
 
+type SeverityItem =
+  | { kind: "inline"; finding: Finding }
+  | { kind: "semantic"; finding: SemanticFinding };
+
 /** Unposted findings only — the lights are a triage queue that empties as you post. */
-function stagedFindings(pr: PR): Finding[] {
+function stagedFindings(pr: PR): SeverityItem[] {
   const review = state.reviews[reviewStateKey(pr)];
-  return ((review && review.findingsList) || []).filter((f) => f && !f.posted);
+  if (!review) return [];
+  return [
+    ...(review.findingsList || [])
+      .filter((finding) => finding && !finding.posted)
+      .map((finding) => ({ kind: "inline" as const, finding })),
+    ...(review.semanticFindingsList || [])
+      .filter((finding) => finding && !finding.posted)
+      .map((finding) => ({ kind: "semantic" as const, finding })),
+  ];
 }
 
 // ---- the single mounted bar + its drawer -------------------------------------
@@ -76,12 +88,12 @@ function render(): void {
   if (!mounted) return;
   const { bar, pr } = mounted;
 
-  const byLevel = new Map<string, Finding[]>();
-  for (const f of stagedFindings(pr)) {
-    const k = bucket(f.severity);
+  const byLevel = new Map<string, SeverityItem[]>();
+  for (const item of stagedFindings(pr)) {
+    const k = bucket(item.finding.severity);
     const list = byLevel.get(k);
-    if (list) list.push(f);
-    else byLevel.set(k, [f]);
+    if (list) list.push(item);
+    else byLevel.set(k, [item]);
   }
 
   bar.innerHTML = "";
@@ -95,8 +107,8 @@ function render(): void {
     const plural = items.length === 1 ? "" : "s";
     const light = el<HTMLButtonElement>(
       `<button type="button" class="sl-light sl-${lvl.key}" aria-expanded="false"
-               title="${items.length} ${esc(lvl.label)} comment${plural}"
-               aria-label="${items.length} ${esc(lvl.label)} comment${plural}">
+               title="${items.length} ${esc(lvl.label)} finding${plural}"
+               aria-label="${items.length} ${esc(lvl.label)} finding${plural}">
          <span class="sl-count">${items.length}</span>
          <span class="sl-orb"></span>
        </button>`
@@ -137,7 +149,7 @@ function toggleDrawer(
   bar: HTMLElement,
   light: HTMLButtonElement,
   lvl: { key: string; label: string },
-  items: Finding[]
+  items: SeverityItem[]
 ): void {
   const reopening = activeLight === light;
   closeDrawer();
@@ -152,13 +164,13 @@ function toggleDrawer(
     `<div class="sl-pop sl-${lvl.key}">
        <span class="sl-caret"></span>
        <div class="sl-drawer">
-         <div class="sl-head">${esc(lvl.label)} · ${items.length} comment${plural}</div>
+         <div class="sl-head">${esc(lvl.label)} · ${items.length} finding${plural}</div>
          <div class="sl-list"></div>
        </div>
      </div>`
   );
   const list = node.querySelector(".sl-list") as HTMLElement;
-  for (const f of items) list.appendChild(buildRow(f));
+  for (const item of items) list.appendChild(buildRow(item));
   const host = bar.closest<HTMLElement>(".detail-head") || bar;
   host.appendChild(node);
   pop = node;
@@ -200,9 +212,17 @@ function positionUnder(host: HTMLElement, light: HTMLElement, node: HTMLElement)
   (node.querySelector(".sl-caret") as HTMLElement).style.left = center - left + "px";
 }
 
-function buildRow(f: Finding): HTMLElement {
-  const base = f.file ? f.file.split("/").pop() || f.file : "General";
-  const loc = f.line != null ? `${base}:${f.line}` : base;
+function buildRow(item: SeverityItem): HTMLElement {
+  let loc: string;
+  if (item.kind === "semantic") {
+    const category = item.finding.category.replace(/^\w/, (value) => value.toUpperCase());
+    loc = `${category} · PR-level`;
+  } else {
+    const finding = item.finding;
+    const base = finding.file ? finding.file.split("/").pop() || finding.file : "General";
+    loc = finding.line != null ? `${base}:${finding.line}` : base;
+  }
+  const f = item.finding;
   const title = (f.title || f.comment || "").split("\n")[0].trim();
   const row = el<HTMLButtonElement>(
     `<button type="button" class="sl-item">
@@ -212,7 +232,10 @@ function buildRow(f: Finding): HTMLElement {
   );
   row.addEventListener("click", async () => {
     closeDrawer();
-    if (!(await revealFinding(f))) toast("Could not locate that comment in the diff", "err");
+    const revealed = item.kind === "semantic"
+      ? revealSemanticFinding(item.finding)
+      : await revealFinding(item.finding);
+    if (!revealed) toast("Could not locate that finding", "err");
   });
   return row;
 }

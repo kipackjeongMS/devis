@@ -8,7 +8,7 @@ import {
     type PrDetail,
     type Thread,
 } from "./ado.mjs";
-import { queueReviewJobs } from "./review-dispatch.mjs";
+import { queueReviewJobs } from "./review-runner.mjs";
 
 const MAX_QUEUE_BATCH = 50;
 const DIFF_FETCH_CONCURRENCY = 3;
@@ -55,7 +55,6 @@ export interface PreparedReview {
         repoId: string;
         title: string;
         taskPrompt: string;
-        targetCanvasInstanceId: string;
         reviewModel: string;
     };
 }
@@ -134,13 +133,6 @@ function recoverPartialTarget(value: unknown): ReviewTarget {
         repoId: safeString(record.repoId),
         prId: safePrId(record.prId),
     };
-}
-
-function targetCanvasInstanceId(pr: Pr): string {
-    return `ado-pr-review-${pr.org}-${pr.repoId}-${pr.id}`
-        .toLowerCase()
-        .replace(/[^a-z0-9-]+/g, "-")
-        .slice(0, 120);
 }
 
 export function diffToText(diff: Diff | null | undefined): string {
@@ -257,7 +249,6 @@ export async function buildPrContext(
 export function buildReviewTask(opts: {
     prId: string | number;
     prContext: string;
-    canvasInstanceId: string;
     org: string;
     project: string;
     repo: string;
@@ -265,8 +256,7 @@ export function buildReviewTask(opts: {
     title: string;
     runId: string;
 }): string {
-    const { prId, prContext, canvasInstanceId, org, project, repo, repoId, title, runId } =
-        opts;
+    const { prId, prContext, org, project, repo, repoId, title, runId } = opts;
     const resultIdentity = JSON.stringify(
         { prId, runId, org, project, repoId, repo, title },
         null,
@@ -296,12 +286,12 @@ Please review the Azure DevOps PR above thoroughly using a multi-agent approach:
       Write \`comment\` in natural plain English, exactly as a thoughtful human reviewer would leave it on the PR. Keep it concise (usually one to three sentences), conversational, direct, and actionable. Preserve the technical substance, but avoid mechanical wording, formal report language, filler, and AI tells.
       Write \`technicalExplanation\` as an in-depth technical explanation for the Elaborate view. Explain the underlying mechanics, concrete evidence in this change, impact or failure mode, and why the recommended remediation addresses it. Keep that detailed implementation reasoning out of \`comment\`.
    4. Check whether related PRs or branches exist in this repo or other repos (e.g. a companion/dependent change, an earlier version of this PR, or a linked service). If any are found, cross-review this PR against them for consistency and add resulting PR-level concerns to \`semanticFindings\` or line-specific concerns to \`findings\`.
-   5. IMPORTANT — when the review is complete, call \`invoke_canvas_action\` on instanceId \`${canvasInstanceId}\`, actionName \`publishReview\`, and input formed from this identity:
+   5. IMPORTANT — when the review is complete, call the \`publish_review\` tool with input formed from this identity:
 \`\`\`json
 ${resultIdentity}
 \`\`\`
-      Add status='done', summary=a <=140-character verdict, story=the semantic story plus '## What changed', semanticFindings=the JSON ARRAY of PR-level semantic findings, and findings=the JSON ARRAY of anchored implementation findings. Always pass both arrays, including for zero or one item. If the review fails, invoke the same action with the identity above plus status='error' and error='<message>'.
-   6. Do NOT post anything to Azure DevOps. The canvas stages semantic findings as general PR comments and implementation findings as inline diff comments; the human posts the ones they want. Your job ends after \`publishReview\` succeeds.
+      Add status='done', summary=a <=140-character verdict, story=the semantic story plus '## What changed', semanticFindings=the JSON ARRAY of PR-level semantic findings, and findings=the JSON ARRAY of anchored implementation findings. Always pass both arrays, including for zero or one item. If the review fails, call the same tool with the identity above plus status='error' and error='<message>'. If the tool rejects your input, fix it and call it again.
+   6. Do NOT post anything to Azure DevOps. The app stages semantic findings as general PR comments and implementation findings as inline diff comments; the human posts the ones they want. Your job ends after \`publish_review\` succeeds.
 ===REVIEW TASK END===`;
 }
 
@@ -324,12 +314,10 @@ async function prepareReview(
         throw new Error("ADO returned a PR outside the requested scope");
     }
     const runId = randomUUID();
-    const canvasInstanceId = targetCanvasInstanceId(pr);
     const diffs = await fetchDiffs(target, detail);
     const taskPrompt = buildReviewTask({
         prId: pr.id,
         prContext: await buildPrContext(pr, detail, diffs),
-        canvasInstanceId,
         org: pr.org,
         project: pr.project,
         repo: pr.repo,
@@ -348,7 +336,6 @@ async function prepareReview(
             repoId: pr.repoId,
             title: pr.title,
             taskPrompt,
-            targetCanvasInstanceId: canvasInstanceId,
             reviewModel,
         },
     };
@@ -359,12 +346,6 @@ export async function queueReviewTargets(
     dependencies?: QueueReviewTargetsDependencies,
 ): Promise<QueueReviewTargetsResult> {
     const record = asRecord(input, "review target queue input");
-    const canvasInstanceId = requiredString(
-        record,
-        "canvasInstanceId",
-        "review target queue input",
-        200,
-    );
     if (!Array.isArray(record.targets) || !record.targets.length) {
         throw new Error("targets must be a non-empty array");
     }
@@ -415,7 +396,7 @@ export async function queueReviewTargets(
     const queue = dependencies?.queueReviewJobs || queueReviewJobs;
     for (const { target, job } of prepared) {
         try {
-            const queued = await queue({ canvasInstanceId, jobs: [job] });
+            const queued = await queue({ jobs: [job] });
             accepted.push(...queued.accepted);
             skipped.push(...queued.skipped);
         } catch (error) {

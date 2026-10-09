@@ -9,6 +9,8 @@ import { openRephraseModal } from "./rephraseModal.js";
 import { refreshSeverityLights } from "./severityLights.js";
 import { state } from "./state.js";
 import { renderCommentBody } from "./markdown.js";
+import { threadStatusBadge, threadStatusToggle } from "./threadStatus.js";
+import { icon } from "./icons.js";
 
 /** Inline composer row for a brand-new line-anchored thread/range (ADO write on submit). */
 export function buildComposerRow(
@@ -85,12 +87,12 @@ export function renderThread(pr: PR, thread: Thread): HTMLElement {
     : "General";
   const header = el(
     `<button type="button" class="thread-loc" aria-expanded="true">
-       <span class="thread-chev">▾</span>
-       <span class="thread-where">${where}</span>
+       <span class="thread-chev" aria-hidden="true">${icon("chevron")}</span>
+       <span class="thread-where${thread.filePath ? "" : " general"}">${where}</span>
        <span class="thread-count">${thread.comments.length}</span>
-       <span class="st">${esc(thread.status)}</span>
      </button>`
   );
+  header.appendChild(threadStatusBadge(thread, "st"));
   header.addEventListener("click", () => {
     const isCollapsed = box.classList.toggle("collapsed");
     header.setAttribute("aria-expanded", String(!isCollapsed));
@@ -146,6 +148,7 @@ export function renderThread(pr: PR, thread: Thread): HTMLElement {
     }
   });
   body.appendChild(rb);
+  rb.appendChild(threadStatusToggle(pr, thread));
 
   box.appendChild(header);
   box.appendChild(body);

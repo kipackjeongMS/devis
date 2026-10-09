@@ -1,6 +1,6 @@
 // Durable PR-review queue. Both the detail-page button and list-page Review All
-// prepare the same self-contained tasks, then enqueue them for bounded dispatch
-// into independent app-managed sessions.
+// prepare the same self-contained tasks, then enqueue them for the app's
+// bounded background reviewer sessions.
 import { postJSON } from "./api.js";
 import { toast } from "./toast.js";
 import { state } from "./state.js";
@@ -23,18 +23,11 @@ function responseKey(item: any): string {
   return JSON.stringify([String(item.org), String(item.project), String(item.repoId), String(item.prId)]);
 }
 
-function currentCanvasInstanceId(): string {
-  const id = new URLSearchParams(window.location.search).get("canvasInstanceId")?.trim();
-  if (!id) throw new Error("This canvas instance cannot dispatch reviews. Reopen the canvas and try again.");
-  return id;
-}
-
 async function enqueueTargets(
   prs: PR[],
   onProgress?: (done: number, total: number, pr: PR) => void
 ): Promise<BulkReviewResult> {
   if (!prs.length) return { accepted: [], skipped: [], failed: [] };
-  const canvasInstanceId = currentCanvasInstanceId();
   const accepted: string[] = [];
   const skipped: string[] = [];
   const failed: BulkReviewResult["failed"] = [];
@@ -45,7 +38,6 @@ async function enqueueTargets(
     let res: any;
     try {
       res = await postJSON("/api/review/queue-targets", {
-        canvasInstanceId,
         reviewModel: state.config.reviewModel || "",
         targets: chunk.map((pr) => ({
           org: pr.org,

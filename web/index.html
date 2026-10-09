@@ -1,87 +1,92 @@
 <!doctype html>
 <html lang="en">
+  <!--
+    Direction contract (concept seed ca50a085, index 3)
+    THESIS: A native Windows 11 review desk. The queue is the inbox; the reading pane is the desk.
+    OWN-WORLD: Fluent 2 dark. Mica base, layered #272727 surfaces, Segoe UI Variable, Cascadia Mono
+    for ids and code, one cyan accent (#60cdff) spent only on selection, the primary command and focus.
+    STORY: Triage runs left to right: scope, queue, open PR, Copilot review, discussion, files.
+    FIRST VIEWPORT: Title bar with three icon commands; the queue with a Me / Not me / All switch;
+    the reading pane showing the open PR's sticky command bar and section tabs (or its empty state).
+    FORM: 40px title bar, 4px control radius, 8px surface radius, 4px grid, hairline strokes,
+    shadows only on flyouts and dialogs, one authored motion (the open-row pill and pane entrance).
+  -->
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Review Console</title>
+    <meta name="color-scheme" content="dark" />
+    <title>ADO PR Ops</title>
     <link rel="stylesheet" href="style.css" />
   </head>
-  <body>
-    <a class="skip-link" href="#view">Skip to review queue</a>
-    <header class="topbar">
-      <div class="brand" aria-label="Review Console">
+  <body data-page="queue">
+    <a class="skip-link" href="#view">Skip to pull requests</a>
+    <header class="titlebar">
+      <div class="brand">
         <span class="brand-mark" aria-hidden="true">
-          <svg viewBox="0 0 24 24" focusable="false">
-            <circle cx="7" cy="5" r="2"></circle>
-            <circle cx="17" cy="7" r="2"></circle>
-            <circle cx="7" cy="19" r="2"></circle>
-            <path d="M7 7v10M9 7h2a6 6 0 0 1 6 6v4"></path>
+          <svg class="ic" viewBox="0 0 16 16" focusable="false">
+            <circle cx="4.5" cy="3.75" r="1.5"></circle>
+            <circle cx="4.5" cy="12.25" r="1.5"></circle>
+            <circle cx="11.5" cy="12.25" r="1.5"></circle>
+            <path d="M4.5 5.25v5.5M11.5 10.75V7a2.5 2.5 0 0 0-2.5-2.5H6.5M8 3l-1.5 1.5L8 6"></path>
           </svg>
         </span>
-        <span class="brand-copy">
-          <strong>Review Console</strong>
-          <span>Azure DevOps</span>
-        </span>
+        <span class="brand-name">ADO PR Ops</span>
       </div>
-      <nav class="topnav" aria-label="Primary navigation">
-        <button type="button" class="nav-btn active" data-view="prs">Pull requests</button>
-        <button type="button" class="nav-btn" data-view="rollouts">Rollouts</button>
-      </nav>
-      <div class="topbar-actions">
+      <div class="titlebar-actions">
         <button id="btnInbox" class="icon-btn inbox-btn" type="button" title="Notifications" aria-label="Notifications"
           aria-expanded="false" aria-controls="inboxFlyout">
-          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-            <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path>
-            <path d="M10 21h4"></path>
+          <svg class="ic" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+            <path d="M4 11.5V7a4 4 0 0 1 8 0v4.5l1 1H3z"></path>
+            <path d="M6.75 14h2.5"></path>
           </svg>
           <span class="inbox-badge" hidden>0</span>
         </button>
-        <button id="btnRefresh" class="icon-btn" type="button" title="Refresh" aria-label="Refresh">
-          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-            <path d="M20 7v5h-5"></path>
-            <path d="M19 12a7 7 0 1 0-2 5"></path>
+        <button id="btnRefresh" class="icon-btn" type="button" title="Refresh pull requests" aria-label="Refresh pull requests">
+          <svg class="ic" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+            <path d="M13.25 3.75V7H10"></path>
+            <path d="M12.9 7a5 5 0 1 0-1.4 4.55"></path>
           </svg>
         </button>
         <button id="btnSettings" class="icon-btn" type="button" title="Settings" aria-label="Settings">
-          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-            <circle cx="12" cy="12" r="3"></circle>
-            <path d="M19.4 15a2 2 0 0 0 .4 2.2l.1.1-2.6 2.6-.1-.1a2 2 0 0 0-2.2-.4 2 2 0 0 0-1.2 1.8V21h-3.6v-.2A2 2 0 0 0 9 19a2 2 0 0 0-2.2.4l-.1.1-2.6-2.6.1-.1A2 2 0 0 0 4.6 15a2 2 0 0 0-1.8-1.2H3v-3.6h.2A2 2 0 0 0 5 9a2 2 0 0 0-.4-2.2l-.1-.1 2.6-2.6.1.1A2 2 0 0 0 9 4.6a2 2 0 0 0 1.2-1.8V3h3.6v.2A2 2 0 0 0 15 5a2 2 0 0 0 2.2-.4l.1-.1 2.6 2.6-.1.1A2 2 0 0 0 19.4 9a2 2 0 0 0 1.8 1.2h.2v3.6h-.2A2 2 0 0 0 19.4 15Z"></path>
+          <svg class="ic" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+            <circle cx="8" cy="8" r="2"></circle>
+            <path d="M8 1.75l1.1 1.6 1.9-.4.4 1.9 1.6 1.1-1 1.65 1 1.65-1.6 1.1-.4 1.9-1.9-.4L8 14.25l-1.1-1.6-1.9.4-.4-1.9-1.6-1.1 1-1.65-1-1.65 1.6-1.1.4-1.9 1.9.4z"></path>
           </svg>
         </button>
       </div>
     </header>
 
-    <div id="filterbar" class="filterbar" hidden>
-      <div class="filterbar-heading">
-        <strong>Review scope</strong>
-        <span>Queue and ownership</span>
-      </div>
-      <div class="filterbar-fields">
-        <label class="filter-field">
-          <span class="filter-label">Organization</span>
-          <select id="orgFilter" class="filter-select"></select>
-        </label>
-        <label class="filter-field">
-          <span class="filter-label">Project</span>
-          <select id="projectFilter" class="filter-select"></select>
-        </label>
-        <div class="filter-field assign-field">
-          <span class="filter-label">Assigned</span>
-          <div id="assignFilter" class="seg" role="group" aria-label="Assignment">
-            <button type="button" class="seg-btn" data-assign="mine">To me</button>
-            <button type="button" class="seg-btn" data-assign="notmine">Others</button>
-            <button type="button" class="seg-btn" data-assign="all">All</button>
+    <div class="workspace">
+      <section id="listPane" class="list-pane" aria-label="Pull request queue">
+        <div id="filterbar" class="filterbar" hidden>
+          <h1 class="list-title">Pull requests</h1>
+          <div class="filterbar-fields">
+            <label class="filter-field">
+              <span class="visually-hidden">Organization</span>
+              <select id="orgFilter" class="filter-select"></select>
+            </label>
+            <label class="filter-field">
+              <span class="visually-hidden">Project</span>
+              <select id="projectFilter" class="filter-select"></select>
+            </label>
           </div>
+          <div id="assignFilter" class="seg" role="group" aria-label="Assigned to">
+            <button type="button" class="seg-btn" data-assign="mine" aria-pressed="false">Me</button>
+            <button type="button" class="seg-btn" data-assign="notmine" aria-pressed="false">Not me</button>
+            <button type="button" class="seg-btn" data-assign="all" aria-pressed="false">All</button>
+          </div>
+          <div id="bulkReviewHost" class="bulk-review-host"></div>
         </div>
-      </div>
-      <div id="bulkReviewHost" class="bulk-review-host"></div>
+
+        <main id="view" class="view" tabindex="-1">
+          <div class="loading"><span class="spinner"></span> Loading…</div>
+        </main>
+      </section>
+
+      <section id="readingPane" class="reading-pane" aria-label="Reading pane"></section>
     </div>
 
-    <main id="view" class="view" tabindex="-1">
-      <div class="loading">Loading…</div>
-    </main>
-
-    <div id="toast" class="toast" hidden></div>
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
     <script src="vendor/mermaid.min.js" defer></script>
     <script src="app.js" type="module"></script>
