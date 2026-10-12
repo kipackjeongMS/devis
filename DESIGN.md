@@ -191,7 +191,7 @@ The open row gets `fill-selected` and a 3px accent bar, and selected rows get th
 ### Detail head
 
 The detail head shows:
-- the title, then the ID, status, severity lights and branch → target;
+- the title, then the ID, status, severity lights, author and branch → target. The author is a 20px persona avatar with the name and when the PR was opened; hovering shows the exact date;
 - the command bar, made up of Decision, Lifecycle, Copilot review, Refresh, Open in ADO and the comments drawer;
 - the section tabs, with an accent underline that follows the scroll.
 

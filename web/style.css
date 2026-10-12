@@ -927,6 +927,10 @@ body.layout-stacked .pane-back { display: inline-grid; }
 .detail-id-group { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .detail-id-group .id { color: var(--text-2); font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .detail-repo { min-width: 0; }
+.detail-author { display: inline-flex; min-width: 0; align-items: center; gap: 6px; }
+.detail-author .persona { width: 20px; height: 20px; }
+.detail-author-name { min-width: 0; max-width: 240px; overflow: hidden; color: var(--text-2); text-overflow: ellipsis; white-space: nowrap; }
+.detail-author-when { flex: none; white-space: nowrap; }
 .detail-branch { display: inline-flex; min-width: 0; max-width: 100%; align-items: center; gap: 6px; }
 .detail-branch code {
   min-width: 0;

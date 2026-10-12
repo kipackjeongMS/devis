@@ -19,6 +19,7 @@ import { requestNotifyPermission } from "./notifyWatch.js";
 import { toast } from "./toast.js";
 import type { PR, Detail, Thread } from "./types.js";
 import { statusBadge, voteBadge, myActionBadge } from "./prStatus.js";
+import { initials, prAuthorMarkup } from "./prAuthor.js";
 import { mountPrComments, unmountPrComments } from "./prComments.js";
 import { hydratePrDescriptionImages } from "./prDescriptionImages.js";
 import { closePrActionMenu, mountDecisionMenu, mountLifecycleMenu } from "./prActions.js";
@@ -191,6 +192,8 @@ function buildDetail(container: HTMLElement, pr: PR, detail: Detail): void {
   }
   identity.appendChild(mountSeverityLights(pr));
   meta.appendChild(identity);
+  const author = prAuthorMarkup(pr.author, pr.created);
+  if (author) meta.appendChild(el(author));
   meta.appendChild(el(`<span class="detail-repo">${esc(pr.repo)} · ${esc(pr.project)}</span>`));
   meta.appendChild(
     el(
@@ -254,15 +257,6 @@ function buildDetail(container: HTMLElement, pr: PR, detail: Detail): void {
 function paneSection(title: string, count?: number): HTMLElement {
   const n = count != null ? `<span class="section-count">${count}</span>` : "";
   return el(`<section class="pane-section"><h3 class="section-title">${esc(title)}${n}</h3></section>`);
-}
-
-// "Ada Lovelace" -> "AL"; ADO prefixes such as "[org]\" are ignored.
-function initials(name: string): string {
-  const words = name.replace(/^\[[^\]]*\]\\?/, "").trim().split(/\s+/).filter(Boolean);
-  if (!words.length) return "?";
-  const first = words[0][0] || "";
-  const last = words.length > 1 ? words[words.length - 1][0] || "" : "";
-  return (first + last).toUpperCase();
 }
 
 // The reviewer strip under the header: the current user's own action first (which
