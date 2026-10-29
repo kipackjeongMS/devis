@@ -106,7 +106,7 @@ assert.equal(chatFingerprint(settled), chatFingerprint({ ...settled }));
 
 // ---- wiring: the done panel offers chat + terminal only with a reviewer session ----
 const panel = await readFile(new URL("../web/src/reviewPanel.ts", import.meta.url), "utf8");
-assert.match(panel, /reviewerChatSection\(pr\)/);
+assert.match(panel, /reviewerChatSection\(pr, review\.reviewer_session_id,/);
 assert.match(panel, /\/api\/reviewer-terminal/);
 assert.doesNotMatch(panel, /provenance|Teams/i);
 

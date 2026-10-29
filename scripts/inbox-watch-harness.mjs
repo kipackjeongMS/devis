@@ -426,6 +426,41 @@ try {
     console.log("Case 9b (no discovery delay for a write-time-recorded watch) passed");
 
     // =========================================================================
+    // Case 10 -- watch upkeep. A watch outside discovery stays while its thread
+    // is active, goes once it has been quiet for 30 days of polling, and a PR
+    // that no longer exists is dropped instead of failing the org forever.
+    // =========================================================================
+    const db = await store.ensureDb();
+    const watch900 = () => store.listInboxWatches("org-a").find((w) => w.pr_id === "900" && w.thread_id === "9101");
+    db.prepare("UPDATE inbox_watches SET updated_at = ? WHERE org = 'org-a' AND pr_id = '900'").run(iso(-40 * DAY));
+    setThreads("org-a", "ProjA9", "repo-a9-guid", 900, [
+        c({ id: 70, threadId: 9101, mine: true, content: "my new thread", published: iso(-2 * MIN), orgName: "org-a" }),
+        c({ id: 74, threadId: 9101, mine: false, content: "still talking", parentCommentId: 70, published: iso(0), orgName: "org-a" }),
+    ]);
+    await inbox.scanInbox(deps);
+    assert.ok(watch900().updated_at > iso(-1 * MIN), "a peer reply keeps a watch outside discovery alive");
+    inbox.pruneStaleInboxWatches(30 * DAY);
+    assert.ok(watch900(), "an active watch is never pruned");
+
+    db.prepare("UPDATE inbox_watches SET updated_at = ? WHERE org = 'org-a' AND pr_id = '900'").run(iso(-40 * DAY));
+    setThreads("org-a", "ProjA9", "repo-a9-guid", 900, [
+        c({ id: 70, threadId: 9101, mine: true, content: "my new thread", published: iso(-60 * DAY), orgName: "org-a" }),
+        c({ id: 75, threadId: 9101, mine: false, content: "long ago", parentCommentId: 70, published: iso(-50 * DAY), orgName: "org-a" }),
+    ]);
+    const quietPoll = await inbox.scanInbox(deps);
+    assert.ok(watch900().updated_at < iso(-39 * DAY), "a quiet thread isn't touched");
+    assert.equal(quietPoll.diagnostics.find((d) => d.org === "org-a").watermarkAdvanced, true);
+    assert.ok(inbox.pruneStaleInboxWatches(30 * DAY) >= 1);
+    assert.equal(watch900(), undefined, "quiet for 30 days of polling: no longer watched");
+
+    assert.ok(store.listInboxWatches("org-a").some((w) => w.pr_id === "901"));
+    setThreads("org-a", "ProjA9", "repo-a9-guid", 901, [], "ADO GET 404: TF401019: The Git repository does not exist");
+    const gonePoll = await inbox.scanInbox(deps);
+    assert.equal(store.listInboxWatches("org-a").some((w) => w.pr_id === "901"), false, "a PR that no longer exists is dropped");
+    assert.equal(gonePoll.diagnostics.find((d) => d.org === "org-a").watermarkAdvanced, true, "and doesn't hold the org's watermark back");
+    console.log("Case 10 (watch upkeep: touch, quiet prune, gone PRs) passed");
+
+    // =========================================================================
     // Scoped UI route helper: matchNotificationPr must scope by org/project/
     // repoId, not merely the bare PR id (the actual bug: two orgs/projects
     // can share the same numeric PR id).

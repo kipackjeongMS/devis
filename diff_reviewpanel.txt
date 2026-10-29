@@ -1,0 +1,98 @@
+diff --git a/web/src/reviewPanel.ts b/web/src/reviewPanel.ts
+index f9ef7d2..92c61ef 100644
+--- a/web/src/reviewPanel.ts
++++ b/web/src/reviewPanel.ts
+@@ -8,6 +8,7 @@ import { state, scheduleReviewPoll } from "./state.js";
+ import { renderMarkdown } from "./markdown.js";
+ import { renderMermaid } from "./mermaid.js";
+ import type { PR, Review } from "./types.js";
++import { reviewStateKey } from "./reviewKey.js";
+ 
+ // Populate (and, while running, poll) the background-review panel for one PR.
+ // Renders the semantic story + findings as markdown once a result exists.
+@@ -20,15 +21,22 @@ export async function refreshReviewPanel(
+ ): Promise<void> {
+   let review: Review | null = null;
+   try {
+-    const res = await getJSON("/api/review-result?prId=" + encodeURIComponent(pr.id));
++    const query = new URLSearchParams({
++      prId: String(pr.id),
++      org: pr.org,
++      project: pr.project,
++      repoId: pr.repoId,
++    });
++    const res = await getJSON("/api/review-result?" + query.toString());
+     review = res.review;
+   } catch {
+     /* leave hidden on error */
+   }
+ 
+   // Keep the list badge in sync with what we just learned.
+-  if (review) state.reviews[String(pr.id)] = review;
+-  else delete state.reviews[String(pr.id)];
++  const stateKey = reviewStateKey(pr);
++  if (review) state.reviews[stateKey] = review;
++  else delete state.reviews[stateKey];
+   if (onUpdate) onUpdate();
+ 
+   if (!review || review.status === "pending") {
+@@ -37,6 +45,15 @@ export async function refreshReviewPanel(
+   }
+   panel.hidden = false;
+ 
++  if (review.status === "queued") {
++    panel.className = "rev-panel queued";
++    panel.innerHTML =
++      '<div class="rev-head">◷ Review queued</div>' +
++      '<div class="rev-note">Waiting for an independent reviewer session to become available.</div>';
++    scheduleReviewPoll(() => refreshReviewPanel(pr, panel, onUpdate), 4000);
++    return;
++  }
++
+   if (review.status === "running") {
+     panel.className = "rev-panel running";
+     panel.innerHTML =
+@@ -64,6 +81,29 @@ export async function refreshReviewPanel(
+       (review.updated_at ? '<span class="rev-when">' + esc(timeAgo(review.updated_at)) + "</span>" : "") +
+       "</div>"
+   );
++  // The session that produced this review — Elaborate and Humanize are resumed
++  // inside it, and it can be reopened later with `copilot --resume <id>`.
++  if (review.reviewer_session_id) {
++    const id = review.reviewer_session_id;
++    const chip = el(
++      '<button class="rev-session" title="Reviewed in Copilot session ' +
++        esc(id) +
++        ' — click to copy the id">⧉ ' +
++        esc(id.slice(0, 8)) +
++        "</button>"
++    ) as HTMLButtonElement;
++    chip.addEventListener("click", (e) => {
++      e.stopPropagation(); // don't collapse the panel
++      void navigator.clipboard?.writeText(id).then(
++        () => {
++          chip.classList.add("copied");
++          setTimeout(() => chip.classList.remove("copied"), 1200);
++        },
++        () => undefined
++      );
++    });
++    header.appendChild(chip);
++  }
+   const body = el('<div class="rev-body"></div>');
+   header.addEventListener("click", () => {
+     panel.classList.toggle("collapsed");
+@@ -79,7 +119,12 @@ export async function refreshReviewPanel(
+     saveStatus.className = "rev-save-status";
+     saveStatus.textContent = "Saving…";
+     try {
+-      const r = await postJSON("/api/review-md", { prId: pr.id });
++      const r = await postJSON("/api/review-md", {
++        prId: pr.id,
++        org: pr.org,
++        project: pr.project,
++        repoId: pr.repoId,
++      });
+       if (r.saved) {
+         saveStatus.classList.add("ok");
+         saveStatus.textContent = "Saved ✓";

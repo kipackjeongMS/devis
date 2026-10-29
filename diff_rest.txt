@@ -1,0 +1,442 @@
+diff --git a/src/copilot-sdk.d.ts b/src/copilot-sdk.d.ts
+index 2aa7f00..5f7bec7 100644
+--- a/src/copilot-sdk.d.ts
++++ b/src/copilot-sdk.d.ts
+@@ -68,6 +68,8 @@ declare module "@github/copilot-sdk/extension" {
+ 
+     /** The live session; `send` pushes a prompt (with optional attachments) into the Copilot CLI conversation. */
+     export interface SessionRef {
++        /** Id of the CLI session this extension process is joined to. */
++        readonly sessionId: string;
+         send: (msg: { prompt: string; attachments?: SelectionAttachment[] }) => Promise<void>;
+     }
+ 
+diff --git a/src/reviews-md.mts b/src/reviews-md.mts
+index d48f726..b7c7c1d 100644
+--- a/src/reviews-md.mts
++++ b/src/reviews-md.mts
+@@ -84,6 +84,9 @@ function metaLine(row: ReviewRow): string {
+     const when = row.updated_at || "";
+     const day = /^\d{4}-\d{2}-\d{2}/.test(when) ? when.slice(0, 10) : when;
+     if (day) bits.push(`**Reviewed:** ${day}`);
++    // The session that produced the review: resume it with
++    // `copilot --resume <id>` to pick the review back up later.
++    if (row.reviewer_session_id) bits.push(`**Session:** \`${row.reviewer_session_id}\``);
+     return bits.join(" · ");
+ }
+ 
+diff --git a/web/src/app.ts b/web/src/app.ts
+index 5d843bc..bf87663 100644
+--- a/web/src/app.ts
++++ b/web/src/app.ts
+@@ -152,6 +152,14 @@ function renderSettings(): void {
+   filterbar.hidden = true;
+   view.innerHTML = "";
+   const wrap = el(`<div class="settings"></div>`);
++  wrap.appendChild(
++    el(
++      `<div class="settings-heading">
++         <h1>Review Console settings</h1>
++         <p>Configure the Azure DevOps scopes and review defaults used by this workspace.</p>
++       </div>`
++    )
++  );
+   wrap.appendChild(el(`<h2>Organizations &amp; projects</h2>`));
+   wrap.appendChild(
+     el(
+@@ -248,14 +256,14 @@ function renderSettings(): void {
+ 
+   // ---- PR review model selector ----
+   let selectedModel = state.config.reviewModel || "";
+-  wrap.appendChild(el(`<h2 style="margin-top:24px">PR review model</h2>`));
++  wrap.appendChild(el(`<h2 class="settings-section-title">PR review model</h2>`));
+   wrap.appendChild(
+     el(
+       `<div class="desc">AI model used for background PR reviews. <b>Auto</b> lets Copilot pick. Models are discovered from the Copilot CLI.</div>`
+     )
+   );
+   const modelRow = el(`<div class="org-add"></div>`);
+-  const modelSelect = el(`<select class="filter-select" style="flex:1"></select>`) as HTMLSelectElement;
++  const modelSelect = el(`<select class="filter-select settings-model-select"></select>`) as HTMLSelectElement;
+   modelSelect.innerHTML = `<option value="">Auto (let Copilot pick)</option>`;
+   modelSelect.value = "";
+   modelRow.appendChild(modelSelect);
+@@ -282,7 +290,7 @@ function renderSettings(): void {
+ 
+   // ---- Reviews markdown folder ----
+   let reviewsDir = state.config.reviewsDir || "";
+-  wrap.appendChild(el(`<h2 style="margin-top:24px">Reviews folder</h2>`));
++  wrap.appendChild(el(`<h2 class="settings-section-title">Reviews folder</h2>`));
+   wrap.appendChild(
+     el(
+       `<div class="desc">Optional. Completed reviews are also saved as Markdown at <code>&lt;folder&gt;/&lt;RepoName&gt;/&lt;prId&gt;-&lt;title&gt;.md</code> — handy for an Obsidian vault. Leave empty to disable. The app's SQLite store stays the source of truth either way.</div>`
+@@ -290,7 +298,7 @@ function renderSettings(): void {
+   );
+   const dirRow = el(`<div class="org-add"></div>`);
+   const dirInput = el(
+-    `<input type="text" style="flex:1" placeholder="e.g. C:\\Users\\you\\OneDrive\\PRReviews" />`
++    `<input type="text" class="settings-folder-input" placeholder="e.g. C:\\Users\\you\\OneDrive\\PRReviews" />`
+   ) as HTMLInputElement;
+   dirInput.value = reviewsDir;
+   dirInput.addEventListener("input", () => {
+@@ -299,7 +307,7 @@ function renderSettings(): void {
+   dirRow.appendChild(dirInput);
+   wrap.appendChild(dirRow);
+ 
+-  const actions = el(`<div class="org-add" style="justify-content:flex-end"></div>`);
++  const actions = el(`<div class="org-add settings-actions"></div>`);
+   const save = el(`<button class="btn">Save</button>`) as HTMLButtonElement;
+   save.addEventListener("click", async () => {
+     save.disabled = true;
+diff --git a/web/src/detail.ts b/web/src/detail.ts
+index 5276863..064c802 100644
+--- a/web/src/detail.ts
++++ b/web/src/detail.ts
+@@ -78,7 +78,7 @@ function buildDetail(container: HTMLElement, pr: PR, detail: Detail): void {
+     requestNotifyPermission(); // within the user gesture, so the host honors it
+     sendAll.disabled = true;
+     const orig = sendAll.textContent;
+-    sendAll.textContent = "Reviewing…";
++    sendAll.textContent = "Preparing…";
+     try {
+       await sendPrToCopilot(pr, detail);
+     } finally {
+diff --git a/web/src/diff.ts b/web/src/diff.ts
+index 4a6edad..697dd37 100644
+--- a/web/src/diff.ts
++++ b/web/src/diff.ts
+@@ -8,12 +8,13 @@ import { highlightCode } from "./highlight.js";
+ import { renderThread, buildComposerRow, renderStagedFinding } from "./threads.js";
+ import { installSelectionToolbar } from "./selection.js";
+ import { openAskModal } from "./ask.js";
++import { reviewStateKey } from "./reviewKey.js";
+ import type { RevealableFile } from "./reveal.js";
+ import type { PR, Detail, FileChange, Diff, DiffLine, Thread, Finding } from "./types.js";
+ 
+ /** Unposted, line-anchored findings for one file (staged inline comments). */
+ function stagedForFile(pr: PR, filePath: string): Finding[] {
+-  const review = state.reviews ? state.reviews[String(pr.id)] : undefined;
++  const review = state.reviews ? state.reviews[reviewStateKey(pr)] : undefined;
+   const list = (review && review.findingsList) || [];
+   return list.filter((f) => f && !f.posted && f.file === filePath);
+ }
+@@ -30,12 +31,12 @@ export function renderFile(pr: PR, detail: Detail, file: FileChange, threads: Th
+   const box = el<RevealableFile>(`<div class="file"></div>`);
+   box.dataset.path = file.path; // lookup key for revealFinding()
+   const head = el(
+-    `<div class="file-head">
++    `<button type="button" class="file-head" aria-expanded="false">
+        <span class="file-chev">▶</span>
+        <span class="file-path">${esc(file.path)}</span>
+        ${threads.length ? '<span class="file-cmt-dot" title="' + threads.length + ' comment(s)"></span>' : ""}
+        <span class="chg ${cls}">${esc(label)}</span>
+-     </div>`
++     </button>`
+   );
+   const body = el(`<div class="file-body"></div>`);
+ 
+@@ -75,12 +76,14 @@ export function renderFile(pr: PR, detail: Detail, file: FileChange, threads: Th
+   const ensureLoaded = (): Promise<void> => (loading ||= loadDiff());
+ 
+   head.addEventListener("click", () => {
+-    box.classList.toggle("open");
+-    if (box.classList.contains("open")) void ensureLoaded();
++    const open = box.classList.toggle("open");
++    head.setAttribute("aria-expanded", String(open));
++    if (open) void ensureLoaded();
+   });
+ 
+   box._ensureOpen = async () => {
+     box.classList.add("open");
++    head.setAttribute("aria-expanded", "true");
+     await ensureLoaded();
+   };
+ 
+diff --git a/web/src/inboxPanel.ts b/web/src/inboxPanel.ts
+index 48382ab..b3a114f 100644
+--- a/web/src/inboxPanel.ts
++++ b/web/src/inboxPanel.ts
+@@ -30,7 +30,7 @@ export function initInbox(): void {
+     if (flyout && !flyout.contains(t) && bell && !bell.contains(t)) close();
+   });
+   document.addEventListener("keydown", (e) => {
+-    if (e.key === "Escape") close();
++    if (e.key === "Escape" && open) close(true);
+   });
+   window.addEventListener("resize", () => {
+     if (open) position();
+@@ -66,24 +66,46 @@ function openPanel(): void {
+   if (!flyout) {
+     flyout = document.createElement("div");
+     flyout.className = "inbox-flyout";
++    flyout.id = "inboxFlyout";
++    flyout.setAttribute("role", "region");
++    flyout.setAttribute("aria-label", "Notifications");
+     document.body.appendChild(flyout);
+   }
+   open = true;
+   renderList();
+   position();
++  flyout.inert = false;
++  flyout.setAttribute("aria-hidden", "false");
++  bell.setAttribute("aria-expanded", "true");
+   flyout.classList.add("show");
++  requestAnimationFrame(() => {
++    flyout?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
++  });
+ }
+ 
+-function close(): void {
++function close(restoreFocus = false): void {
+   open = false;
+   flyout?.classList.remove("show");
++  if (flyout) {
++    flyout.inert = true;
++    flyout.setAttribute("aria-hidden", "true");
++  }
++  bell?.setAttribute("aria-expanded", "false");
++  if (restoreFocus) bell?.focus();
+ }
+ 
+ function position(): void {
+   if (!bell || !flyout) return;
+   const r = bell.getBoundingClientRect();
+-  flyout.style.top = `${Math.round(r.bottom + 6)}px`;
+-  flyout.style.right = `${Math.round(window.innerWidth - r.right)}px`;
++  const topbarBottom = document.querySelector(".topbar")?.getBoundingClientRect().bottom || r.bottom;
++  const width = Math.min(380, window.innerWidth - 24);
++  const left = Math.min(
++    Math.max(12, r.right - width),
++    window.innerWidth - width - 12
++  );
++  flyout.style.top = `${Math.round(Math.max(r.bottom, topbarBottom) + 6)}px`;
++  flyout.style.left = `${Math.round(left)}px`;
++  flyout.style.right = "auto";
+ }
+ 
+ function renderList(): void {
+diff --git a/web/src/notify.ts b/web/src/notify.ts
+index 7a4d6a8..130ae37 100644
+--- a/web/src/notify.ts
++++ b/web/src/notify.ts
+@@ -4,6 +4,7 @@
+ import type { Review } from "./types.js";
+ 
+ export interface PendingNote {
++  key: string;
+   prId: string;
+   title: string;
+   status: "done" | "error";
+@@ -16,11 +17,11 @@ const TERMINAL = new Set(["done", "error"]);
+ // didn't just start here).
+ const triggered = new Set<string>();
+ 
+-export function markTriggered(prId: string): void {
+-  triggered.add(prId);
++export function markTriggered(key: string): void {
++  triggered.add(key);
+ }
+-export function unmarkTriggered(prId: string): void {
+-  triggered.delete(prId);
++export function unmarkTriggered(key: string): void {
++  triggered.delete(key);
+ }
+ export function triggeredCount(): number {
+   return triggered.size;
+@@ -39,12 +40,17 @@ export function diffReviews(
+   trig: Set<string>
+ ): PendingNote[] {
+   const out: PendingNote[] = [];
+-  for (const prId of trig) {
+-    const n = next[prId];
++  for (const key of trig) {
++    const n = next[key];
+     if (!n || !TERMINAL.has(n.status)) continue;
+-    const p = prev[prId];
++    const p = prev[key];
+     if (p && TERMINAL.has(p.status)) continue; // already terminal before → already notified
+-    out.push({ prId, title: n.title || "", status: n.status === "error" ? "error" : "done" });
++    out.push({
++      key,
++      prId: String(n.pr_id || ""),
++      title: n.title || "",
++      status: n.status === "error" ? "error" : "done",
++    });
+   }
+   return out;
+ }
+diff --git a/web/src/notifyWatch.ts b/web/src/notifyWatch.ts
+index 70f8a34..a43d944 100644
+--- a/web/src/notifyWatch.ts
++++ b/web/src/notifyWatch.ts
+@@ -44,9 +44,10 @@ async function tick(): Promise<void> {
+   const before = prev;
+   await loadReviews(); // refreshes state.reviews from the shared store
+   const after = state.reviews;
++  window.dispatchEvent(new CustomEvent("ado-pr-updated"));
+   for (const note of diffReviews(before, after, getTriggered())) {
+     fireNote(note);
+-    unmarkTriggered(note.prId);
++    unmarkTriggered(note.key);
+   }
+   prev = { ...after };
+   if (triggeredCount() === 0) stopNotifyWatch();
+diff --git a/web/src/rollouts.ts b/web/src/rollouts.ts
+index 9ac9a24..8a2cc00 100644
+--- a/web/src/rollouts.ts
++++ b/web/src/rollouts.ts
+@@ -62,14 +62,17 @@ function renderGroup(g: ServiceGroupRollouts): void {
+   const badges = statuses.map((s) => statusBadge(s)).join("");
+ 
+   const head = el(
+-    `<div class="sg-head">` +
++    `<button type="button" class="sg-head" aria-expanded="true">` +
+       `<span class="sg-chev">▶</span>` +
+       `<span class="sg-name">${esc(shortSg(g.name))}</span>` +
+       `<span class="sg-badges">${badges}</span>` +
+       `<span class="count">${g.rollouts.length}</span>` +
+-      `</div>`
++      `</button>`
+   );
+-  head.addEventListener("click", () => wrap.classList.toggle("collapsed"));
++  head.addEventListener("click", () => {
++    const isCollapsed = wrap.classList.toggle("collapsed");
++    head.setAttribute("aria-expanded", String(!isCollapsed));
++  });
+   wrap.appendChild(head);
+ 
+   const list = el(`<div class="sg-list"></div>`);
+@@ -81,7 +84,7 @@ function renderGroup(g: ServiceGroupRollouts): void {
+ function renderRolloutCard(r: RolloutSummary): HTMLElement {
+   const card = el(`<div class="rollout-card"></div>`);
+   const head = el(
+-    `<div class="rollout-head">` +
++    `<div class="rollout-head" role="button" tabindex="0" aria-expanded="false">` +
+       `<span class="ro-chev">▶</span>` +
+       statusBadge(r.status) +
+       `<span class="ro-id" title="${esc(r.id)}"><code>${esc(r.id.slice(0, 8))}</code></span>` +
+@@ -89,7 +92,7 @@ function renderRolloutCard(r: RolloutSummary): HTMLElement {
+       (r.startTime ? `<span class="ro-time">Started ${esc(timeAgo(r.startTime))}</span>` : "") +
+       `</div>`
+   );
+-  const portal = el(`<button class="link-btn ro-portal">Ev2 Portal ↗</button>`);
++  const portal = el(`<button type="button" class="link-btn ro-portal">Ev2 Portal ↗</button>`);
+   portal.addEventListener("click", (e) => {
+     e.stopPropagation();
+     window.open(r.url, "_blank");
+@@ -98,8 +101,9 @@ function renderRolloutCard(r: RolloutSummary): HTMLElement {
+ 
+   const gridWrap = el(`<div class="rollout-grid"></div>`);
+   let loaded = false;
+-  head.addEventListener("click", async () => {
++  const toggleRollout = async (): Promise<void> => {
+     const open = card.classList.toggle("open");
++    head.setAttribute("aria-expanded", String(open));
+     if (open && !loaded) {
+       loaded = true;
+       gridWrap.innerHTML =
+@@ -114,6 +118,15 @@ function renderRolloutCard(r: RolloutSummary): HTMLElement {
+         gridWrap.innerHTML = `<div class="grid-note">Failed to load stages: ${esc(e.message)}</div>`;
+       }
+     }
++  };
++  head.addEventListener("click", (e) => {
++    if ((e.target as HTMLElement).closest(".ro-portal")) return;
++    void toggleRollout();
++  });
++  head.addEventListener("keydown", (e) => {
++    if (e.target !== head || (e.key !== "Enter" && e.key !== " ")) return;
++    e.preventDefault();
++    void toggleRollout();
+   });
+ 
+   card.appendChild(head);
+diff --git a/web/src/severityLights.ts b/web/src/severityLights.ts
+index 19161bd..4e0682e 100644
+--- a/web/src/severityLights.ts
++++ b/web/src/severityLights.ts
+@@ -9,6 +9,7 @@ import { esc } from "./util.js";
+ import { state } from "./state.js";
+ import { toast } from "./toast.js";
+ import { revealFinding } from "./reveal.js";
++import { reviewStateKey } from "./reviewKey.js";
+ import type { PR, Finding } from "./types.js";
+ 
+ /** Rendered left-to-right, most severe first. */
+@@ -35,7 +36,7 @@ function bucket(severity?: string | null): string {
+ 
+ /** Unposted findings only — the lights are a triage queue that empties as you post. */
+ function stagedFindings(pr: PR): Finding[] {
+-  const review = state.reviews[String(pr.id)];
++  const review = state.reviews[reviewStateKey(pr)];
+   return ((review && review.findingsList) || []).filter((f) => f && !f.posted);
+ }
+ 
+@@ -119,8 +120,6 @@ function closeDrawer(): void {
+     const dying = pop;
+     pop = null;
+     dying.classList.remove("open");
+-    const drawer = dying.querySelector(".sl-drawer") as HTMLElement | null;
+-    if (drawer) drawer.style.maxHeight = "0px";
+     if (reducedMotion()) dying.remove();
+     else setTimeout(() => dying.remove(), 260);
+   }
+@@ -165,12 +164,9 @@ function toggleDrawer(
+ 
+   positionUnder(bar, light, node);
+ 
+-  const drawer = node.querySelector(".sl-drawer") as HTMLElement;
+-  // Next frame so the transition runs from the collapsed state rather than
+-  // snapping straight to the open one.
++  // Next frame so the transition runs from the hidden state.
+   requestAnimationFrame(() => {
+     node.classList.add("open");
+-    drawer.style.maxHeight = drawer.scrollHeight + "px";
+   });
+ 
+   onOutside = (e: MouseEvent) => {
+diff --git a/web/src/threads.ts b/web/src/threads.ts
+index 4b40e55..b302e6b 100644
+--- a/web/src/threads.ts
++++ b/web/src/threads.ts
+@@ -83,14 +83,17 @@ export function renderThread(pr: PR, thread: Thread): HTMLElement {
+     ? `${esc(thread.filePath.split("/").pop())}${lineLabel(thread)}`
+     : "General";
+   const header = el(
+-    `<div class="thread-loc">
++    `<button type="button" class="thread-loc" aria-expanded="true">
+        <span class="thread-chev">▾</span>
+        <span class="thread-where">${where}</span>
+        <span class="thread-count">${thread.comments.length}</span>
+        <span class="st">${esc(thread.status)}</span>
+-     </div>`
++     </button>`
+   );
+-  header.addEventListener("click", () => box.classList.toggle("collapsed"));
++  header.addEventListener("click", () => {
++    const isCollapsed = box.classList.toggle("collapsed");
++    header.setAttribute("aria-expanded", String(!isCollapsed));
++  });
+ 
+   const body = el(`<div class="thread-body"></div>`);
+   const list = el(`<div class="cmt-list"></div>`);
+@@ -100,7 +103,7 @@ export function renderThread(pr: PR, thread: Thread): HTMLElement {
+   const rb = el(
+     `<div class="reply-box">
+        <textarea placeholder="Reply…" rows="1"></textarea>
+-       <button class="btn sm">Reply</button>
++       <button type="button" class="btn sm">Reply</button>
+      </div>`
+   );
+   const ta = rb.querySelector("textarea") as HTMLTextAreaElement;
+@@ -217,6 +220,10 @@ export function renderStagedFinding(
+       comment: finding.comment,
+       loc: `${where} · ${finding.side || "right"}`,
+       model: state.config.reviewModel,
++      prId: pr.id,
++      org: pr.org,
++      project: pr.project,
++      repoId: pr.repoId,
+       onPost: async (text) => {
+         const created: Thread = await postJSON("/api/review/post-finding", {
+           org: pr.org,

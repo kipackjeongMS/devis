@@ -39,6 +39,10 @@ import {
     setMeta,
     upsertInboxWatch,
     listInboxWatches,
+    listInboxWatchOrgs,
+    pruneInboxWatches,
+    touchInboxWatch,
+    deleteInboxWatch,
     type NotificationInput,
     type InboxWatchRow,
 } from "./store.mjs";
@@ -87,6 +91,35 @@ const BACKFILL_MS = 30 * 24 * 60 * 60 * 1000;
 // unbounded ADO calls at once.
 const PROJECT_CONCURRENCY = 4;
 const THREAD_FETCH_CONCURRENCY = 6;
+
+/** ADO's answer when the PR or its repo is gone, or no longer visible to you. */
+const PR_GONE = /^ADO GET 404\b/;
+
+const newestAt = (comments: InboxComment[]): number => {
+    let at = -Infinity;
+    for (const c of comments) {
+        const t = c.published ? Date.parse(c.published) : NaN;
+        if (t > at) at = t;
+    }
+    return at;
+};
+
+/**
+ * Drops watches with no sign of life for `quietMs` before each org's last
+ * complete poll. Measuring from the poll, not the clock, means a closed app or
+ * an org whose polls keep failing never loses a watch before it has been
+ * checked; an org that has never been polled keeps everything.
+ */
+export function pruneStaleInboxWatches(quietMs: number): number {
+    const legacy = getMeta(LEGACY_WATERMARK_KEY);
+    let removed = 0;
+    for (const org of listInboxWatchOrgs()) {
+        const polled = Date.parse(getMeta(orgWatermarkKey(org)) ?? legacy ?? "");
+        if (!Number.isFinite(polled)) continue;
+        removed += pruneInboxWatches(org, polled - quietMs);
+    }
+    return removed;
+}
 
 /** Run `fn` over every item with at most `size` calls in flight at once. */
 async function mapPool<T, R>(items: readonly T[], size: number, fn: (item: T) => Promise<R>): Promise<R[]> {
@@ -471,6 +504,12 @@ export async function scanInbox(deps: InboxAdoDependencies = defaultDeps): Promi
         for (const [groupKey, rows] of grouped) {
             const fetched = fetchedByGroup.get(groupKey);
             diag.scannedWatches += rows.length;
+            if (fetched?.error && PR_GONE.test(fetched.error)) {
+                // The PR or its repo no longer exists (or is no longer visible): nothing
+                // left to poll, and keeping it would hold the org's watermark back forever.
+                for (const row of rows) deleteInboxWatch(row.watch_key);
+                continue;
+            }
             if (!fetched || fetched.error) {
                 if (fetched?.error) diag.failed.push(`watch fetch (PR #${rows[0].pr_id}): ${fetched.error}`);
                 orgFailed = orgFailed || !!fetched?.error;
@@ -480,6 +519,7 @@ export async function scanInbox(deps: InboxAdoDependencies = defaultDeps): Promi
             for (const row of rows) {
                 const prShape = rowToPrShape(row, org);
                 if (row.kind === "authored") {
+                    if (newestAt(comments) > Date.parse(row.updated_at)) touchInboxWatch(row.watch_key);
                     orgEvents.push(...authoredPrEvents(prShape, comments, meId, cutoff, firstRunOrg));
                     continue;
                 }
@@ -511,6 +551,8 @@ export async function scanInbox(deps: InboxAdoDependencies = defaultDeps): Promi
                         lastUserCommentId: lastId,
                         lastUserCommentAt: lastAt,
                     });
+                } else if (newestAt(threadComments) > Date.parse(row.updated_at)) {
+                    touchInboxWatch(row.watch_key);
                 }
                 orgEvents.push(
                     ...participatedThreadEvents(prShape, row.thread_id!, threadComments, meId, lastAt, cutoff),

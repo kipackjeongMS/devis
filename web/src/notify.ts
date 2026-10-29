@@ -12,22 +12,29 @@ export interface PendingNote {
 
 const TERMINAL = new Set(["done", "error"]);
 
-// PR ids whose review was launched from this session (in-memory only — a reload
-// clears it, which is fine: you can no longer be "waiting" on something you
-// didn't just start here).
-const triggered = new Set<string>();
+// PR ids whose review was launched from this session, with when (in-memory only —
+// a reload clears it, which is fine: you can no longer be "waiting" on something
+// you didn't just start here). A review that never finishes (deleted, lost) is
+// dropped after a while, so the watcher behind it stops polling.
+const triggered = new Map<string, number>();
+export const TRIGGER_TTL_MS = 6 * 60 * 60_000;
 
-export function markTriggered(key: string): void {
-  triggered.add(key);
+export function markTriggered(key: string, at = Date.now()): void {
+  triggered.set(key, at);
 }
 export function unmarkTriggered(key: string): void {
   triggered.delete(key);
+}
+/** Forget triggers older than the TTL. Returns how many remain. */
+export function expireTriggered(now = Date.now()): number {
+  for (const [key, at] of triggered) if (now - at > TRIGGER_TTL_MS) triggered.delete(key);
+  return triggered.size;
 }
 export function triggeredCount(): number {
   return triggered.size;
 }
 export function getTriggered(): Set<string> {
-  return triggered;
+  return new Set(triggered.keys());
 }
 
 // For each triggered PR that moved from a non-terminal state (running/pending/

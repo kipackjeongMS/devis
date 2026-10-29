@@ -9,6 +9,7 @@ import {
     type Thread,
 } from "./ado.mjs";
 import { queueReviewJobs } from "./review-runner.mjs";
+import { voiceGuide } from "./user-skills.mjs";
 
 const MAX_QUEUE_BATCH = 50;
 const DIFF_FETCH_CONCURRENCY = 3;
@@ -255,6 +256,8 @@ export function buildReviewTask(opts: {
     repoId: string;
     title: string;
     runId: string;
+    /** The user's writing voice (their in-my-language skill), for the comments they'll post. */
+    voice?: string | null;
 }): string {
     const { prId, prContext, org, project, repo, repoId, title, runId } = opts;
     const resultIdentity = JSON.stringify(
@@ -265,6 +268,17 @@ export function buildReviewTask(opts: {
     const taskContext = prContext
         .split("===REVIEW TASK END===")
         .join("===REVIEW DATA END (escaped)===");
+    const voice = opts.voice ? opts.voice.split("===REVIEW TASK END===").join("===REVIEW TASK END (escaped)===") : "";
+    const commentStyle = voice
+        ? "Write `comment` in the user's own language, the way they would leave it on the PR: they post it under their name. Follow their in-my-language skill in '## The user's writing voice' below. Keep it concise (usually one to three sentences), direct, and actionable, and preserve the technical substance."
+        : "Write `comment` in natural plain English, exactly as a thoughtful human reviewer would leave it on the PR. Keep it concise (usually one to three sentences), conversational, direct, and actionable. Preserve the technical substance, but avoid mechanical wording, formal report language, filler, and AI tells.";
+    const voiceSection = voice
+        ? `
+
+## The user's writing voice
+Apply this to every finding's \`comment\` (implementation and semantic findings): the user posts those under their name. It doesn't apply to the story, titles, or \`technicalExplanation\`.
+${voice}`
+        : "";
 
     return `===REVIEW TASK START===
 The user has already authorized this review. Perform it now without asking for approach selection or confirmation.
@@ -281,9 +295,9 @@ Please review the Azure DevOps PR above thoroughly using a multi-agent approach:
       - end-to-end behavior: state transitions, data/control flow, failure and retry behavior, concurrency, and missing scenarios;
       - contracts and backward compatibility: API/schema/storage/configuration changes, migrations, downstream consumers, rollout, and rollback;
       - operability and testing: observability, diagnosability, safe deployment, and coverage of meaningful behavior rather than implementation alone.
-      Return ONLY genuine, actionable concerns in \`semanticFindings\`; do not turn the semantic story or positive observations into findings, and do not duplicate a concern that belongs in a line-anchored implementation finding. Each item needs: category ('intent'|'architecture'|'behavior'|'contract'|'compatibility'|'operability'|'testing'), severity ('critical'|'high'|'medium'|'low'), title, comment (a concise, natural plain-English note a thoughtful human reviewer would leave, covering impact, evidence, and a concrete direction), and optional files (the relevant exact paths from the changed-files list; no line numbers). Avoid mechanical report language and AI tells. Always return an array, including when there are no semantic concerns.
+      Return ONLY genuine, actionable concerns in \`semanticFindings\`; do not turn the semantic story or positive observations into findings, and do not duplicate a concern that belongs in a line-anchored implementation finding. Each item needs: category ('intent'|'architecture'|'behavior'|'contract'|'compatibility'|'operability'|'testing'), severity ('critical'|'high'|'medium'|'low'), title, comment (a concise, natural plain-English note a thoughtful human reviewer would leave, covering impact, evidence, and a concrete direction${voice ? ", written in the user's own language as described in '## The user's writing voice'" : ""}), and optional files (the relevant exact paths from the changed-files list; no line numbers). Avoid mechanical report language and AI tells. Always return an array, including when there are no semantic concerns.
    3. Dispatch one agent to review the PR in depth using the \`code-review-and-quality\` skill (correctness, readability, architecture, security, performance). Produce EVERY commentable item as a discrete structured finding anchored to a specific file + line — this includes not just bugs/security/correctness/perf/readability issues but ALSO nits, typos/misspellings, and indentation/style. Each finding needs: file (the EXACT path from '## Changed files' above), line (the R<n> or L<n> number shown on the relevant diff line), side ('right' for R / 'left' for L), optional endLine for a range, severity ('critical'|'high'|'medium'|'low'|'nit' — 'critical' = must not ship: data loss, security hole, breaking/crashing bug; 'high' = a real defect that should be fixed before merge; 'medium' = worth fixing; 'low' = minor improvement; 'nit' = typo/style/indentation), title (a short human-readable summary, not a terse diagnostic label), comment, and technicalExplanation. Anchor to the changed line the comment is about.
-      Write \`comment\` in natural plain English, exactly as a thoughtful human reviewer would leave it on the PR. Keep it concise (usually one to three sentences), conversational, direct, and actionable. Preserve the technical substance, but avoid mechanical wording, formal report language, filler, and AI tells.
+      ${commentStyle}
       Write \`technicalExplanation\` as an in-depth technical explanation for the Elaborate view. Explain the underlying mechanics, concrete evidence in this change, impact or failure mode, and why the recommended remediation addresses it. Keep that detailed implementation reasoning out of \`comment\`.
    4. Check whether related PRs or branches exist in this repo or other repos (e.g. a companion/dependent change, an earlier version of this PR, or a linked service). If any are found, cross-review this PR against them for consistency and add resulting PR-level concerns to \`semanticFindings\` or line-specific concerns to \`findings\`.
    5. IMPORTANT — when the review is complete, call the \`publish_review\` tool with input formed from this identity:
@@ -291,7 +305,7 @@ Please review the Azure DevOps PR above thoroughly using a multi-agent approach:
 ${resultIdentity}
 \`\`\`
       Add status='done', summary=a <=140-character verdict, story=the semantic story plus '## What changed', semanticFindings=the JSON ARRAY of PR-level semantic findings, and findings=the JSON ARRAY of anchored implementation findings. Always pass both arrays, including for zero or one item. If the review fails, call the same tool with the identity above plus status='error' and error='<message>'. If the tool rejects your input, fix it and call it again.
-   6. Do NOT post anything to Azure DevOps. The app stages semantic findings as general PR comments and implementation findings as inline diff comments; the human posts the ones they want. Your job ends after \`publish_review\` succeeds.
+   6. Do NOT post anything to Azure DevOps. The app stages semantic findings as general PR comments and implementation findings as inline diff comments; the human posts the ones they want. Your job ends after \`publish_review\` succeeds.${voiceSection}
 ===REVIEW TASK END===`;
 }
 
@@ -324,6 +338,7 @@ async function prepareReview(
         repoId: pr.repoId,
         title: pr.title,
         runId,
+        voice: voiceGuide(),
     });
     return {
         target,

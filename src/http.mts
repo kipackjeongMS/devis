@@ -36,11 +36,56 @@ export function sendBuffer(
     res.end(body);
 }
 
+/** The largest request body the API reads; a bigger one is refused before it fills memory. */
+export const MAX_BODY_BYTES = 10 * 1024 * 1024;
+
+export class BodyTooLargeError extends Error {
+    readonly status = 413;
+    constructor() {
+        super(`request body is larger than ${MAX_BODY_BYTES / 1024 / 1024} MB`);
+    }
+}
+
+/** How long a refused body may keep draining before its socket is dropped. */
+export const BODY_DRAIN_MS = 5_000;
+
+/** Discards the rest of a refused body so the 413 can be read, but never waits on a stalled client. */
+function drainRefused(req: IncomingMessage): void {
+    req.resume();
+    if (req.complete) return;
+    const timer = setTimeout(() => req.socket?.destroy(), BODY_DRAIN_MS);
+    timer.unref?.();
+    const stop = () => clearTimeout(timer);
+    req.once("end", stop);
+    req.once("close", stop);
+}
+
 export function readBody(req: IncomingMessage): Promise<any> {
     return new Promise((resolve, reject) => {
+        const declared = Number(req.headers["content-length"]);
+        if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+            drainRefused(req);
+            reject(new BodyTooLargeError());
+            return;
+        }
         const chunks: Buffer[] = [];
-        req.on("data", (c: Buffer) => chunks.push(c));
+        let size = 0;
+        let done = false;
+        req.on("data", (c: Buffer) => {
+            if (done) return;
+            size += c.length;
+            if (size > MAX_BODY_BYTES) {
+                done = true;
+                chunks.length = 0;
+                drainRefused(req);
+                reject(new BodyTooLargeError());
+                return;
+            }
+            chunks.push(c);
+        });
         req.on("end", () => {
+            if (done) return;
+            done = true;
             const s = Buffer.concat(chunks).toString("utf8");
             try {
                 resolve(s ? JSON.parse(s) : {});
@@ -48,7 +93,11 @@ export function readBody(req: IncomingMessage): Promise<any> {
                 reject(new Error("invalid JSON body"));
             }
         });
-        req.on("error", reject);
+        req.on("error", (error) => {
+            if (done) return;
+            done = true;
+            reject(error);
+        });
     });
 }
 

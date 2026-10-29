@@ -12,6 +12,8 @@ export interface ReviewerChat {
   pending: boolean;
   partial: string;
   error: string | null;
+  /** Inline plus PR-level findings on the review; grows when the reviewer adds some. */
+  findingCount?: number;
 }
 
 export type ChatItem =

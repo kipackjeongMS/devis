@@ -6,6 +6,7 @@ import { el } from "./dom.js";
 import { esc } from "./util.js";
 import { renderMarkdown } from "./markdown.js";
 import { renderMermaid } from "./mermaid.js";
+import { toast } from "./toast.js";
 import { chatFingerprint, chatItems, type ChatItem, type ReviewerChat } from "./reviewerChatModel.js";
 import type { PR } from "./types.js";
 
@@ -30,12 +31,16 @@ function itemElement(item: ChatItem): HTMLElement {
   return node;
 }
 
-export function reviewerChatSection(pr: PR): HTMLElement {
+/**
+ * `sessionId` tags the section so a review refresh can keep it open.
+ * `onReviewChanged` runs when the reviewer stages more findings from the chat.
+ */
+export function reviewerChatSection(pr: PR, sessionId: string, onReviewChanged?: () => void): HTMLElement {
   const section = el(
     `<details class="rev-chat">
        <summary>
          <span class="rev-chat-title">Chat with the reviewer</span>
-         <span class="rev-chat-hint">Follow up with the session that reviewed this PR</span>
+         <span class="rev-chat-hint">Ask follow-ups, or have the reviewer add findings to this review</span>
        </summary>
        <div class="rev-chat-log" role="log" aria-live="polite"></div>
        <div class="rev-chat-status" role="status"></div>
@@ -46,6 +51,7 @@ export function reviewerChatSection(pr: PR): HTMLElement {
        </form>
      </details>`
   ) as HTMLDetailsElement;
+  section.dataset.session = sessionId;
   const log = section.querySelector(".rev-chat-log") as HTMLElement;
   const status = section.querySelector(".rev-chat-status") as HTMLElement;
   const form = section.querySelector(".rev-chat-form") as HTMLFormElement;
@@ -56,6 +62,7 @@ export function reviewerChatSection(pr: PR): HTMLElement {
   let pending = false;
   let sentText = "";
   let fingerprint = "";
+  let findingCount: number | null = null;
   let pollTimer: ReturnType<typeof setTimeout> | null = null;
 
   function setStatus(text: string, error = false): void {
@@ -79,6 +86,17 @@ export function reviewerChatSection(pr: PR): HTMLElement {
     if (nearBottom || chat.pending) log.scrollTop = log.scrollHeight;
   }
 
+  // The first load sets the baseline; growth after that means the reviewer
+  // staged findings with its add_review_findings tool.
+  function trackFindings(chat: ReviewerChat): void {
+    if (typeof chat.findingCount !== "number") return;
+    const added = findingCount === null ? 0 : chat.findingCount - findingCount;
+    findingCount = chat.findingCount;
+    if (added <= 0) return;
+    toast(`The reviewer added ${added} finding${added === 1 ? "" : "s"} to this review.`, "ok");
+    onReviewChanged?.();
+  }
+
   async function load(): Promise<void> {
     if (pollTimer) clearTimeout(pollTimer);
     pollTimer = null;
@@ -93,6 +111,7 @@ export function reviewerChatSection(pr: PR): HTMLElement {
     }
     loaded = true;
     render(chat);
+    trackFindings(chat);
     if (chat.pending) {
       setBusy(true);
       setStatus("");

@@ -165,7 +165,7 @@ export function mountDecisionMenu(pr: PR, detail: Detail, onChanged: () => void)
       run: async () => {
         if (item.checked) return;
         try {
-          await postJSON("/api/pr-vote", { ...target(pr), vote: item.vote });
+          await postJSON("/api/pr-vote", { ...target(pr), vote: item.vote, title: pr.title });
           toast(item.vote === 0 ? "Feedback reset" : `Voted: ${item.label}`, "ok");
           onChanged();
         } catch (e: any) {
@@ -208,7 +208,7 @@ export function mountLifecycleMenu(pr: PR, detail: Detail, onChanged: () => void
   );
 }
 
-interface ActionDialogOptions {
+export interface ActionDialogOptions {
   title: string;
   loc: string;
   body: string;
@@ -217,7 +217,7 @@ interface ActionDialogOptions {
   onConfirm: (dialog: HTMLElement) => Promise<void>;
 }
 
-function openActionDialog(opts: ActionDialogOptions): HTMLElement {
+export function openActionDialog(opts: ActionDialogOptions): HTMLElement {
   const returnFocus = document.activeElement as HTMLElement | null;
   const overlay = el(`<div class="ask-overlay"></div>`);
   const dialog = el(

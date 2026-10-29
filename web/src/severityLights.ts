@@ -204,7 +204,8 @@ function toggleDrawer(
 function positionUnder(host: HTMLElement, light: HTMLElement, node: HTMLElement): void {
   const hostRect = host.getBoundingClientRect();
   const lightRect = light.getBoundingClientRect();
-  const center = lightRect.left - hostRect.left + lightRect.width / 2;
+  // Rects are visual px; the drawer is placed in the (possibly zoomed) pane's own px.
+  const center = (lightRect.left - hostRect.left + lightRect.width / 2) / (host.currentCSSZoom || 1);
   const width = node.offsetWidth;
   const edge = 8;
   const left = Math.max(edge, Math.min(center - width / 2, host.clientWidth - width - edge));

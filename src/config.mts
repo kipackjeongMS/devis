@@ -23,6 +23,44 @@ export interface Config {
     // (<reviewsDir>/<RepoName>/<prId>-<title>.md). Empty disables the mirror.
     // User-specific, so it is NOT seeded — configured via the settings UX.
     reviewsDir: string;
+    // Repos Jarvis workers can work in. Each is cloned once under the Jarvis
+    // folder (codebase/<org>/<project>/<repo>); workers get worktrees of them.
+    codebase: CodebaseRepo[];
+    // The default folder new Jarvis tasks get their own folder in. A task can
+    // name another one when it's created.
+    taskRoot: string;
+}
+
+export interface CodebaseRepo {
+    org: string;
+    project: string;
+    repo: string;
+}
+
+/** The repo's "org/project/repo" key, compared case-insensitively. */
+export function codebaseKey(r: CodebaseRepo): string {
+    return `${r.org}/${r.project}/${r.repo}`;
+}
+
+function normalizeCodebase(raw: unknown): CodebaseRepo[] {
+    const list = Array.isArray(raw) ? raw : [];
+    const out: CodebaseRepo[] = [];
+    const seen = new Set<string>();
+    for (const item of list) {
+        if (!item || typeof item !== "object") continue;
+        const r = item as Record<string, unknown>;
+        const repo = {
+            org: String(r.org ?? "").trim(),
+            project: String(r.project ?? "").trim(),
+            repo: String(r.repo ?? "").trim(),
+        };
+        if (!repo.org || !repo.project || !repo.repo) continue;
+        const key = codebaseKey(repo).toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(repo);
+    }
+    return out;
 }
 
 function normalizeProjects(organizations: string[], raw: unknown): Record<string, string[]> {
@@ -47,24 +85,45 @@ export async function readConfig(): Promise<Config> {
         c.projects = normalizeProjects(c.organizations, c.projects);
         if (typeof c.reviewModel !== "string") c.reviewModel = "";
         if (typeof c.reviewsDir !== "string") c.reviewsDir = "";
+        c.codebase = normalizeCodebase(c.codebase);
+        if (typeof c.taskRoot !== "string") c.taskRoot = "";
         return c as Config;
     } catch {
         // First run: seed with the primary org.
-        const seed: Config = { organizations: ["msazure"], projects: {}, reviewModel: "", reviewsDir: "" };
+        const seed: Config = { organizations: ["msazure"], projects: {}, reviewModel: "", reviewsDir: "", codebase: [], taskRoot: "" };
         await writeConfig(seed).catch(() => {});
         return seed;
     }
 }
 
-export async function writeConfig(cfg: { organizations?: unknown; projects?: unknown; reviewModel?: unknown; reviewsDir?: unknown }): Promise<Config> {
+export async function writeConfig(cfg: {
+    organizations?: unknown;
+    projects?: unknown;
+    reviewModel?: unknown;
+    reviewsDir?: unknown;
+    codebase?: unknown;
+    taskRoot?: unknown;
+}): Promise<Config> {
     const arr = Array.isArray(cfg.organizations) ? cfg.organizations : [];
     const organizations = [...new Set(arr.map((s) => String(s).trim()).filter(Boolean))];
+    // A save that leaves out the Jarvis workspace settings keeps them.
+    const keep = cfg.codebase === undefined || cfg.taskRoot === undefined ? await readStored() : null;
     const clean: Config = {
         organizations,
         projects: normalizeProjects(organizations, cfg.projects),
         reviewModel: typeof cfg.reviewModel === "string" ? cfg.reviewModel.trim() : "",
         reviewsDir: typeof cfg.reviewsDir === "string" ? cfg.reviewsDir.trim() : "",
+        codebase: normalizeCodebase(cfg.codebase === undefined ? keep?.codebase : cfg.codebase),
+        taskRoot: (typeof cfg.taskRoot === "string" ? cfg.taskRoot : typeof keep?.taskRoot === "string" ? keep.taskRoot : "").trim(),
     };
     await writeFile(CONFIG_PATH, JSON.stringify(clean, null, 2), "utf8");
     return clean;
+}
+
+async function readStored(): Promise<Record<string, unknown> | null> {
+    try {
+        return JSON.parse(await readFile(CONFIG_PATH, "utf8"));
+    } catch {
+        return null;
+    }
 }

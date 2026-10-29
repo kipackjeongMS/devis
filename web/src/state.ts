@@ -2,14 +2,26 @@
 // encapsulated background-review poll timer.
 import { getJSON } from "./api.js";
 import { activeJobKey, reviewRowKey, reviewStateKey } from "./reviewKey.js";
-import type { ActiveReviewJob, AppState, Review } from "./types.js";
+import type { ActiveReviewJob, AppState, QueueView, Review } from "./types.js";
+
+/** Storage key for the queue view, so the app reopens on the view you left. */
+export const QUEUE_VIEW_KEY = "adoPrOps.queueView";
+
+function savedQueueView(): QueueView {
+  try {
+    return localStorage.getItem(QUEUE_VIEW_KEY) === "all" ? "all" : "feed";
+  } catch {
+    return "feed";
+  }
+}
 
 export const state: AppState = {
-  config: { organizations: [], projects: {}, reviewModel: "", reviewsDir: "" },
+  config: { organizations: [], projects: {}, reviewModel: "", reviewsDir: "", codebase: [], taskRoot: "" },
   prs: [],
   org: "all",
   project: "all",
-  assignment: "mine",
+  queueView: savedQueueView(),
+  query: "",
   reviews: {},
   activeReviewJobs: {},
 };

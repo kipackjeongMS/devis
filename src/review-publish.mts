@@ -2,6 +2,7 @@
 // calls when its review is complete.
 
 import {
+    appendReviewFindings,
     ensureDb,
     publishReviewJobRun,
     type Finding,
@@ -282,4 +283,60 @@ export async function publishReview(
         reviewerSessionId,
     });
     return { ok: true, prId, status };
+}
+
+/**
+ * Input of the reviewer chat's `add_review_findings` tool. The target review is
+ * never part of the input: it is the review this session produced.
+ */
+export const ADD_REVIEW_FINDINGS_SCHEMA = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+        findings: PUBLISH_REVIEW_SCHEMA.properties.findings,
+        semanticFindings: PUBLISH_REVIEW_SCHEMA.properties.semanticFindings,
+    },
+} as const;
+
+const MAX_ADDED_FINDINGS = 50;
+
+/** Validate an `add_review_findings` call and stage its findings on this session's review. */
+export async function addReviewFindings(
+    input: unknown,
+    reviewerSessionId: string,
+): Promise<{ prId: string; findings: number; semanticFindings: number; duplicates: number; message: string }> {
+    const record = asRecord(input, "add_review_findings input");
+    for (const key of Object.keys(record)) {
+        if (key !== "findings" && key !== "semanticFindings") throw new Error(`unexpected field ${key}`);
+    }
+    if (record.findings != null && !Array.isArray(record.findings)) throw new Error("findings must be an array");
+    if (record.semanticFindings != null && !Array.isArray(record.semanticFindings)) {
+        throw new Error("semanticFindings must be an array");
+    }
+    const findings = ((record.findings as unknown[] | undefined) || []).map(parseFinding);
+    const semanticFindings = ((record.semanticFindings as unknown[] | undefined) || []).map(parseSemanticFinding);
+    if (!findings.length && !semanticFindings.length) {
+        throw new Error("Provide at least one entry in findings or semanticFindings");
+    }
+    if (findings.length + semanticFindings.length > MAX_ADDED_FINDINGS) {
+        throw new Error(`Add at most ${MAX_ADDED_FINDINGS} findings per call`);
+    }
+
+    await ensureDb();
+    const result = appendReviewFindings(reviewerSessionId, findings, semanticFindings);
+    const prId = result.review.pr_id;
+    const parts: string[] = [];
+    if (result.findings.length) parts.push(`${result.findings.length} inline finding(s)`);
+    if (result.semanticFindings.length) parts.push(`${result.semanticFindings.length} PR-level finding(s)`);
+    const skipped = result.duplicates ? ` Skipped ${result.duplicates} already staged.` : "";
+    const message = parts.length
+        ? `Added ${parts.join(" and ")} to the Devis review of PR #${prId}. They are staged in the PR detail view for the user to post; nothing was posted to Azure DevOps.${skipped}`
+        : `Nothing new was added to the review of PR #${prId}: every finding is already staged.`;
+    return {
+        prId,
+        findings: result.findings.length,
+        semanticFindings: result.semanticFindings.length,
+        duplicates: result.duplicates,
+        message,
+    };
 }

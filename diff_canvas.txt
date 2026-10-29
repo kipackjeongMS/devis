@@ -1,0 +1,47 @@
+diff --git a/src/canvas-review.mts b/src/canvas-review.mts
+index 309895e..5bdfa45 100644
+--- a/src/canvas-review.mts
++++ b/src/canvas-review.mts
+@@ -1,4 +1,4 @@
+-import { ensureDb, publishReviewRun, type Finding } from "./store.mjs";
++import { ensureDb, publishReviewJobRun, type Finding } from "./store.mjs";
+ import type { PrCanvasTarget } from "./canvas-target.mjs";
+ 
+ type JsonRecord = Record<string, unknown>;
+@@ -62,7 +62,11 @@ function parseFinding(value: unknown, index: number): Finding {
+ }
+ 
+ /** Validate a child-session canvas action and persist its completed review. */
+-export async function publishCanvasReview(input: unknown, target: PrCanvasTarget): Promise<{
++export async function publishCanvasReview(
++    input: unknown,
++    target: PrCanvasTarget,
++    reviewerSessionId: string | null,
++): Promise<{
+     ok: true;
+     prId: string;
+     status: "done" | "error";
+@@ -108,18 +112,22 @@ export async function publishCanvasReview(input: unknown, target: PrCanvasTarget
+     }
+ 
+     await ensureDb();
+-    publishReviewRun({
++    publishReviewJobRun({
+         prId,
+         runId,
+         org,
+         project,
+         repo: optionalString(record, "repo"),
++        repoId,
+         title: optionalString(record, "title"),
+         status,
+         summary,
+         story,
+         findings,
+         error,
++        // Taken from the publishing extension process, not from `input`: the
++        // reviewing agent cannot forge or omit it.
++        reviewerSessionId,
+     });
+     return { ok: true, prId, status };
+ }

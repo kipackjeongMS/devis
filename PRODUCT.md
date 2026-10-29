@@ -10,7 +10,9 @@ Microsoft engineers working across Azure DevOps repositories and EV2 deployments
 
 ## Product Purpose
 
-ADO PR Ops brings active pull requests, review activity, Copilot-assisted analysis, and EV2 rollout status into one focused canvas. It exists to reduce review and release-management overhead so engineers can identify what needs attention, make confident decisions, and act quickly.
+Devis brings active pull requests, review activity, Copilot-assisted analysis, and EV2 rollout status into one focused canvas. It exists to reduce review and release-management overhead so engineers can identify what needs attention, make confident decisions, and act quickly.
+
+The Workspace is the daily workspace on top of that. Today lists the user's tasks, the PRs waiting for their review, and the Copilot workers doing the work, ordered by what needs them. A Lead Copilot session, also called Devis, watches Today and keeps its history, so the user can ask what needs them or what happened yesterday.
 
 Success means the user can move from overview to evidence to action with minimal navigation, while still having a clear path to the authoritative ADO or EV2 surface when deeper investigation is required.
 

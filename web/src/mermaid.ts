@@ -116,7 +116,8 @@ function svgSize(svg: SVGSVGElement): Size {
   const height = Number.parseFloat(svg.getAttribute("height") || "");
   if (width > 0 && height > 0) return { width, height };
   const rect = svg.getBoundingClientRect();
-  return { width: rect.width || 1, height: rect.height || 1 };
+  const zoom = svg.currentCSSZoom || 1;
+  return { width: rect.width / zoom || 1, height: rect.height / zoom || 1 };
 }
 
 function diagramButton(label: string, title: string): HTMLButtonElement {
@@ -169,6 +170,8 @@ function addDiagramControls(node: HTMLElement, svg: SVGSVGElement): void {
   const frame = (): Size => ({ width: viewport.clientWidth, height: viewport.clientHeight });
   const center = (): Point => ({ x: viewport.clientWidth / 2, y: viewport.clientHeight / 2 });
   const minScale = (): number => Math.min(MIN_SCALE, fitScale);
+  // Client px are visual; the stage lives in the reading pane's own px, which Ctrl +/− zooms.
+  const paneZoom = (): number => viewport.currentCSSZoom || 1;
 
   const render = (next: DiagramView, animate = false): void => {
     const box = frame();
@@ -207,19 +210,20 @@ function addDiagramControls(node: HTMLElement, svg: SVGSVGElement): void {
     const width = viewport.clientWidth;
     if (width <= 0) return false;
     frameLocked = true;
-    const max = Math.min(FRAME_MAX_HEIGHT, window.innerHeight * 0.65);
+    const max = Math.min(FRAME_MAX_HEIGHT, (window.innerHeight * 0.65) / paneZoom());
     viewport.style.height = `${diagramFrameHeight(size, width, FRAME_PAD, FRAME_MIN_HEIGHT, max)}px`;
     return true;
   };
 
   let drag: { id: number; from: Point; start: DiagramView; moved: boolean } | null = null;
+  const pointer = (event: MouseEvent): Point => ({ x: event.clientX / paneZoom(), y: event.clientY / paneZoom() });
   viewport.addEventListener("pointerdown", (event) => {
     if (event.button !== 0 || event.pointerType === "touch") return;
-    drag = { id: event.pointerId, from: { x: event.clientX, y: event.clientY }, start: view, moved: false };
+    drag = { id: event.pointerId, from: pointer(event), start: view, moved: false };
   });
   viewport.addEventListener("pointermove", (event) => {
     if (!drag || event.pointerId !== drag.id) return;
-    const to = { x: event.clientX, y: event.clientY };
+    const to = pointer(event);
     if (!drag.moved) {
       if (Math.hypot(to.x - drag.from.x, to.y - drag.from.y) < PAN_DRAG_THRESHOLD) return;
       drag.moved = true;
@@ -248,9 +252,10 @@ function addDiagramControls(node: HTMLElement, svg: SVGSVGElement): void {
       event.preventDefault();
       const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? viewport.clientHeight : 1;
       const rect = viewport.getBoundingClientRect();
+      const zoom = paneZoom();
       zoomTo(view.scale * Math.exp(-event.deltaY * unit * WHEEL_ZOOM_RATE), {
-        x: event.clientX - rect.left - viewport.clientLeft,
-        y: event.clientY - rect.top - viewport.clientTop,
+        x: (event.clientX - rect.left) / zoom - viewport.clientLeft,
+        y: (event.clientY - rect.top) / zoom - viewport.clientTop,
       });
     },
     { passive: false }
@@ -309,18 +314,25 @@ export async function renderMermaid(container: HTMLElement | null, adjustable = 
     const src = node.textContent || "";
     node.removeAttribute("data-mermaid");
     if (!src || !src.trim()) continue;
+    const id = "mmd-" + ++_mermaidSeq;
     try {
-      const { svg } = await window.mermaid.render("mmd-" + ++_mermaidSeq, src);
+      const { svg } = await window.mermaid.render(id, src);
+      // A repaint may have replaced this node while it rendered; drawing into it would only hold the old tree.
+      if (!node.isConnected) continue;
       node.innerHTML = svg;
       const renderedSvg = node.querySelector<SVGSVGElement>("svg");
       if (renderedSvg && adjustable) addDiagramControls(node, renderedSvg);
       node.classList.add("rendered");
     } catch (_) {
+      if (!node.isConnected) continue;
       node.classList.add("mmd-error");
       node.innerHTML =
         '<div class="mmd-err">⚠ Diagram failed to render</div><pre class="md-pre"><code>' +
         esc(src) +
         "</code></pre>";
+    } finally {
+      // Mermaid renders in a scratch element under <body>; a failed render can leave it behind.
+      document.getElementById("d" + id)?.remove();
     }
   }
 }

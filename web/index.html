@@ -1,25 +1,28 @@
 <!doctype html>
 <html lang="en">
   <!--
-    Direction contract (concept seed ca50a085, index 3)
-    THESIS: A native Windows 11 review desk. The queue is the inbox; the reading pane is the desk.
-    OWN-WORLD: Fluent 2 dark. Mica base, layered #272727 surfaces, Segoe UI Variable, Cascadia Mono
-    for ids and code, one cyan accent (#60cdff) spent only on selection, the primary command and focus.
+    Direction contract (user-pinned: glass, "Jarvis")
+    THESIS: A heads-up review console. Smoked glass panes hover over a lit field; light marks what
+    the machine is attending to: the open PR, focus, a running pipeline.
+    OWN-WORLD: Black glass (Windows Mica backdrop; blur only on small sticky and floating chrome) over a neutral black field
+    with two faint white light pools and a faint HUD grid. No hue in the field, the glass or the text. Luminous hairline edges with a top sheen.
+    One emissive cyan (#4cd6ff) for selection, focus, running state and the primary command.
+    Segoe UI Variable; Cascadia Mono for ids, code and numeric readouts.
     STORY: Triage runs left to right: scope, queue, open PR, Copilot review, discussion, files.
-    FIRST VIEWPORT: Title bar with three icon commands; the queue with a Me / Not me / All switch;
-    the reading pane showing the open PR's sticky command bar and section tabs (or its empty state).
-    FORM: 40px title bar, 4px control radius, 8px surface radius, 4px grid, hairline strokes,
-    shadows only on flyouts and dialogs, one authored motion (the open-row pill and pane entrance).
+    FIRST VIEWPORT: Title bar on the field; two floating glass panes, the queue (My feed / All,
+    search) and the reading pane with its frosted command head, or the scanning reticle when empty.
+    FORM: 8px gutters, 14px pane radius, 10px surface, 6px control. Glass only on panes, heads,
+    flyouts, dialogs and pipeline blocks, never per row. One authored motion: the pane resolves from blur.
   -->
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="dark" />
-    <title>ADO PR Ops</title>
+    <title>Devis</title>
     <link rel="stylesheet" href="style.css" />
   </head>
-  <body data-page="queue">
-    <a class="skip-link" href="#view">Skip to pull requests</a>
+  <body data-page="queue" data-feature="prs">
+    <a id="skipLink" class="skip-link" href="#view">Skip to pull requests</a>
     <header class="titlebar">
       <div class="brand">
         <span class="brand-mark" aria-hidden="true">
@@ -30,8 +33,35 @@
             <path d="M4.5 5.25v5.5M11.5 10.75V7a2.5 2.5 0 0 0-2.5-2.5H6.5M8 3l-1.5 1.5L8 6"></path>
           </svg>
         </span>
-        <span class="brand-name">ADO PR Ops</span>
+        <span class="brand-name">Devis</span>
       </div>
+      <nav class="feature-nav" aria-label="Features">
+        <button type="button" class="feature-tab" data-feature="jarvis">
+          <svg class="ic" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+            <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.5"></rect>
+            <path d="M6 2.75v10.5M10 2.75v10.5"></path>
+          </svg>
+          <span>Workspace</span>
+        </button>
+        <button type="button" class="feature-tab active" data-feature="prs" aria-current="page">
+          <svg class="ic" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+            <circle cx="4.5" cy="3.75" r="1.5"></circle>
+            <circle cx="4.5" cy="12.25" r="1.5"></circle>
+            <circle cx="11.5" cy="12.25" r="1.5"></circle>
+            <path d="M4.5 5.25v5.5M11.5 10.75V7a2.5 2.5 0 0 0-2.5-2.5H6.5M8 3l-1.5 1.5L8 6"></path>
+          </svg>
+          <span>Pull requests</span>
+        </button>
+        <button type="button" class="feature-tab" data-feature="pipelines">
+          <svg class="ic" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+            <rect x="1.75" y="5.75" width="4.5" height="4.5" rx="1"></rect>
+            <rect x="9.75" y="2.25" width="4.5" height="4.5" rx="1"></rect>
+            <rect x="9.75" y="9.25" width="4.5" height="4.5" rx="1"></rect>
+            <path d="M6.25 8h1.5V4.5h2M7.75 8v3.5h2"></path>
+          </svg>
+          <span>Pipelines</span>
+        </button>
+      </nav>
       <div class="titlebar-actions">
         <button id="btnInbox" class="icon-btn inbox-btn" type="button" title="Notifications" aria-label="Notifications"
           aria-expanded="false" aria-controls="inboxFlyout">
@@ -59,8 +89,22 @@
     <div class="workspace">
       <section id="listPane" class="list-pane" aria-label="Pull request queue">
         <div id="filterbar" class="filterbar" hidden>
-          <h1 class="list-title">Pull requests</h1>
-          <div class="filterbar-fields">
+          <h1 class="list-title visually-hidden">Pull requests</h1>
+          <div id="queueTabs" class="seg queue-tabs" role="group" aria-label="Queue view">
+            <button type="button" class="seg-btn" data-view="feed" aria-pressed="false">My feed <span class="seg-n"></span></button>
+            <button type="button" class="seg-btn" data-view="all" aria-pressed="false">All <span class="seg-n"></span></button>
+          </div>
+          <label class="queue-search">
+            <svg class="ic" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+              <circle cx="7" cy="7" r="4.25"></circle>
+              <path d="m10.25 10.25 3.25 3.25"></path>
+            </svg>
+            <span class="visually-hidden">Search pull requests</span>
+            <input id="queueSearch" type="search" placeholder="Search pull requests" spellcheck="false" autocomplete="off"
+              title="Search pull requests (Ctrl+F). Try is:draft, -is:draft, is:reviewed, repo:, author:, branch:">
+            <kbd class="search-kbd" aria-hidden="true">Ctrl+F</kbd>
+          </label>
+          <div id="scopeFields" class="filterbar-fields">
             <label class="filter-field">
               <span class="visually-hidden">Organization</span>
               <select id="orgFilter" class="filter-select"></select>
@@ -70,13 +114,10 @@
               <select id="projectFilter" class="filter-select"></select>
             </label>
           </div>
-          <div id="assignFilter" class="seg" role="group" aria-label="Assigned to">
-            <button type="button" class="seg-btn" data-assign="mine" aria-pressed="false">Me</button>
-            <button type="button" class="seg-btn" data-assign="notmine" aria-pressed="false">Not me</button>
-            <button type="button" class="seg-btn" data-assign="all" aria-pressed="false">All</button>
-          </div>
           <div id="bulkReviewHost" class="bulk-review-host"></div>
         </div>
+
+        <div id="listNotice" class="list-notice" role="status" hidden></div>
 
         <main id="view" class="view" tabindex="-1">
           <div class="loading"><span class="spinner"></span> Loading…</div>
@@ -85,6 +126,10 @@
 
       <section id="readingPane" class="reading-pane" aria-label="Reading pane"></section>
     </div>
+
+    <section id="pipelinesView" class="pipelines-view" aria-label="Pipelines" tabindex="-1"></section>
+
+    <section id="jarvisView" class="jarvis-view" aria-label="Workspace" tabindex="-1"></section>
 
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 

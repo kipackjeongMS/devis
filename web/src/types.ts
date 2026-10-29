@@ -30,7 +30,7 @@ export interface PR {
   reviewers?: Reviewer[];
   myVote?: number; // current user's own vote (0 when not an individual reviewer)
   iCommented?: boolean; // current user left at least one non-system comment
-  plateDismissed?: boolean; // user removed this PR from My Plate
+  plateDismissed?: boolean; // user hid this PR from My feed
   url: string;
 }
 
@@ -145,7 +145,7 @@ export interface Review {
   run_id?: string;
   /** Copilot session that performed the review; follow-ups resume into it. */
   reviewer_session_id?: string | null;
-  /** Legacy review-row mirror of the My Plate removal preference. */
+  /** Legacy review-row mirror of the My feed hide preference. */
   dismissed?: number;
   updated_at?: string;
   org?: string;
@@ -170,10 +170,20 @@ export interface Config {
   projects: Record<string, string[]>;
   reviewModel: string;
   reviewsDir: string;
+  /** Repos Jarvis workers can work in, cloned under the Jarvis folder. */
+  codebase?: CodebaseRepo[];
+  /** The default folder new Jarvis tasks get their own folder in. */
+  taskRoot?: string;
 }
 
-/** How the list is filtered by reviewer assignment. */
-export type Assignment = "mine" | "notmine" | "all";
+export interface CodebaseRepo {
+  org: string;
+  project: string;
+  repo: string;
+}
+
+/** The queue's view: My feed (lanes of PRs that involve you) or All (every PR in scope, by repo). */
+export type QueueView = "feed" | "all";
 
 /** One persisted inbox notification (mirrors NotificationRow in store.mts). */
 export interface Notification {
@@ -200,7 +210,9 @@ export interface AppState {
   prs: PR[];
   org: string;
   project: string;
-  assignment: Assignment;
+  queueView: QueueView;
+  /** The queue search text; applies to both views. */
+  query: string;
   reviews: Record<string, Review>;
   activeReviewJobs: Record<string, ActiveReviewJob>;
   current?: { pr: PR; detail: Detail };

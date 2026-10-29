@@ -1,11 +1,19 @@
 // "Review & post": clicking Post to ADO on a staged review finding opens this
 // confirmation modal with the generated human-like comment ready to edit. Rephrase
-// is optional and uses the recorded reviewer session when one is available.
+// is optional: it opens a box for what to change, then rewrites the comment (in the
+// user's own voice when they have the in-my-language skill), using the recorded
+// reviewer session when one is available.
 // Reuses the .ask-* dialog styles so it stacks above the PR-detail slide-over.
 import { el } from "./dom.js";
 import { icon } from "./icons.js";
 import { esc } from "./util.js";
 import { postJSON } from "./api.js";
+
+/**
+ * A rephrase can wait behind a reviewer chat reply (up to 30 minutes) before its
+ * own run and fallback (about 4.5 minutes), so it outlasts the default limit.
+ */
+const REPHRASE_TIMEOUT_MS = 40 * 60_000;
 
 interface RephraseOptions {
   title?: string;
@@ -39,11 +47,19 @@ export function openRephraseModal(opts: RephraseOptions): void {
     `</div>` +
     `<div class="rp-label">Copilot review</div>` +
     `<pre class="ask-snippet prose"><code>${esc(original)}</code></pre>` +
-    `<div class="rp-label">Comment to post (editable)</div>` +
+    `<div class="rp-label">Comment to post (editable)<span class="rp-voice" hidden> · in your voice</span></div>` +
     `<textarea class="ask-q rp-text" rows="5" placeholder="Edit the comment before posting…"></textarea>` +
+    `<form class="rp-ask" id="rpAsk" hidden>` +
+    `<label class="rp-label" for="rpAskInput">How should it change? <span class="rp-optional">Optional</span></label>` +
+    `<div class="rp-ask-row">` +
+    `<textarea class="ask-q rp-ask-input" id="rpAskInput" rows="2" maxlength="1000" placeholder="For example: shorter, softer, or mention the rollout. Enter to rephrase."></textarea>` +
+    `<button type="submit" class="btn sm rp-ask-go">${icon("sparkle")}<span>Rephrase</span></button>` +
+    `<button type="button" class="icon-btn rp-ask-close" title="Close (Esc)" aria-label="Close without rephrasing">${icon("dismiss")}</button>` +
+    `</div>` +
+    `</form>` +
     `<div class="ask-answer loading-ans rp-status" hidden></div>` +
     `<div class="ask-actions">` +
-    `<button class="btn ghost sm rp-regen">Rephrase</button>` +
+    `<button class="btn ghost sm rp-regen" aria-expanded="false" aria-controls="rpAsk">Rephrase</button>` +
     `<button class="btn ghost sm rp-cancel">Cancel</button>` +
     `<button class="btn sm rp-post" disabled>Post to ADO</button>` +
     `</div>`;
@@ -53,6 +69,10 @@ export function openRephraseModal(opts: RephraseOptions): void {
   const ta = dialog.querySelector(".rp-text") as HTMLTextAreaElement;
   const status = dialog.querySelector(".rp-status") as HTMLElement;
   const regenBtn = dialog.querySelector(".rp-regen") as HTMLButtonElement;
+  const askForm = dialog.querySelector(".rp-ask") as HTMLFormElement;
+  const askInput = dialog.querySelector(".rp-ask-input") as HTMLTextAreaElement;
+  const askGo = dialog.querySelector(".rp-ask-go") as HTMLButtonElement;
+  const voiceNote = dialog.querySelector(".rp-voice") as HTMLElement;
   const cancelBtn = dialog.querySelector(".rp-cancel") as HTMLButtonElement;
   const postBtn = dialog.querySelector(".rp-post") as HTMLButtonElement;
   const closeBtn = dialog.querySelector(".ask-close") as HTMLButtonElement;
@@ -67,6 +87,12 @@ export function openRephraseModal(opts: RephraseOptions): void {
   function onKey(e: KeyboardEvent): void {
     if (e.key !== "Escape") return;
     e.preventDefault(); // consumed: the reading pane must not also close
+    // Escape in the "how should it change" box closes just that box.
+    if (!askForm.hidden && askForm.contains(e.target as Node) && !generating) {
+      showAsk(false);
+      regenBtn.focus();
+      return;
+    }
     close();
   }
   document.addEventListener("keydown", onKey);
@@ -80,6 +106,8 @@ export function openRephraseModal(opts: RephraseOptions): void {
     generating = on;
     ta.disabled = on;
     regenBtn.disabled = on;
+    askInput.disabled = on;
+    askGo.disabled = on;
     postBtn.disabled = on || !ta.value.trim();
     if (on) {
       status.hidden = false;
@@ -97,15 +125,26 @@ export function openRephraseModal(opts: RephraseOptions): void {
     status.textContent = msg;
     ta.disabled = false;
     regenBtn.disabled = false;
+    askInput.disabled = false;
+    askGo.disabled = false;
     postBtn.disabled = !allowManualPost || !ta.value.trim();
   }
 
-  async function generate(): Promise<void> {
+  /** The "how should it change" box under the comment. Its own Rephrase stands in for the bar's while it's open. */
+  function showAsk(on: boolean): void {
+    askForm.hidden = !on;
+    regenBtn.hidden = on;
+    regenBtn.setAttribute("aria-expanded", String(on));
+    if (on) askInput.focus();
+  }
+
+  async function generate(instructions: string): Promise<void> {
     setGenerating(true);
     try {
       const res = await postJSON("/api/rephrase", {
         comment: ta.value.trim() || opts.comment,
         title: opts.title || "",
+        instructions,
         findingId: opts.findingId || "",
         semanticFindingId: opts.semanticFindingId || "",
         model: opts.model || "",
@@ -113,21 +152,42 @@ export function openRephraseModal(opts: RephraseOptions): void {
         org: opts.org || "",
         project: opts.project || "",
         repoId: opts.repoId || "",
-      });
+      }, { timeoutMs: REPHRASE_TIMEOUT_MS });
       if (closed) return;
       ta.value = (res && res.text) || "";
+      voiceNote.hidden = !res?.voice;
       if (opts.onHumanized) opts.onHumanized(ta.value);
       setGenerating(false);
+      // Done: the box closes, so the next Rephrase starts from a clean ask about the new text.
+      askInput.value = "";
+      showAsk(false);
       ta.focus();
       ta.setSelectionRange(ta.value.length, ta.value.length);
     } catch (e: any) {
       if (closed) return;
       // Generation failed, but the user can still type a comment manually and post.
+      // The ask stays as typed, so trying again is one click.
       showError("Rephrase failed: " + (e?.message || "unknown error") + ". You can edit manually and still post.", true);
     }
   }
 
-  regenBtn.addEventListener("click", () => void generate());
+  regenBtn.addEventListener("click", () => showAsk(askForm.hidden));
+  dialog.querySelector(".rp-ask-close")!.addEventListener("click", () => {
+    if (generating) return;
+    showAsk(false);
+    regenBtn.focus();
+  });
+  askForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    if (!generating) void generate(askInput.value.trim());
+  });
+  // Enter rephrases; Shift+Enter adds a line.
+  askInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      askForm.requestSubmit();
+    }
+  });
   ta.addEventListener("input", () => {
     if (!generating) postBtn.disabled = !ta.value.trim();
   });
@@ -140,6 +200,8 @@ export function openRephraseModal(opts: RephraseOptions): void {
     }
     postBtn.disabled = true;
     regenBtn.disabled = true;
+    askInput.disabled = true;
+    askGo.disabled = true;
     ta.disabled = true;
     postBtn.textContent = "Posting…";
     try {

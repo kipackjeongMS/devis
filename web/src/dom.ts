@@ -18,7 +18,9 @@ export const filterbar = $("#filterbar") as HTMLElement;
 export const bulkReviewHost = $("#bulkReviewHost") as HTMLElement;
 export const orgFilter = $("#orgFilter") as HTMLSelectElement;
 export const projectFilter = $("#projectFilter") as HTMLSelectElement;
-export const assignFilter = $("#assignFilter") as HTMLElement;
+export const queueTabs = $("#queueTabs") as HTMLElement;
+export const queueSearch = $("#queueSearch") as HTMLInputElement;
+export const scopeFields = $("#scopeFields") as HTMLElement;
 export const listPane = $("#listPane") as HTMLElement;
 export const readingPane = $("#readingPane") as HTMLElement;
 

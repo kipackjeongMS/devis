@@ -1,8 +1,10 @@
 // One Copilot CLI runtime shared by every SDK session the desktop app runs:
-// background reviewers, the reviewer chat, Ask/Elaborate, rephrase and the
-// model catalog. The runtime is the user's installed `copilot` CLI, so sessions
-// use the same GitHub login, plugins and session store as the terminal CLI
-// (a reviewer session can be reopened with `copilot --resume <id>`).
+// background reviewers, the reviewer chat, Ask/Elaborate, rephrase, the model
+// catalog, and the Workspace's Lead, workers and write-ups. It runs through Agency
+// (`agency copilot`), so every session gets Agency's MCP servers, plugins and
+// session tracking, on the user's own Copilot login and session store (a
+// session can be reopened with `agency copilot --resume <id>`). Without Agency
+// it falls back to the plain `copilot` CLI and says so.
 
 import {
     CopilotClient,
@@ -13,7 +15,7 @@ import {
     type PermissionHandler,
 } from "@github/copilot-sdk";
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -53,13 +55,57 @@ export function resolveCopilotCliPath(): Promise<string> {
     return cliPathPromise;
 }
 
+/** How the app starts Copilot. */
+export interface CopilotRuntime {
+    via: "agency" | "copilot";
+    /** The program to run, and the arguments that come before Copilot's own. */
+    command: string;
+    args: string[];
+    /** Set when Copilot runs without Agency: what's missing, for the user to see. */
+    warning: string | null;
+}
+
+let runtimePromise: Promise<CopilotRuntime> | null = null;
+
+async function locateRuntime(): Promise<CopilotRuntime> {
+    const agency = agencyExePath();
+    if (agency) return { via: "agency", command: agency, args: ["copilot"], warning: null };
+    const cli = await resolveCopilotCliPath();
+    const warning =
+        `Agency isn't installed (looked for ${agencyExpectedPath()}), so Copilot runs without it: ` +
+        "no Agency MCP servers or plugins in reviews and the Workspace. Install Agency, then restart the app.";
+    console.warn(`[copilot] ${warning}`);
+    return { via: "copilot", command: cli, args: [], warning };
+}
+
+/** Agency's `copilot` when it's installed, else the plain CLI. Read once per service. */
+export function resolveCopilotRuntime(): Promise<CopilotRuntime> {
+    if (!runtimePromise) {
+        runtimePromise = locateRuntime().catch((error) => {
+            runtimePromise = null;
+            throw error;
+        });
+    }
+    return runtimePromise;
+}
+
+/** The command line that reopens a session in an interactive CLI, through Agency when it's there. */
+export async function resumeCommand(sessionId: string): Promise<{ command: string; args: string[] }> {
+    const runtime = await resolveCopilotRuntime();
+    return { command: runtime.command, args: [...runtime.args, "--resume", sessionId] };
+}
+
 export function getCopilotClient(): Promise<CopilotClient> {
     if (!clientPromise) {
         clientPromise = (async () => {
+            const runtime = await resolveCopilotRuntime();
             const client = new CopilotClient({
-                connection: RuntimeConnection.forStdio({ path: await resolveCopilotCliPath() }),
+                connection: RuntimeConnection.forStdio({ path: runtime.command, args: runtime.args }),
+                // Agency gives the runtime access to the folder it starts in: start it in the empty one.
+                workingDirectory: sessionWorkingDirectory(),
             });
             await client.start();
+            console.log(`[copilot] runtime started through ${runtime.via === "agency" ? "Agency" : "the plain Copilot CLI"} (${runtime.command})`);
             return client;
         })().catch((error) => {
             clientPromise = null;
@@ -87,6 +133,17 @@ export async function withCopilotClient<T>(task: (client: CopilotClient) => Prom
     }
 }
 
+/**
+ * Start the runtime before anyone needs it: through Agency it takes about 10 s (Agency
+ * starts its MCP proxies), which would otherwise land on the first review or Lead reply.
+ * Only the runtime: warming the MCP servers with a throwaway session didn't make the
+ * first real turn measurably faster.
+ */
+export async function warmCopilot(): Promise<void> {
+    if (process.env.ADO_PR_OPS_NO_COPILOT_WARMUP) return;
+    await getCopilotClient();
+}
+
 export async function stopCopilotClient(): Promise<void> {
     const pending = clientPromise;
     clientPromise = null;
@@ -108,19 +165,21 @@ export function sessionWorkingDirectory(): string {
     return dir;
 }
 
-export function agencyExePath(): string | null {
+/** Where Agency installs itself, unless `ADO_PR_OPS_AGENCY_PATH` says otherwise. */
+function agencyExpectedPath(): string {
     const override = process.env.ADO_PR_OPS_AGENCY_PATH?.trim();
-    if (override) return existsSync(override) ? override : null;
-    const appData = process.env.APPDATA;
-    if (!appData) return null;
-    const path = join(appData, "agency", "CurrentVersion", "agency.exe");
+    if (override) return override;
+    return join(process.env.APPDATA || join(homedir(), "AppData", "Roaming"), "agency", "CurrentVersion", "agency.exe");
+}
+
+export function agencyExePath(): string | null {
+    const path = agencyExpectedPath();
     return existsSync(path) ? path : null;
 }
 
-// Agency MCP servers attached to PR sessions: ADO (related PRs, repos) and
-// Bluebird (code search) for the PR's own org/project.
-const REVIEW_MCP_SERVERS = ["ado", "bluebird"] as const;
-
+// Agency MCP servers attached to PR sessions, scoped to the PR's own org and
+// project: ADO (related PRs, repos) and Bluebird (code search). They replace
+// Agency's unscoped servers of the same names in that session.
 export function reviewMcpServers(org: string, project: string): Record<string, MCPServerConfig> {
     const agency = agencyExePath();
     if (!agency) return {};
@@ -136,47 +195,16 @@ export function reviewMcpServers(org: string, project: string): Record<string, M
 }
 
 /**
- * The user's own MCP servers (mail, Teams, browsers, …) stay out of PR
- * sessions: they add startup cost and give untrusted PR text reach into
- * unrelated accounts.
- */
-export function userMcpServerNames(): string[] {
-    try {
-        const config = JSON.parse(
-            readFileSync(join(homedir(), ".copilot", "mcp-config.json"), "utf8"),
-        ) as { mcpServers?: Record<string, unknown> };
-        return Object.keys(config.mcpServers || {}).filter(
-            (name) => !(REVIEW_MCP_SERVERS as readonly string[]).includes(name),
-        );
-    } catch {
-        return [];
-    }
-}
-
-const READ_ONLY_TOOL = /(?:^|[_-])(?:get|list|search|read|query|find|show|fetch|lookup)(?:[_-]|$)/i;
-
-/**
- * PR sessions process untrusted PR content, so they get read access only:
- * file reads, app-provided tools and read-only ado/bluebird MCP tools. Shell,
- * file writes, URL fetches and every other MCP server are refused.
+ * PR sessions process untrusted PR content. They may read files, use the app's
+ * tools and call any MCP tool (every server Agency and the user's config provide
+ * is on, by the user's choice); shell commands, file writes and URL fetches are
+ * refused.
  */
 export const reviewPermissionHandler: PermissionHandler = (request) => {
-    if (request.kind === "read" || request.kind === "custom-tool") return { kind: "approve-once" };
-    if (request.kind === "mcp") {
-        if (
-            (REVIEW_MCP_SERVERS as readonly string[]).includes(request.serverName) &&
-            (request.readOnly || READ_ONLY_TOOL.test(request.toolName))
-        ) {
-            return { kind: "approve-once" };
-        }
-        return {
-            kind: "reject",
-            feedback: "PR sessions may only call read-only ado and bluebird MCP tools.",
-        };
-    }
+    if (request.kind === "read" || request.kind === "custom-tool" || request.kind === "mcp") return { kind: "approve-once" };
     return {
         kind: "reject",
-        feedback: `${request.kind} access is disabled in PR sessions because they process untrusted PR content. Use the PR data you were given and read-only ado/bluebird MCP tools.`,
+        feedback: `${request.kind} access is disabled in PR sessions because they process untrusted PR content. Use the PR data you were given and your MCP tools.`,
     };
 };
 
@@ -185,15 +213,188 @@ export function prSessionOptions(org: string, project: string) {
         clientName: CLIENT_NAME,
         workingDirectory: sessionWorkingDirectory(),
         mcpServers: reviewMcpServers(org, project),
-        disabledMcpServers: userMcpServerNames(),
         onPermissionRequest: reviewPermissionHandler,
     };
 }
+
+/**
+ * What the Lead and workers are told about the web. web_fetch is the runtime's own tool
+ * (a "url" permission request, approved without asking); web_search comes from the
+ * GitHub MCP server, which may be deferred behind tool_search_tool.
+ */
+export const WEB_BRIEF =
+    "You have the web: search it with web_search and read any page with web_fetch, without asking the user. If web_search isn't in your tool list, find it with tool_search_tool. Use them for docs, release notes, error messages and anything the repositories and MCP servers don't cover, and say which pages you used.";
 
 /** Last top-level assistant reply text, or "" when the turn produced none. */
 export function replyText(reply: Awaited<ReturnType<CopilotSession["sendAndWait"]>>): string {
     const content = (reply as { data?: { content?: unknown } } | undefined)?.data?.content;
     return typeof content === "string" ? content.trim() : "";
+}
+
+// ---- waiting for a turn ------------------------------------------------------------------------
+//
+// The SDK's sendAndWait ends a turn only on `session.idle`, a transient event that is never
+// saved or sent again. When it doesn't arrive, the wait runs to its timeout (12 hours for a
+// worker) while the session sits idle, and Stop can't help: aborting an idle session emits
+// nothing. sendAndSettle waits for the same events, and also asks the runtime now and then
+// whether the session is still processing, so a turn whose idle got lost still ends; and a
+// caller's stop signal always ends the wait.
+
+type AssistantReply = Awaited<ReturnType<CopilotSession["sendAndWait"]>>;
+
+/** The parts of a session sendAndSettle uses. A test double may offer only sendAndWait. */
+export interface SettleSession extends Partial<Pick<CopilotSession, "send" | "on" | "getEvents" | "rpc">> {
+    sendAndWait(message: MessageOptions, timeout?: number): Promise<unknown>;
+}
+
+export const SETTLE = {
+    /** How often to ask whether the session is still processing. Two quiet "no"s in a row end the turn. */
+    checkMs: 15_000,
+    /** How long one such question may take before it counts as no answer. */
+    checkTimeoutMs: 10_000,
+    /** After a stop: how often to check that the runtime let go, and how long to wait at most. */
+    stopPollMs: 500,
+    stopGraceMs: 10_000,
+};
+
+export interface SettleOptions {
+    /** Aborted when the caller stops the turn: the wait ends (with "stopped") once the runtime lets go, or after a grace. */
+    signal?: AbortSignal;
+    /** The turn ended without `session.idle`: the runtime said it was no longer processing. */
+    onMissedIdle?: () => void;
+    /** True while the turn waits on the user (a question or approval): the turn isn't over then. */
+    waiting?: () => boolean;
+}
+
+export class TurnStoppedError extends Error {
+    constructor() {
+        super("stopped");
+    }
+}
+
+function within<T>(promise: Promise<T>, ms: number): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    return Promise.race([
+        promise,
+        new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error("no answer")), ms))),
+    ]).finally(() => clearTimeout(timer));
+}
+
+/** The last top-level reply saved since `since`, for a turn whose live events went missing. */
+async function savedReply(session: SettleSession, since: number): Promise<AssistantReply> {
+    if (!session.getEvents) return undefined;
+    const events = (await session.getEvents()) as Array<{ type: string; agentId?: string; timestamp?: string; data?: { content?: unknown; parentToolCallId?: string } }>;
+    for (let i = events.length - 1; i >= 0; i--) {
+        const e = events[i];
+        if (e.timestamp && Date.parse(e.timestamp) < since - 1000) break;
+        if (e.type === "assistant.message" && !e.agentId && !e.data?.parentToolCallId && typeof e.data?.content === "string" && e.data.content.trim()) {
+            return e as unknown as AssistantReply;
+        }
+    }
+    return undefined;
+}
+
+/**
+ * Send a message and wait for the turn to end, like sendAndWait, but robust to a lost
+ * `session.idle` and stoppable. Resolves with the last top-level assistant message.
+ */
+export async function sendAndSettle(session: SettleSession, message: MessageOptions, timeoutMs: number, options: SettleOptions = {}): Promise<AssistantReply> {
+    if (options.signal?.aborted) throw new TurnStoppedError();
+    // A double without events or send: the SDK's own wait is all there is.
+    if (!session.send || !session.on) return (await session.sendAndWait(message, timeoutMs)) as AssistantReply;
+
+    type Outcome = { kind: "idle" } | { kind: "missedIdle" } | { kind: "stopped" } | { kind: "error"; error: Error };
+    let settled = false;
+    let settle!: (outcome: Outcome) => void;
+    const outcome = new Promise<Outcome>((resolve) => {
+        settle = (o) => {
+            if (settled) return;
+            settled = true;
+            resolve(o);
+        };
+    });
+    let last: AssistantReply;
+    let events = 0;
+    const off = session.on((event) => {
+        events++;
+        if (event.agentId) return;
+        if (event.type === "assistant.message") last = event as AssistantReply;
+        else if (event.type === "session.idle" && event.data.mode !== "autopilot") settle({ kind: "idle" });
+        else if (event.type === "session.error") {
+            const error = new Error(event.data.message);
+            error.stack = event.data.stack;
+            settle({ kind: "error", error });
+        }
+    });
+    // A dropped connection fails the wait, as it does for sendAndWait.
+    const waits = (session as unknown as { pendingResponseWaits?: unknown }).pendingResponseWaits;
+    const fail = (error: Error) => settle({ kind: "error", error });
+    if (waits instanceof Set) waits.add(fail);
+
+    const isProcessing = async (): Promise<boolean | null> => {
+        try {
+            const result = await within(session.rpc!.metadata.isProcessing(), SETTLE.checkTimeoutMs);
+            return typeof result?.processing === "boolean" ? result.processing : null;
+        } catch {
+            return null;
+        }
+    };
+    let watch: ReturnType<typeof setInterval> | undefined;
+    let stopTimer: ReturnType<typeof setTimeout> | undefined;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const onStop = () => {
+        const until = Date.now() + SETTLE.stopGraceMs;
+        const poll = async (): Promise<void> => {
+            if (settled) return;
+            if (Date.now() >= until || (await isProcessing()) === false) return settle({ kind: "stopped" });
+            stopTimer = setTimeout(() => void poll(), SETTLE.stopPollMs);
+        };
+        void poll();
+    };
+    const sentAt = Date.now();
+    try {
+        await session.send(message);
+        if (session.rpc?.metadata?.isProcessing) {
+            // "Not processing" counts only with nothing from the session since the previous check, and
+            // never while the caller is waiting on the user. Two such checks in a row end the turn.
+            let quiet = 0;
+            let seen = events;
+            let checking = false;
+            watch = setInterval(async () => {
+                if (checking || settled) return;
+                checking = true;
+                try {
+                    const before = events;
+                    const processing = await isProcessing();
+                    if (processing !== false || events !== before || options.waiting?.()) quiet = 0;
+                    else quiet = before === seen ? quiet + 1 : 1;
+                    seen = events;
+                    if (quiet >= 2) settle({ kind: "missedIdle" });
+                } finally {
+                    checking = false;
+                }
+            }, SETTLE.checkMs);
+        }
+        options.signal?.addEventListener("abort", onStop, { once: true });
+        if (options.signal?.aborted) onStop();
+        timeout = setTimeout(() => settle({ kind: "error", error: new Error(`Timeout after ${timeoutMs}ms waiting for session.idle`) }), timeoutMs);
+        const result = await outcome;
+        if (result.kind === "error") throw result.error;
+        if (result.kind === "stopped") throw new TurnStoppedError();
+        if (result.kind === "missedIdle") {
+            options.onMissedIdle?.();
+            if (!last) last = await savedReply(session, sentAt).catch(() => undefined);
+        }
+        return last;
+    } finally {
+        settled = true;
+        off();
+        if (waits instanceof Set) waits.delete(fail);
+        if (watch) clearInterval(watch);
+        if (stopTimer) clearTimeout(stopTimer);
+        if (timeout) clearTimeout(timeout);
+        options.signal?.removeEventListener("abort", onStop);
+    }
 }
 
 export interface OneShotOptions {
@@ -211,13 +412,14 @@ export function runOneShot(prompt: string, options: OneShotOptions = {}): Promis
             workingDirectory: sessionWorkingDirectory(),
             model: model && model !== "auto" ? model : undefined,
             skipCustomInstructions: true,
-            disabledMcpServers: userMcpServerNames(),
             onPermissionRequest: reviewPermissionHandler,
         });
         try {
-            const reply = await session.sendAndWait(
+            const reply = await sendAndSettle(
+                session,
                 { prompt, attachments: options.attachments },
                 options.timeoutMs ?? 180_000,
+                { onMissedIdle: () => console.warn("[copilot] a one-shot reply ended without session.idle; recovered") },
             );
             const text = replyText(reply);
             if (!text) throw new Error("Copilot returned an empty reply");

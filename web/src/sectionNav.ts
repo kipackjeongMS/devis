@@ -17,7 +17,9 @@ const reducedMotion = (): boolean =>
   window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 function topWithin(target: HTMLElement, scroller: HTMLElement): number {
-  return target.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+  // Rects are visual px; under the pane's CSS zoom, scroll offsets are in the scroller's own px.
+  const zoom = scroller.currentCSSZoom || 1;
+  return (target.getBoundingClientRect().top - scroller.getBoundingClientRect().top) / zoom + scroller.scrollTop;
 }
 
 /** Append the tab row to `head` (already inside a `.pane-scroll`). */

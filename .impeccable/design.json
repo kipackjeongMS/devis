@@ -1,219 +1,630 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-07-31T18:26:50.764-07:00",
-  "title": "Design System: ADO PR Ops",
+  "generatedAt": "2026-10-13T23:24:29.982Z",
+  "title": "Design System: Devis",
   "extensions": {
     "colorMeta": {
-      "canvas": {
+      "ink": {
         "role": "neutral",
-        "displayName": "Midnight Canvas",
-        "canonical": "#0d1117",
-        "tonalRamp": ["oklch(15% 0.012 255)", "oklch(25% 0.012 255)", "oklch(35% 0.012 255)", "oklch(47% 0.012 255)", "oklch(59% 0.012 255)", "oklch(71% 0.012 255)", "oklch(83% 0.012 255)", "oklch(95% 0.012 255)"]
+        "displayName": "Ink Field",
+        "canonical": "oklch(14.9% 0.017 259.9)",
+        "tonalRamp": [
+          "oklch(15.0% 0.017 259.9)",
+          "oklch(26.4% 0.017 259.9)",
+          "oklch(37.9% 0.017 259.9)",
+          "oklch(49.3% 0.017 259.9)",
+          "oklch(60.7% 0.017 259.9)",
+          "oklch(72.1% 0.017 259.9)",
+          "oklch(83.6% 0.017 259.9)",
+          "oklch(95.0% 0.017 259.9)"
+        ],
+        "purpose": "The base of the field every pane floats over."
       },
-      "surface": {
+      "ink-2": {
         "role": "neutral",
-        "displayName": "Workbench Surface",
-        "canonical": "#161b22",
-        "tonalRamp": ["oklch(15% 0.015 255)", "oklch(25% 0.015 255)", "oklch(35% 0.015 255)", "oklch(47% 0.015 255)", "oklch(59% 0.015 255)", "oklch(71% 0.015 255)", "oklch(83% 0.015 255)", "oklch(95% 0.015 255)"]
+        "displayName": "Deep Ink",
+        "canonical": "oklch(20.9% 0.030 263.6)",
+        "tonalRamp": [
+          "oklch(15.0% 0.030 263.6)",
+          "oklch(26.4% 0.030 263.6)",
+          "oklch(37.9% 0.030 263.6)",
+          "oklch(49.3% 0.030 263.6)",
+          "oklch(60.7% 0.030 263.6)",
+          "oklch(72.1% 0.030 263.6)",
+          "oklch(83.6% 0.030 263.6)",
+          "oklch(95.0% 0.030 263.6)"
+        ]
       },
-      "surface-raised": {
+      "ink-3": {
         "role": "neutral",
-        "displayName": "Raised Graphite",
-        "canonical": "#1c2230",
-        "tonalRamp": ["oklch(15% 0.021 260)", "oklch(25% 0.021 260)", "oklch(35% 0.021 260)", "oklch(47% 0.021 260)", "oklch(59% 0.021 260)", "oklch(71% 0.021 260)", "oklch(83% 0.021 260)", "oklch(95% 0.021 260)"]
+        "displayName": "Raised Ink",
+        "canonical": "oklch(26.8% 0.033 261.7)",
+        "tonalRamp": [
+          "oklch(15.0% 0.033 261.7)",
+          "oklch(26.4% 0.033 261.7)",
+          "oklch(37.9% 0.033 261.7)",
+          "oklch(49.3% 0.033 261.7)",
+          "oklch(60.7% 0.033 261.7)",
+          "oklch(72.1% 0.033 261.7)",
+          "oklch(83.6% 0.033 261.7)",
+          "oklch(95.0% 0.033 261.7)"
+        ]
       },
-      "border": {
+      "pool-cyan": {
         "role": "neutral",
-        "displayName": "Structural Border",
-        "canonical": "#2a3038",
-        "tonalRamp": ["oklch(15% 0.012 255)", "oklch(25% 0.012 255)", "oklch(35% 0.012 255)", "oklch(47% 0.012 255)", "oklch(59% 0.012 255)", "oklch(71% 0.012 255)", "oklch(83% 0.012 255)", "oklch(95% 0.012 255)"]
+        "displayName": "Cyan Light Pool",
+        "canonical": "rgba(56, 189, 248, .24)",
+        "purpose": "Top-left light pool on the field."
       },
-      "border-soft": {
+      "pool-indigo": {
         "role": "neutral",
-        "displayName": "Soft Divider",
-        "canonical": "#21262d",
-        "tonalRamp": ["oklch(15% 0.010 255)", "oklch(25% 0.010 255)", "oklch(35% 0.010 255)", "oklch(47% 0.010 255)", "oklch(59% 0.010 255)", "oklch(71% 0.010 255)", "oklch(83% 0.010 255)", "oklch(95% 0.010 255)"]
+        "displayName": "Indigo Light Pool",
+        "canonical": "rgba(99, 102, 241, .2)",
+        "purpose": "Bottom-right light pool on the field."
       },
-      "text": {
+      "hud-line": {
         "role": "neutral",
-        "displayName": "Primary Ink",
-        "canonical": "#e6edf3",
-        "tonalRamp": ["oklch(15% 0.009 250)", "oklch(25% 0.009 250)", "oklch(35% 0.009 250)", "oklch(47% 0.009 250)", "oklch(59% 0.009 250)", "oklch(71% 0.009 250)", "oklch(83% 0.009 250)", "oklch(95% 0.009 250)"]
+        "displayName": "HUD Grid Line",
+        "canonical": "rgba(140, 200, 255, .045)",
+        "purpose": "32px grid fading out from the top-left."
       },
-      "text-muted": {
+      "glass": {
         "role": "neutral",
-        "displayName": "Muted Steel",
-        "canonical": "#9aa5b1",
-        "tonalRamp": ["oklch(15% 0.015 250)", "oklch(25% 0.015 250)", "oklch(35% 0.015 250)", "oklch(47% 0.015 250)", "oklch(59% 0.015 250)", "oklch(71% 0.015 250)", "oklch(83% 0.015 250)", "oklch(95% 0.015 250)"]
+        "displayName": "Pane Glass",
+        "canonical": "rgba(15, 22, 34, .66)",
+        "purpose": "Floating panes: a smoked tint, never blurred."
       },
-      "text-faint": {
+      "glass-2": {
         "role": "neutral",
-        "displayName": "Faint Slate",
-        "canonical": "#6e7681",
-        "tonalRamp": ["oklch(15% 0.012 250)", "oklch(25% 0.012 250)", "oklch(35% 0.012 250)", "oklch(47% 0.012 250)", "oklch(59% 0.012 250)", "oklch(71% 0.012 250)", "oklch(83% 0.012 250)", "oklch(95% 0.012 250)"]
+        "displayName": "Raised Glass",
+        "canonical": "rgba(30, 41, 60, .5)",
+        "purpose": "Raised surfaces inside panes."
       },
-      "azure-signal": {
+      "glass-3": {
+        "role": "neutral",
+        "displayName": "Raised Glass, Strong",
+        "canonical": "rgba(42, 56, 80, .58)",
+        "purpose": "Strongest raised surface inside panes."
+      },
+      "glass-head": {
+        "role": "neutral",
+        "displayName": "Frosted Head",
+        "canonical": "rgba(13, 19, 30, .84)",
+        "purpose": "Sticky heads; near-opaque so content never ghosts through."
+      },
+      "glass-float": {
+        "role": "neutral",
+        "displayName": "Frosted Float",
+        "canonical": "rgba(17, 24, 37, .88)",
+        "purpose": "Flyouts, menus, toasts and dialogs."
+      },
+      "well": {
+        "role": "neutral",
+        "displayName": "Well",
+        "canonical": "rgba(2, 5, 11, .42)",
+        "purpose": "Recessed diff bodies, code, diagram frames and the pipeline canvas."
+      },
+      "card": {
+        "role": "neutral",
+        "displayName": "Card Tint",
+        "canonical": "rgba(170, 205, 255, .045)",
+        "purpose": "Content cards inside panes."
+      },
+      "edge": {
+        "role": "neutral",
+        "displayName": "Luminous Edge",
+        "canonical": "rgba(150, 200, 255, .14)",
+        "purpose": "Hairline around every glass surface."
+      },
+      "edge-top": {
+        "role": "neutral",
+        "displayName": "Top Edge",
+        "canonical": "rgba(170, 225, 255, .26)",
+        "purpose": "Brighter top edge of panes, dialogs and toasts."
+      },
+      "divider": {
+        "role": "neutral",
+        "displayName": "Divider",
+        "canonical": "rgba(150, 200, 255, .09)",
+        "purpose": "Separators inside panes."
+      },
+      "text-1": {
+        "role": "neutral",
+        "displayName": "Cool White",
+        "canonical": "oklch(96.6% 0.016 262.8)",
+        "tonalRamp": [
+          "oklch(15.0% 0.016 262.8)",
+          "oklch(26.4% 0.016 262.8)",
+          "oklch(37.9% 0.016 262.8)",
+          "oklch(49.3% 0.016 262.8)",
+          "oklch(60.7% 0.016 262.8)",
+          "oklch(72.1% 0.016 262.8)",
+          "oklch(83.6% 0.016 262.8)",
+          "oklch(95.0% 0.016 262.8)"
+        ]
+      },
+      "text-2": {
+        "role": "neutral",
+        "displayName": "Cool Silver",
+        "canonical": "oklch(84.8% 0.028 258.4)",
+        "tonalRamp": [
+          "oklch(15.0% 0.028 258.4)",
+          "oklch(26.4% 0.028 258.4)",
+          "oklch(37.9% 0.028 258.4)",
+          "oklch(49.3% 0.028 258.4)",
+          "oklch(60.7% 0.028 258.4)",
+          "oklch(72.1% 0.028 258.4)",
+          "oklch(83.6% 0.028 258.4)",
+          "oklch(95.0% 0.028 258.4)"
+        ]
+      },
+      "text-3": {
+        "role": "neutral",
+        "displayName": "Cool Slate",
+        "canonical": "oklch(68.3% 0.036 261.0)",
+        "tonalRamp": [
+          "oklch(15.0% 0.036 261.0)",
+          "oklch(26.4% 0.036 261.0)",
+          "oklch(37.9% 0.036 261.0)",
+          "oklch(49.3% 0.036 261.0)",
+          "oklch(60.7% 0.036 261.0)",
+          "oklch(72.1% 0.036 261.0)",
+          "oklch(83.6% 0.036 261.0)",
+          "oklch(95.0% 0.036 261.0)"
+        ]
+      },
+      "text-off": {
+        "role": "neutral",
+        "displayName": "Disabled Slate",
+        "canonical": "oklch(50.5% 0.033 261.4)",
+        "tonalRamp": [
+          "oklch(15.0% 0.033 261.4)",
+          "oklch(26.4% 0.033 261.4)",
+          "oklch(37.9% 0.033 261.4)",
+          "oklch(49.3% 0.033 261.4)",
+          "oklch(60.7% 0.033 261.4)",
+          "oklch(72.1% 0.033 261.4)",
+          "oklch(83.6% 0.033 261.4)",
+          "oklch(95.0% 0.033 261.4)"
+        ]
+      },
+      "accent": {
         "role": "primary",
-        "displayName": "Azure Signal",
-        "canonical": "#4c8dff",
-        "tonalRamp": ["oklch(15% 0.22 257)", "oklch(25% 0.22 257)", "oklch(35% 0.22 257)", "oklch(47% 0.22 257)", "oklch(59% 0.22 257)", "oklch(71% 0.20 257)", "oklch(83% 0.15 257)", "oklch(95% 0.06 257)"]
+        "displayName": "Emissive Cyan",
+        "canonical": "oklch(81.8% 0.129 221.7)",
+        "tonalRamp": [
+          "oklch(15.0% 0.129 221.7)",
+          "oklch(26.4% 0.129 221.7)",
+          "oklch(37.9% 0.129 221.7)",
+          "oklch(49.3% 0.129 221.7)",
+          "oklch(60.7% 0.129 221.7)",
+          "oklch(72.1% 0.129 221.7)",
+          "oklch(83.6% 0.129 221.7)",
+          "oklch(95.0% 0.129 221.7)"
+        ],
+        "purpose": "Selection, focus, running state and the primary command."
       },
-      "azure-action": {
+      "accent-hover": {
         "role": "primary",
-        "displayName": "Azure Action",
-        "canonical": "#1f6feb",
-        "tonalRamp": ["oklch(15% 0.20 257)", "oklch(25% 0.20 257)", "oklch(35% 0.20 257)", "oklch(47% 0.20 257)", "oklch(59% 0.20 257)", "oklch(71% 0.18 257)", "oklch(83% 0.13 257)", "oklch(95% 0.05 257)"]
+        "displayName": "Emissive Cyan, Hover",
+        "canonical": "oklch(86.1% 0.104 218.4)",
+        "tonalRamp": [
+          "oklch(15.0% 0.104 218.4)",
+          "oklch(26.4% 0.104 218.4)",
+          "oklch(37.9% 0.104 218.4)",
+          "oklch(49.3% 0.104 218.4)",
+          "oklch(60.7% 0.104 218.4)",
+          "oklch(72.1% 0.104 218.4)",
+          "oklch(83.6% 0.104 218.4)",
+          "oklch(95.0% 0.104 218.4)"
+        ]
+      },
+      "accent-press": {
+        "role": "primary",
+        "displayName": "Emissive Cyan, Pressed",
+        "canonical": "oklch(72.5% 0.121 223.7)",
+        "tonalRamp": [
+          "oklch(15.0% 0.121 223.7)",
+          "oklch(26.4% 0.121 223.7)",
+          "oklch(37.9% 0.121 223.7)",
+          "oklch(49.3% 0.121 223.7)",
+          "oklch(60.7% 0.121 223.7)",
+          "oklch(72.1% 0.121 223.7)",
+          "oklch(83.6% 0.121 223.7)",
+          "oklch(95.0% 0.121 223.7)"
+        ]
+      },
+      "accent-text": {
+        "role": "primary",
+        "displayName": "Cyan Text",
+        "canonical": "oklch(90.3% 0.081 212.5)",
+        "tonalRamp": [
+          "oklch(15.0% 0.081 212.5)",
+          "oklch(26.4% 0.081 212.5)",
+          "oklch(37.9% 0.081 212.5)",
+          "oklch(49.3% 0.081 212.5)",
+          "oklch(60.7% 0.081 212.5)",
+          "oklch(72.1% 0.081 212.5)",
+          "oklch(83.6% 0.081 212.5)",
+          "oklch(95.0% 0.081 212.5)"
+        ]
+      },
+      "accent-tint": {
+        "role": "primary",
+        "displayName": "Cyan Tint",
+        "canonical": "rgba(76, 214, 255, .13)",
+        "purpose": "Selected rows and changed-state fills."
+      },
+      "accent-tint-2": {
+        "role": "primary",
+        "displayName": "Cyan Tint, Strong",
+        "canonical": "rgba(76, 214, 255, .22)",
+        "purpose": "Open and selected row."
+      },
+      "accent-glow": {
+        "role": "primary",
+        "displayName": "Cyan Glow",
+        "canonical": "rgba(76, 214, 255, .55)",
+        "purpose": "Emitted light under the One Light Rule."
       },
       "on-accent": {
-        "role": "neutral",
-        "displayName": "On-Accent White",
-        "canonical": "#ffffff",
-        "tonalRamp": ["oklch(15% 0 0)", "oklch(25% 0 0)", "oklch(35% 0 0)", "oklch(47% 0 0)", "oklch(59% 0 0)", "oklch(71% 0 0)", "oklch(83% 0 0)", "oklch(100% 0 0)"]
+        "role": "primary",
+        "displayName": "On Cyan",
+        "canonical": "oklch(16.5% 0.031 237.9)",
+        "tonalRamp": [
+          "oklch(15.0% 0.031 237.9)",
+          "oklch(26.4% 0.031 237.9)",
+          "oklch(37.9% 0.031 237.9)",
+          "oklch(49.3% 0.031 237.9)",
+          "oklch(60.7% 0.031 237.9)",
+          "oklch(72.1% 0.031 237.9)",
+          "oklch(83.6% 0.031 237.9)",
+          "oklch(95.0% 0.031 237.9)"
+        ]
       },
-      "success-surface": {
-        "role": "secondary",
-        "displayName": "Added Depth",
-        "canonical": "#12261a",
-        "tonalRamp": ["oklch(15% 0.05 145)", "oklch(25% 0.05 145)", "oklch(35% 0.05 145)", "oklch(47% 0.05 145)", "oklch(59% 0.05 145)", "oklch(71% 0.05 145)", "oklch(83% 0.04 145)", "oklch(95% 0.02 145)"]
+      "focus": {
+        "role": "primary",
+        "displayName": "Focus Cyan",
+        "canonical": "oklch(90.3% 0.081 212.5)",
+        "tonalRamp": [
+          "oklch(15.0% 0.081 212.5)",
+          "oklch(26.4% 0.081 212.5)",
+          "oklch(37.9% 0.081 212.5)",
+          "oklch(49.3% 0.081 212.5)",
+          "oklch(60.7% 0.081 212.5)",
+          "oklch(72.1% 0.081 212.5)",
+          "oklch(83.6% 0.081 212.5)",
+          "oklch(95.0% 0.081 212.5)"
+        ],
+        "purpose": "2px focus outline."
       },
       "success": {
         "role": "secondary",
-        "displayName": "Success Green",
-        "canonical": "#2ea043",
-        "tonalRamp": ["oklch(15% 0.15 145)", "oklch(25% 0.15 145)", "oklch(35% 0.15 145)", "oklch(47% 0.15 145)", "oklch(59% 0.15 145)", "oklch(71% 0.13 145)", "oklch(83% 0.09 145)", "oklch(95% 0.04 145)"]
+        "displayName": "Mint",
+        "canonical": "oklch(81.7% 0.148 159.0)",
+        "tonalRamp": [
+          "oklch(15.0% 0.148 159.0)",
+          "oklch(26.4% 0.148 159.0)",
+          "oklch(37.9% 0.148 159.0)",
+          "oklch(49.3% 0.148 159.0)",
+          "oklch(60.7% 0.148 159.0)",
+          "oklch(72.1% 0.148 159.0)",
+          "oklch(83.6% 0.148 159.0)",
+          "oklch(95.0% 0.148 159.0)"
+        ]
       },
-      "danger-surface": {
+      "caution": {
         "role": "secondary",
-        "displayName": "Removed Depth",
-        "canonical": "#2a1518",
-        "tonalRamp": ["oklch(15% 0.05 25)", "oklch(25% 0.05 25)", "oklch(35% 0.05 25)", "oklch(47% 0.05 25)", "oklch(59% 0.05 25)", "oklch(71% 0.05 25)", "oklch(83% 0.04 25)", "oklch(95% 0.02 25)"]
+        "displayName": "Amber",
+        "canonical": "oklch(88.0% 0.135 86.1)",
+        "tonalRamp": [
+          "oklch(15.0% 0.135 86.1)",
+          "oklch(26.4% 0.135 86.1)",
+          "oklch(37.9% 0.135 86.1)",
+          "oklch(49.3% 0.135 86.1)",
+          "oklch(60.7% 0.135 86.1)",
+          "oklch(72.1% 0.135 86.1)",
+          "oklch(83.6% 0.135 86.1)",
+          "oklch(95.0% 0.135 86.1)"
+        ]
       },
-      "danger": {
+      "critical": {
         "role": "secondary",
-        "displayName": "Danger Red",
-        "canonical": "#f85149",
-        "tonalRamp": ["oklch(15% 0.20 25)", "oklch(25% 0.20 25)", "oklch(35% 0.20 25)", "oklch(47% 0.20 25)", "oklch(59% 0.20 25)", "oklch(71% 0.18 25)", "oklch(83% 0.12 25)", "oklch(95% 0.05 25)"]
+        "displayName": "Rose",
+        "canonical": "oklch(77.4% 0.136 11.1)",
+        "tonalRamp": [
+          "oklch(15.0% 0.136 11.1)",
+          "oklch(26.4% 0.136 11.1)",
+          "oklch(37.9% 0.136 11.1)",
+          "oklch(49.3% 0.136 11.1)",
+          "oklch(60.7% 0.136 11.1)",
+          "oklch(72.1% 0.136 11.1)",
+          "oklch(83.6% 0.136 11.1)",
+          "oklch(95.0% 0.136 11.1)"
+        ]
       },
-      "warning": {
-        "role": "secondary",
-        "displayName": "Review Amber",
-        "canonical": "#d29922",
-        "tonalRamp": ["oklch(15% 0.15 85)", "oklch(25% 0.15 85)", "oklch(35% 0.15 85)", "oklch(47% 0.15 85)", "oklch(59% 0.15 85)", "oklch(71% 0.13 85)", "oklch(83% 0.09 85)", "oklch(95% 0.04 85)"]
+      "sev-high": {
+        "role": "tertiary",
+        "displayName": "Violet",
+        "canonical": "oklch(79.9% 0.127 304.8)",
+        "tonalRamp": [
+          "oklch(15.0% 0.127 304.8)",
+          "oklch(26.4% 0.127 304.8)",
+          "oklch(37.9% 0.127 304.8)",
+          "oklch(49.3% 0.127 304.8)",
+          "oklch(60.7% 0.127 304.8)",
+          "oklch(72.1% 0.127 304.8)",
+          "oklch(83.6% 0.127 304.8)",
+          "oklch(95.0% 0.127 304.8)"
+        ],
+        "purpose": "High severity."
       }
     },
     "typographyMeta": {
-      "headline": { "displayName": "Headline", "purpose": "Detail titles and settings headings." },
-      "title": { "displayName": "Title", "purpose": "Groups, panels, and important row labels." },
-      "body": { "displayName": "Body", "purpose": "Default controls, descriptions, and review content." },
-      "label": { "displayName": "Label", "purpose": "Compact statuses and scanning labels." },
-      "code": { "displayName": "Code", "purpose": "Diffs, paths, branches, line numbers, and exact identifiers." }
+      "display": {
+        "displayName": "Display",
+        "purpose": "Reference page heading."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Detail head title, empty-state title, dialog titles."
+      },
+      "body-strong": {
+        "displayName": "Body Strong",
+        "purpose": "Lane heads, block names, primary command labels."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Interface text."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Feature tabs, repository heads, compact buttons."
+      },
+      "caption": {
+        "displayName": "Caption",
+        "purpose": "Meta lines and badges, in text-3."
+      },
+      "code": {
+        "displayName": "Readout",
+        "purpose": "IDs, branches, paths, code, build numbers and zoom levels."
+      }
     },
     "shadows": [
-      { "name": "focused-group", "value": "0 2px 12px rgba(0, 0, 0, 0.25)", "purpose": "A single important grouped region such as My Plate." },
-      { "name": "floating-control", "value": "0 4px 16px rgba(1, 4, 9, 0.5)", "purpose": "Compact selection toolbars." },
-      { "name": "flyout", "value": "0 8px 24px rgba(0, 0, 0, 0.4)", "purpose": "Inboxes and toast feedback." },
-      { "name": "drawer", "value": "-12px 0 34px rgba(1, 4, 9, 0.5)", "purpose": "Full-height PR detail." },
-      { "name": "dialog", "value": "0 12px 40px rgba(1, 4, 9, 0.6)", "purpose": "Focused modal tasks above the detail drawer." }
+      {
+        "name": "sheen",
+        "value": "inset 0 1px 0 rgba(255, 255, 255, .08)",
+        "purpose": "Inner top highlight on every glass surface."
+      },
+      {
+        "name": "pane",
+        "value": "0 18px 44px -14px rgba(0, 0, 0, .6)",
+        "purpose": "Floating panes."
+      },
+      {
+        "name": "flyout",
+        "value": "0 16px 36px -8px rgba(0, 0, 0, .62), 0 2px 8px rgba(0, 0, 0, .3)",
+        "purpose": "Flyouts, menus, toasts, the zoom cluster, block action pills and a dragged block."
+      },
+      {
+        "name": "dialog",
+        "value": "0 40px 80px -16px rgba(0, 0, 0, .72), 0 4px 24px rgba(0, 0, 0, .36)",
+        "purpose": "Dialogs and the stacked reading sheet."
+      },
+      {
+        "name": "accent-glow",
+        "value": "0 0 8px rgba(76, 214, 255, .55)",
+        "purpose": "Emitted cyan light on selection bars, tab pills and the running bar."
+      },
+      {
+        "name": "blur-pane",
+        "value": "blur(24px) saturate(160%)",
+        "purpose": "Backdrop filter for sticky heads only; panes are never blurred."
+      },
+      {
+        "name": "blur-float",
+        "value": "blur(32px) saturate(170%)",
+        "purpose": "Backdrop filter for floats and dialogs."
+      }
     ],
     "motion": [
-      { "name": "state-fast", "value": "120ms ease", "purpose": "Hover and compact state feedback." },
-      { "name": "state-standard", "value": "160ms ease", "purpose": "Flyout and popover opacity changes." },
-      { "name": "drawer", "value": "260ms cubic-bezier(.22, .61, .36, 1)", "purpose": "PR detail spatial continuity." },
-      { "name": "reduced-motion", "value": "none", "purpose": "Remove nonessential animation under prefers-reduced-motion." }
+      {
+        "name": "ease",
+        "value": "cubic-bezier(0, 0, 0, 1)",
+        "purpose": "Decelerate curve for every transition."
+      },
+      {
+        "name": "fast",
+        "value": "83ms",
+        "purpose": "Hover and press fills."
+      },
+      {
+        "name": "normal",
+        "value": "167ms",
+        "purpose": "Fades, tab pills."
+      },
+      {
+        "name": "slow",
+        "value": "250ms",
+        "purpose": "Flyout slides, dialogs."
+      },
+      {
+        "name": "slower",
+        "value": "333ms",
+        "purpose": "The pane resolving from blur."
+      },
+      {
+        "name": "pane-in",
+        "value": "opacity 0 -> 1, translateY(6px) -> 0, blur(6px) -> none over 333ms",
+        "purpose": "The one authored motion: an opened PR resolves into the pane."
+      },
+      {
+        "name": "reticle-scan",
+        "value": "rotate 1turn over 6s, linear, infinite",
+        "purpose": "The empty-state reticle arc."
+      }
     ],
     "breakpoints": [
-      { "name": "compact", "value": "520px" }
+      {
+        "name": "stacked",
+        "value": "1100px",
+        "purpose": "Reading pane floats over the queue; inspector floats over the canvas."
+      },
+      {
+        "name": "catalog-stack",
+        "value": "760px",
+        "purpose": "Catalog stacks above the chain pane."
+      },
+      {
+        "name": "narrow-head",
+        "value": "720px"
+      },
+      {
+        "name": "compact",
+        "value": "600px"
+      }
     ]
   },
   "components": [
     {
       "name": "Primary Button",
       "kind": "button",
-      "refersTo": "button-primary",
-      "description": "Initiates a primary review or save action.",
-      "html": "<button class=\"ds-btn-primary\">Review PR with Copilot</button>",
-      "css": ".ds-btn-primary { background: var(--accent-dim, #1f6feb); color: #fff; border: 0; padding: 6px 12px; border-radius: var(--radius-sm, 6px); font: 500 13px/1.5 -apple-system, \"Segoe UI\", system-ui, sans-serif; cursor: pointer; transition: background 120ms ease; } .ds-btn-primary:hover { background: var(--accent, #4c8dff); } .ds-btn-primary:focus-visible { outline: 2px solid var(--accent, #4c8dff); outline-offset: 2px; } .ds-btn-primary:active { background: var(--accent-dim, #1f6feb); }"
+      "refersTo": "button-accent",
+      "description": "The one primary command in a view: cyan fill, dark text and a soft glow.",
+      "html": "<button class=\"ds-btn-accent\">Review with Copilot</button>",
+      "css": ".ds-btn-accent { display: inline-flex; align-items: center; min-height: 32px; padding: 5px 12px; border: 1px solid rgba(255,255,255,.16); border-bottom-color: rgba(0,0,0,.14); border-radius: 6px; background: var(--accent, #4cd6ff); color: var(--on-accent, #02101a); font: 600 14px/20px \"Segoe UI Variable Text\", \"Segoe UI\", system-ui, sans-serif; box-shadow: 0 4px 14px -6px rgba(76,214,255,.55); cursor: pointer; transition: background 83ms linear, box-shadow 167ms cubic-bezier(0,0,0,1); } .ds-btn-accent:hover { background: var(--accent-hover, #7be2ff); box-shadow: 0 4px 18px -4px rgba(76,214,255,.55); } .ds-btn-accent:active { background: var(--accent-press, #36b6de); box-shadow: none; } .ds-btn-accent:focus-visible { outline: 2px solid var(--focus, #9eeeff); outline-offset: 1px; }"
+    },
+    {
+      "name": "Standard Button",
+      "kind": "button",
+      "refersTo": "button",
+      "description": "Default command: a faint cool tint with a hairline border and a brighter top edge.",
+      "html": "<button class=\"ds-btn\">Refresh</button>",
+      "css": ".ds-btn { display: inline-flex; align-items: center; min-height: 32px; padding: 5px 12px; border: 1px solid rgba(170,210,255,.1); border-top-color: rgba(170,210,255,.18); border-radius: 6px; background: var(--control, rgba(160,205,255,.06)); color: var(--text-1, #eef4ff); font: 400 14px/20px \"Segoe UI Variable Text\", \"Segoe UI\", system-ui, sans-serif; cursor: pointer; transition: background 83ms linear; } .ds-btn:hover { background: var(--control-hover, rgba(160,205,255,.09)); } .ds-btn:active { background: rgba(160,205,255,.035); color: var(--text-2, #c2cee0); } .ds-btn:focus-visible { outline: 2px solid var(--focus, #9eeeff); outline-offset: 1px; }"
     },
     {
       "name": "Ghost Button",
       "kind": "button",
       "refersTo": "button-ghost",
-      "description": "Supports secondary actions without competing with the primary path.",
-      "html": "<button class=\"ds-btn-ghost\">Refresh</button>",
-      "css": ".ds-btn-ghost { background: transparent; color: var(--text-dim, #9aa5b1); border: 1px solid var(--border, #2a3038); padding: 6px 12px; border-radius: var(--radius-sm, 6px); font: 500 13px/1.5 -apple-system, \"Segoe UI\", system-ui, sans-serif; cursor: pointer; transition: color 120ms ease, border-color 120ms ease, background 120ms ease; } .ds-btn-ghost:hover { color: var(--text, #e6edf3); border-color: var(--accent-dim, #1f6feb); background: var(--bg-elev2, #1c2230); } .ds-btn-ghost:focus-visible { outline: 2px solid var(--accent, #4c8dff); outline-offset: 2px; }"
+      "description": "Subtle command with no fill until hover.",
+      "html": "<button class=\"ds-btn-ghost\">Expand all</button>",
+      "css": ".ds-btn-ghost { display: inline-flex; align-items: center; min-height: 32px; padding: 5px 12px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text-1, #eef4ff); font: 400 14px/20px \"Segoe UI Variable Text\", \"Segoe UI\", system-ui, sans-serif; cursor: pointer; transition: background 83ms linear; } .ds-btn-ghost:hover { background: var(--fill-hover, rgba(160,205,255,.07)); } .ds-btn-ghost:focus-visible { outline: 2px solid var(--focus, #9eeeff); outline-offset: 1px; }"
     },
     {
       "name": "Text Field",
       "kind": "input",
-      "refersTo": "input",
-      "description": "Compact technical input for organizations, projects, and review settings.",
-      "html": "<input class=\"ds-input\" value=\"Azure AppConfig\" aria-label=\"Project\">",
-      "css": ".ds-input { width: 240px; background: var(--bg, #0d1117); color: var(--text, #e6edf3); border: 1px solid var(--border, #2a3038); border-radius: var(--radius-sm, 6px); padding: 6px 8px; font: 13px/1.5 -apple-system, \"Segoe UI\", system-ui, sans-serif; } .ds-input:hover { border-color: var(--text-faint, #6e7681); } .ds-input:focus-visible { outline: 2px solid var(--accent, #4c8dff); outline-offset: 1px; border-color: var(--accent-dim, #1f6feb); }"
+      "refersTo": "text-field",
+      "description": "Tinted field with a bottom hairline; on focus it sinks into a dark well with a 2px cyan bottom edge.",
+      "html": "<input class=\"ds-input\" placeholder=\"Search pull requests\" aria-label=\"Search pull requests\">",
+      "css": ".ds-input { min-height: 32px; width: 280px; padding: 5px 11px; border: 1px solid rgba(170,210,255,.1); border-radius: 6px; background: var(--control, rgba(160,205,255,.06)); box-shadow: inset 0 -1px 0 var(--stroke-input, rgba(200,225,255,.46)); color: var(--text-1, #eef4ff); font: 400 14px/20px \"Segoe UI Variable Text\", \"Segoe UI\", system-ui, sans-serif; transition: background 83ms linear; } .ds-input::placeholder { color: var(--text-3, #8d9ab0); } .ds-input:hover { background: var(--control-hover, rgba(160,205,255,.09)); } .ds-input:focus { outline: none; background: rgba(3,7,13,.62); box-shadow: inset 0 -2px 0 var(--accent, #4cd6ff), 0 6px 14px -10px rgba(76,214,255,.55); }"
     },
     {
-      "name": "View Navigation",
+      "name": "Section Tabs",
       "kind": "nav",
-      "refersTo": "nav-active",
-      "description": "Stable segmented navigation between pull requests and rollouts.",
-      "html": "<nav class=\"ds-nav\" aria-label=\"View\"><button class=\"ds-nav-item ds-active\">Pull requests</button><button class=\"ds-nav-item\">Rollouts</button></nav>",
-      "css": ".ds-nav { display: inline-flex; gap: 2px; padding: 2px; background: var(--bg-elev2, #1c2230); border: 1px solid var(--border, #2a3038); border-radius: var(--radius-sm, 6px); } .ds-nav-item { background: transparent; color: var(--text-dim, #9aa5b1); border: 0; padding: 5px 12px; border-radius: 4px; font: 500 13px/1.5 -apple-system, \"Segoe UI\", system-ui, sans-serif; cursor: pointer; } .ds-nav-item:hover { color: var(--text, #e6edf3); } .ds-nav-item:focus-visible { outline: 2px solid var(--accent, #4c8dff); outline-offset: 1px; } .ds-nav-item.ds-active { background: var(--accent-dim, #1f6feb); color: #fff; }"
+      "description": "Feature, queue and section tabs: plain labels with a glowing 3px cyan pill under the active one.",
+      "html": "<nav class=\"ds-tabs\" aria-label=\"Sections\"><button class=\"ds-tab\" aria-current=\"true\">Review</button><button class=\"ds-tab\">Description</button><button class=\"ds-tab\">Discussion</button><button class=\"ds-tab\">Files</button></nav>",
+      "css": ".ds-tabs { display: flex; gap: 4px; } .ds-tab { position: relative; height: 36px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: var(--text-2, #c2cee0); font: 400 14px/20px \"Segoe UI Variable Text\", \"Segoe UI\", system-ui, sans-serif; cursor: pointer; transition: background 83ms linear, color 83ms linear; } .ds-tab:hover { background: var(--fill-hover, rgba(160,205,255,.07)); color: var(--text-1, #eef4ff); } .ds-tab[aria-current=\"true\"] { color: var(--text-1, #eef4ff); font-weight: 600; } .ds-tab[aria-current=\"true\"]::after { content: \"\"; position: absolute; bottom: 0; left: 50%; width: 16px; height: 3px; margin-left: -8px; border-radius: 2px; background: var(--accent, #4cd6ff); box-shadow: 0 0 8px rgba(76,214,255,.55); } .ds-tab:focus-visible { outline: 2px solid var(--focus, #9eeeff); outline-offset: -2px; }"
     },
     {
-      "name": "Status Badge",
+      "name": "Badges",
       "kind": "chip",
-      "refersTo": "status",
-      "description": "Pairs a semantic dot and text label with a full border.",
-      "html": "<span class=\"ds-status ds-success\"><span class=\"ds-status-dot\" aria-hidden=\"true\"></span>Succeeded</span>",
-      "css": ".ds-status { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px; border: 1px solid var(--border, #2a3038); border-radius: 999px; background: var(--bg-elev2, #1c2230); color: var(--text-dim, #9aa5b1); font: 600 11px/1.5 -apple-system, \"Segoe UI\", system-ui, sans-serif; } .ds-status-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; } .ds-status.ds-success { color: var(--add-line, #2ea043); border-color: var(--add-line, #2ea043); }"
+      "refersTo": "badge",
+      "description": "20px tinted badges: neutral, status and severity (tinted from --sev).",
+      "html": "<span class=\"ds-badge\">Draft</span> <span class=\"ds-badge ds-ok\">Approved</span> <span class=\"ds-badge ds-sev\" style=\"--sev:#d0a8ff\">High</span> <span class=\"ds-badge ds-sev\" style=\"--sev:#ff8fa0\">Critical</span>",
+      "css": ".ds-badge { display: inline-flex; align-items: center; height: 20px; padding: 0 6px; border-radius: 6px; background: var(--neutral-tint, rgba(160,205,255,.07)); color: var(--text-2, #c2cee0); font: 400 12px/16px \"Segoe UI Variable Text\", \"Segoe UI\", system-ui, sans-serif; white-space: nowrap; } .ds-ok { background: rgba(94,224,160,.13); color: var(--success, #5ee0a0); } .ds-sev { background: color-mix(in srgb, var(--sev) 14%, transparent); color: var(--sev); }"
     },
     {
-      "name": "Pull Request Card",
+      "name": "Glass Pane",
       "kind": "card",
-      "refersTo": "card",
-      "description": "A scan-first summary that keeps title, state, branch, author, and age in one compact unit.",
-      "html": "<article class=\"ds-pr-card\" tabindex=\"0\"><div class=\"ds-pr-title\">Improve rollout failure visibility</div><div class=\"ds-pr-meta\"><span class=\"ds-pr-id\">#1842</span><code>feature/status</code><span>by Ada</span><span>12m ago</span></div></article>",
-      "css": ".ds-pr-card { width: min(560px, 100%); background: var(--bg-elev, #161b22); color: var(--text, #e6edf3); border: 1px solid var(--border-soft, #21262d); border-radius: var(--radius, 10px); padding: 12px 14px; cursor: pointer; transition: background 120ms ease, border-color 120ms ease; } .ds-pr-card:hover { background: var(--bg-elev2, #1c2230); border-color: var(--accent-dim, #1f6feb); } .ds-pr-card:focus-visible { outline: 2px solid var(--accent, #4c8dff); outline-offset: 2px; } .ds-pr-title { margin-bottom: 6px; font: 500 13px/1.5 -apple-system, \"Segoe UI\", system-ui, sans-serif; } .ds-pr-meta { display: flex; flex-wrap: wrap; gap: 8px 12px; color: var(--text-faint, #6e7681); font: 12px/1.5 -apple-system, \"Segoe UI\", system-ui, sans-serif; } .ds-pr-meta code { padding: 1px 6px; border-radius: 4px; background: var(--bg-elev2, #1c2230); color: var(--text-dim, #9aa5b1); } .ds-pr-id { color: var(--accent, #4c8dff); }"
+      "refersTo": "pane",
+      "description": "The floating pane: smoked translucent tint (no blur), luminous edge, brighter top edge, sheen and pane shadow.",
+      "html": "<section class=\"ds-pane\"><div class=\"ds-pane-head\">Needs your review <span>3</span></div><p>Panes float over the lit field with 8px gutters. Everything inside is a tint, never its own glass.</p></section>",
+      "css": ".ds-pane { width: 360px; padding: 16px; border: 1px solid var(--edge, rgba(150,200,255,.14)); border-top-color: var(--edge-top, rgba(170,225,255,.26)); border-radius: 14px; background: var(--glass, rgba(15,22,34,.66)); box-shadow: inset 0 1px 0 rgba(255,255,255,.08), 0 18px 44px -14px rgba(0,0,0,.6); color: var(--text-1, #eef4ff); font: 400 14px/20px \"Segoe UI Variable Text\", \"Segoe UI\", system-ui, sans-serif; } .ds-pane p { margin: 8px 0 0; color: var(--text-3, #8d9ab0); font-size: 12px; line-height: 16px; } .ds-pane-head { display: flex; justify-content: space-between; font-weight: 600; } .ds-pane-head span { padding: 0 6px; border-radius: 10px; background: rgba(160,205,255,.07); color: var(--text-2, #c2cee0); font: 400 11px/18px \"Cascadia Mono\", Consolas, monospace; }"
     },
     {
-      "name": "Copilot Review Panel",
+      "name": "Queue Row (open)",
       "kind": "custom",
-      "description": "Progressively reveals review status, summary, and staged findings without leaving the PR.",
-      "html": "<section class=\"ds-review\"><header class=\"ds-review-head\"><span aria-hidden=\"true\">&#10003;</span><strong>Copilot review</strong><span class=\"ds-review-summary\">2 findings staged</span></header><div class=\"ds-review-body\">Findings appear inline beside the changed evidence.</div></section>",
-      "css": ".ds-review { overflow: hidden; background: var(--bg-elev2, #1c2230); color: var(--text, #e6edf3); border: 1px solid var(--add-line, #2ea043); border-radius: var(--radius-sm, 6px); font: 13px/1.5 -apple-system, \"Segoe UI\", system-ui, sans-serif; } .ds-review-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; cursor: pointer; } .ds-review-head:hover { background: var(--bg-elev, #161b22); } .ds-review-head:focus-visible { outline: 2px solid var(--accent, #4c8dff); outline-offset: -2px; } .ds-review-head strong { color: var(--add-line, #2ea043); font-weight: 600; } .ds-review-summary { color: var(--text-dim, #9aa5b1); } .ds-review-body { padding: 8px 12px 12px; border-top: 1px solid var(--border, #2a3038); color: var(--text-dim, #9aa5b1); }"
+      "refersTo": "queue-row-selected",
+      "description": "The open pull request row: a left-to-right cyan wash, a faint ring and a glowing 3px bar.",
+      "html": "<div class=\"ds-row\"><div class=\"ds-row-title\">Feature flags: server-side filter pills</div><div class=\"ds-row-meta\"><code>!16911900</code> · Ana Ruiz · 2h · <code>users/ana/flags</code></div></div>",
+      "css": ".ds-row { position: relative; width: 380px; padding: 10px 12px 10px 16px; border-radius: 10px; background: linear-gradient(90deg, rgba(76,214,255,.15), rgba(76,214,255,.045) 60%, rgba(76,214,255,.02)); box-shadow: inset 0 0 0 1px rgba(76,214,255,.18); font: 400 14px/20px \"Segoe UI Variable Text\", \"Segoe UI\", system-ui, sans-serif; } .ds-row::before { content: \"\"; position: absolute; top: 50%; left: 0; width: 3px; height: 16px; margin-top: -8px; border-radius: 2px; background: var(--accent, #4cd6ff); box-shadow: 0 0 8px rgba(76,214,255,.55); } .ds-row-title { color: var(--text-1, #eef4ff); } .ds-row-meta { color: var(--text-3, #8d9ab0); font-size: 12px; line-height: 16px; } .ds-row-meta code { font-family: \"Cascadia Mono\", Consolas, monospace; }"
+    },
+    {
+      "name": "Pipeline Block",
+      "kind": "custom",
+      "refersTo": "pipeline-block",
+      "description": "A 248x88 near-opaque tinted tile on the chain canvas (never blurred); tone lives in the border, running adds a cyan underglow and a glowing bar.",
+      "html": "<div class=\"ds-block ds-run\"><div class=\"ds-block-name\">AppConfig-Build</div><div class=\"ds-block-meta\">Azure AppConfig</div><div class=\"ds-block-foot\"><code>main</code><span>Running</span></div><i></i></div>",
+      "css": ".ds-block { position: relative; display: grid; grid-template-rows: auto auto 1fr; width: 248px; height: 88px; padding: 12px 14px; border: 1px solid var(--edge, rgba(150,200,255,.14)); border-radius: 10px; background: rgba(22,31,47,.92); box-shadow: inset 0 1px 0 rgba(255,255,255,.08), 0 10px 24px -12px rgba(0,0,0,.65); color: var(--text-1, #eef4ff); font: 400 12px/16px \"Segoe UI Variable Text\", \"Segoe UI\", system-ui, sans-serif; } .ds-block:hover { background: rgba(32,44,64,.94); } .ds-run { border-color: color-mix(in srgb, #4cd6ff 60%, transparent); box-shadow: inset 0 1px 0 rgba(255,255,255,.08), 0 10px 28px -12px rgba(76,214,255,.5); } .ds-block-name { font-size: 14px; font-weight: 600; line-height: 20px; } .ds-block-meta { color: var(--text-3, #8d9ab0); } .ds-block-foot { display: flex; align-self: end; justify-content: space-between; color: var(--text-2, #c2cee0); } .ds-block-foot code { font-family: \"Cascadia Mono\", Consolas, monospace; } .ds-block i { position: absolute; right: 12px; bottom: -1px; width: 40%; height: 2px; border-radius: 1px; background: var(--accent, #4cd6ff); box-shadow: 0 0 8px rgba(76,214,255,.55); }"
+    },
+    {
+      "name": "Frosted Toast",
+      "kind": "custom",
+      "refersTo": "flyout",
+      "description": "Frosted float: near-opaque glass, stronger blur, luminous edge and a glowing status dot.",
+      "html": "<div class=\"ds-toast\">Posted 3 comments to Azure DevOps</div>",
+      "css": ".ds-toast { display: inline-flex; align-items: center; gap: 10px; padding: 10px 14px; border: 1px solid var(--edge, rgba(150,200,255,.14)); border-top-color: var(--edge-top, rgba(170,225,255,.26)); border-radius: 10px; background: var(--glass-float, rgba(17,24,37,.88)); box-shadow: inset 0 1px 0 rgba(255,255,255,.08), 0 16px 36px -8px rgba(0,0,0,.62), 0 2px 8px rgba(0,0,0,.3); -webkit-backdrop-filter: blur(32px) saturate(170%); backdrop-filter: blur(32px) saturate(170%); color: var(--text-1, #eef4ff); font: 400 14px/20px \"Segoe UI Variable Text\", \"Segoe UI\", system-ui, sans-serif; } .ds-toast::before { content: \"\"; width: 8px; height: 8px; border-radius: 50%; background: var(--success, #5ee0a0); box-shadow: 0 0 8px var(--success, #5ee0a0); }"
     }
   ],
   "narrative": {
-    "northStar": "The Review Console",
-    "overview": "ADO PR Ops is a compact engineering workbench built for sustained attention. Midnight Workbench neutrals reduce glare and separate hierarchy through tonal layers, while Azure Signal blue marks the current view, selected evidence, and actions that move work forward. The system is focused, trustworthy, and efficient. It favors familiar controls, explicit state, progressive disclosure, and dense but readable information. It rejects noisy monitoring dashboards packed with decorative widgets, competing colors, and weak hierarchy.",
+    "northStar": "The Heads-Up Console",
+    "overview": "Devis is a heads-up review console. Smoked blue-black glass panes hover over a lit ink field, and light marks what the machine is attending to: the open pull request, the focused control, a running pipeline. The desk metaphor still holds: the queue sits on the left, the open pull request reads on the right, and commands stay in a frosted head above the content. Only the material changed. Everything floats; the small chrome that opens over content is frosted.\n\nThe glass is restrained, because the content is code. Panes carry a smoked tint and a luminous hairline edge; rows, cards and badges inside them do not. Blur is spent only on small sticky and floating chrome. One emissive cyan is the only brand color, and it glows only where it signals state. Diffs, findings, severity and comments keep their own colors and stay the loudest things on screen.\n\nIn the desktop shell, a Windows 11 Mica backdrop (22H2 and later) tints the field with the desktop wallpaper, and the app forces the dark theme so the glass always reads as smoked. Mica samples the wallpaper once, so it costs nothing per frame; `ADO_PR_OPS_BACKDROP=acrylic` opts back into the live acrylic blur, and `none` turns the backdrop off. Without a backdrop, the same field renders on solid ink.\n\nThe living reference is `web/design-system.html`. It renders the real `web/style.css`, so open it from the preview server to check any component. It is excluded from the packaged app.",
     "keyCharacteristics": [
-      "Dark, restrained, and task-first.",
-      "Compact spacing with stable alignment and clear grouping.",
-      "Semantic color is reserved for state and risk.",
-      "Progressive detail preserves list and review context.",
-      "Motion is brief and communicates state changes only."
+      "Floating glass panes separated by 8px gutters of lit field, never edge-to-edge chrome.",
+      "A cyan light pool top-left and an indigo pool bottom-right, with a faint 32px HUD grid fading out from the top-left.",
+      "Luminous hairline edges with a brighter top edge and an inner top sheen, so every pane catches light from above.",
+      "One emissive cyan, with glow reserved for selection, focus, running state and the primary command.",
+      "Cascadia Mono for every readout: IDs, branches, paths, build numbers and zoom levels.",
+      "One authored motion: an opened pull request resolves into the pane out of blur."
     ],
     "rules": [
-      { "name": "The Signal Rarity Rule", "body": "Azure Signal and semantic colors identify actions, selection, risk, or state; they are never decorative background color.", "section": "colors" },
-      { "name": "The Layer Before Shadow Rule", "body": "Use Midnight Canvas, Workbench Surface, and Raised Graphite to establish hierarchy before adding elevation.", "section": "colors" },
-      { "name": "The Technical Identity Rule", "body": "Monospace communicates exact values, not atmosphere; never use it for ordinary navigation or explanatory prose.", "section": "typography" },
-      { "name": "The Compact Hierarchy Rule", "body": "Create emphasis with weight, color, and grouping before increasing type size.", "section": "typography" },
-      { "name": "The Earned Elevation Rule", "body": "A shadow means the surface has left document flow or temporarily owns focus; static list content stays border-and-tone based.", "section": "elevation" }
+      {
+        "name": "The One Light Rule",
+        "body": "Only cyan glows. If two unrelated things on screen are cyan, one of them is wrong.",
+        "section": "colors"
+      },
+      {
+        "name": "The Color Is Evidence Rule",
+        "body": "Hue appears only where it carries meaning: a vote, a status, a severity or a diff line. Glass, edges and text stay cool and neutral.",
+        "section": "colors"
+      },
+      {
+        "name": "The Readout Rule",
+        "body": "Anything a machine produced and a person compares (an ID, a branch, a build number, a duration, a zoom level) is set in Cascadia Mono with tabular figures.",
+        "section": "typography"
+      },
+      {
+        "name": "The Glass Budget Rule",
+        "body": "Glass (tint plus edge) belongs only to panes, heads, floats, dialogs and pipeline blocks. Blur belongs only to the detail head, floats, dialogs and the zoom cluster: never to a pane, a sheet or anything repeated (`scripts/perf-guard-harness.mjs` enforces this). Rows, cards, badges and fields inside a pane are tints, never their own glass.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Near-Opaque Float Rule",
+        "body": "Anything that opens over content (heads, flyouts, menus, dialogs) is at least 84% opaque. Menus inside the frosted detail head can't blur the content under them, so their opacity is what keeps them legible.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Fallback Rule",
+        "body": "Glass must degrade to something solid and clear. Under `prefers-reduced-transparency`, the glass tokens turn opaque, blur is off, the HUD grid is hidden and the field is plain ink. In forced-colors mode, blur, the field effects and pane shadows are removed and system colors take over. Without a window backdrop, the field renders on solid ink.",
+        "section": "elevation"
+      }
     ],
     "dos": [
-      "Do use Azure Signal (#4c8dff) and Azure Action (#1f6feb) for current selection, primary actions, and actionable links.",
-      "Do establish hierarchy with the three neutral layers before adding a shadow.",
-      "Do pair success, warning, and danger color with text, an icon, or an explicit label.",
-      "Do keep review evidence near its source line and preserve the user's list, filter, and scroll context.",
-      "Do use visible keyboard focus, semantic labels, readable contrast, and reduced-motion alternatives.",
-      "Do keep most state transitions between 120ms and 260ms and limit them to feedback or spatial continuity."
+      "Do use the tokens; add a token before adding a raw value.",
+      "Do keep glass to panes, heads, floats, dialogs and pipeline blocks, and keep everything inside a pane as tints.",
+      "Do keep one emissive cyan per view, and let severity and diff colors carry meaning.",
+      "Do set IDs, branches, build numbers and other readouts in Cascadia Mono.",
+      "Do check new components in `web/design-system.html`, at 1440px and below 1100px, and with reduced transparency on."
     ],
     "donts": [
-      "Don't build a noisy monitoring dashboard packed with decorative widgets, competing colors, and weak hierarchy.",
-      "Don't turn review metadata into a wall of equal-weight badges; title, risk, evidence, and next action come first.",
-      "Don't use Azure Signal or semantic colors as decoration on inactive surfaces.",
-      "Don't use a colored border-left or border-right thicker than 1px as a card, callout, or status accent; use a full border, dot, icon, or tinted surface.",
-      "Don't introduce glass effects, gradient text, decorative motion, or oversized product typography.",
-      "Don't use faint text for essential labels, placeholder instructions, or actionable content."
+      "Don't make rows, cards, badges or fields their own glass; nested blur muddies the content and costs frames.",
+      "Don't let anything other than cyan glow, and don't glow decoratively: glow means selection, focus, running or the primary command.",
+      "Don't drop a float, head or dialog below 84% opacity; code and diagrams must never ghost through.",
+      "Don't add light-theme surfaces; the shell forces dark so the glass always reads as smoked.",
+      "Don't use colored side stripes on blocks, rows or cards.",
+      "Don't use emoji as icons; use `icon()` from `web/src/icons.ts`.",
+      "Don't put a `<button>` on the page without a base class.",
+      "Don't show raw HTML or Markdown in previews."
     ]
   }
 }

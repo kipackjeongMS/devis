@@ -16,10 +16,14 @@ let open = false;
 let bell: HTMLButtonElement | null = null;
 let badge: HTMLElement | null = null;
 let flyout: HTMLElement | null = null;
+let inited = false;
 
 export function initInbox(): void {
+  // Its document and window listeners are added once for the page's life.
+  if (inited) return;
   bell = document.getElementById("btnInbox") as HTMLButtonElement | null;
   if (!bell) return;
+  inited = true;
   badge = bell.querySelector(".inbox-badge");
   bell.addEventListener("click", (e) => {
     e.stopPropagation();

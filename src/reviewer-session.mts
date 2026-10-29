@@ -7,14 +7,18 @@
 // minutes so a conversation does not pay the resume cost on every message.
 
 import { spawn } from "node:child_process";
-import type { CopilotSession } from "@github/copilot-sdk";
+import { defineTool, type CopilotSession, type Tool } from "@github/copilot-sdk";
 import {
     prSessionOptions,
     replyText,
-    resolveCopilotCliPath,
+    resumeCommand,
+    sendAndSettle,
     sessionWorkingDirectory,
     withCopilotClient,
 } from "./copilot-runtime.mjs";
+import { ADD_REVIEW_FINDINGS_SCHEMA, addReviewFindings } from "./review-publish.mjs";
+import { chatMessagesFromEvents, type ChatMessage, type EventLike } from "./chat-transcript.mjs";
+import type { WorkItem } from "./service-files.mjs";
 
 // Strict UUID. Session ids are only ever read from the review store, but a
 // looser check could still let a malformed value select a different session.
@@ -70,6 +74,23 @@ function scheduleClose(sessionId: string, entry: OpenSession): void {
     entry.idleTimer.unref?.();
 }
 
+/**
+ * Follow-up tool for a resumed reviewer session: stages more findings on the
+ * review it produced. `publish_review` only completes an active review job, so
+ * without this the chat could discuss new findings but never record them.
+ */
+export function addReviewFindingsTool(): Tool<unknown> {
+    return defineTool("add_review_findings", {
+        description:
+            "Add new findings to the review of this pull request in Devis (the app's PR detail view). Use it when the user asks you to add, flag, record or update the review with new findings. Put line-anchored comments in `findings` and PR-level concerns (behavior, concurrency, design, contract, testing) in `semanticFindings`. Write each `comment` the way the review task asked, in the user's own language when it gave their writing voice. Findings are staged for the user to post; nothing is posted to Azure DevOps and the review summary and status are unchanged. Existing findings stay as they are; do not repeat them.",
+        parameters: ADD_REVIEW_FINDINGS_SCHEMA as unknown as Record<string, unknown>,
+        skipPermission: true,
+        defer: "never",
+        // The target review comes from the invoking session, never from the input.
+        handler: async (args, invocation) => (await addReviewFindings(args, invocation.sessionId)).message,
+    });
+}
+
 function acquire(sessionId: string, scope: ReviewerScope): Promise<CopilotSession> {
     let entry = openSessions.get(sessionId);
     if (!entry) {
@@ -80,6 +101,7 @@ function acquire(sessionId: string, scope: ReviewerScope): Promise<CopilotSessio
                 mcpServers: scope.org && scope.project ? options.mcpServers : {},
                 skipCustomInstructions: true,
                 streaming: true,
+                tools: [addReviewFindingsTool()],
             }),
         ).then(async (resumed) => {
             await ensureInteractiveMode(resumed).catch((error: Error) =>
@@ -113,18 +135,22 @@ export async function ensureInteractiveMode(session: {
 }
 
 // The CLI can delete sessions (cleanup, archive), and a deleted session cannot be
-// resumed. Sessions are not recreated under the same id, so answers are cached.
-const sessionExists = new Map<string, Promise<boolean>>();
+// resumed. Answers are cached for a while, and the cache is capped.
+const sessionExists = new Map<string, { at: number; known: Promise<boolean> }>();
+const EXISTS_TTL_MS = 10 * 60_000;
+const EXISTS_MAX = 500;
 
 /** Whether the Copilot CLI still has this session. */
 export function reviewerSessionExists(sessionId: string): Promise<boolean> {
     if (openSessions.has(sessionId)) return Promise.resolve(true);
-    let known = sessionExists.get(sessionId);
-    if (!known) {
-        known = withCopilotClient((client) => client.getSessionMetadata(sessionId)).then((metadata) => !!metadata);
-        sessionExists.set(sessionId, known);
-        known.catch(() => sessionExists.delete(sessionId));
-    }
+    const cached = sessionExists.get(sessionId);
+    if (cached && Date.now() - cached.at < EXISTS_TTL_MS) return cached.known;
+    sessionExists.delete(sessionId);
+    const known = withCopilotClient((client) => client.getSessionMetadata(sessionId)).then((metadata) => !!metadata);
+    sessionExists.set(sessionId, { at: Date.now(), known });
+    known.catch(() => sessionExists.delete(sessionId));
+    // Oldest first: a Map keeps insertion order.
+    while (sessionExists.size > EXISTS_MAX) sessionExists.delete(sessionExists.keys().next().value!);
     return known;
 }
 
@@ -133,6 +159,8 @@ export async function closeReviewerSession(sessionId: string): Promise<void> {
     const entry = openSessions.get(sessionId);
     if (!entry) return;
     openSessions.delete(sessionId);
+    // A reply still streaming keeps its state until it settles.
+    if (!chatStates.get(sessionId)?.pending) chatStates.delete(sessionId);
     if (entry.idleTimer) clearTimeout(entry.idleTimer);
     try {
         await (await entry.session).disconnect();
@@ -147,6 +175,11 @@ export async function closeAllReviewerSessions(): Promise<void> {
 
 export function isReviewerSessionBusy(sessionId: string): boolean {
     return busy.has(sessionId);
+}
+
+/** Reviewer chat replies, asks and rephrases in flight, for the background service's idle check. */
+export function reviewerActivity(): WorkItem[] {
+    return [...busy.keys()].map((id) => ({ kind: "reviewer", label: `Reviewer session ${id.slice(0, 8)}` }));
 }
 
 export interface ReviewerSessionRun extends ReviewerScope {
@@ -167,7 +200,11 @@ export function runInReviewerSession(run: ReviewerSessionRun): Promise<string> {
         const session = await acquire(sessionId, run);
         let text = "";
         try {
-            text = replyText(await session.sendAndWait({ prompt: run.prompt }, run.timeoutMs ?? 180_000));
+            text = replyText(
+                await sendAndSettle(session, { prompt: run.prompt }, run.timeoutMs ?? 180_000, {
+                    onMissedIdle: () => console.warn(`[reviewer] ${sessionId}'s turn ended without session.idle; picked up from the runtime`),
+                }),
+            );
         } catch (error) {
             await session.abort().catch(() => undefined);
             throw new Error(`reviewer session ${sessionId} failed: ${(error as Error).message}`);
@@ -179,12 +216,7 @@ export function runInReviewerSession(run: ReviewerSessionRun): Promise<string> {
 
 // ---- reviewer chat ----------------------------------------------------------
 
-export interface ChatMessage {
-    id: string;
-    role: "user" | "assistant";
-    content: string;
-    timestamp: string;
-}
+export { ChatTranscript, chatMessagesFromEvents, REVIEW_TASK_LABEL, type ChatMessage, type EventLike } from "./chat-transcript.mjs";
 
 interface ChatState {
     pending: boolean;
@@ -193,52 +225,6 @@ interface ChatState {
 }
 
 const chatStates = new Map<string, ChatState>();
-const REVIEW_TASK_MARKER = "===REVIEW TASK START===";
-export const REVIEW_TASK_LABEL = "Review task (PR data and review instructions)";
-
-interface EventLike {
-    id?: string;
-    type: string;
-    timestamp?: string;
-    agentId?: string;
-    data?: Record<string, unknown>;
-}
-
-/** Top-level user and assistant messages; tool and sub-agent chatter is omitted. */
-export function chatMessagesFromEvents(events: readonly EventLike[]): ChatMessage[] {
-    const messages: ChatMessage[] = [];
-    const assistantById = new Map<string, ChatMessage>();
-    for (const event of events) {
-        const data = event.data || {};
-        if (event.agentId || data.parentToolCallId) continue;
-        const content = typeof data.content === "string" ? data.content : "";
-        if (event.type === "user.message") {
-            if (data.source && data.source !== "user") continue;
-            messages.push({
-                id: String(event.id ?? `user-${messages.length}`),
-                role: "user",
-                content: content.trimStart().startsWith(REVIEW_TASK_MARKER) ? REVIEW_TASK_LABEL : content,
-                timestamp: event.timestamp || "",
-            });
-        } else if (event.type === "assistant.message") {
-            const messageId = String(data.messageId ?? event.id ?? `assistant-${messages.length}`);
-            const existing = assistantById.get(messageId);
-            if (existing) {
-                existing.content += content;
-                continue;
-            }
-            const message: ChatMessage = {
-                id: messageId,
-                role: "assistant",
-                content,
-                timestamp: event.timestamp || "",
-            };
-            assistantById.set(messageId, message);
-            messages.push(message);
-        }
-    }
-    return messages.filter((message) => message.content.trim());
-}
 
 export interface ReviewerChat {
     messages: ChatMessage[];
@@ -271,6 +257,8 @@ export function sendReviewerChat(sessionId: string, scope: ReviewerScope, text: 
         state.pending = false;
         state.partial = "";
         state.error = error;
+        // A clean finish leaves nothing to show; only an error is kept for the chat to read.
+        if (!error && chatStates.get(id) === state) chatStates.delete(id);
     };
     void enqueue(id, async () => {
         const session = await acquire(id, scope);
@@ -278,7 +266,9 @@ export function sendReviewerChat(sessionId: string, scope: ReviewerScope, text: 
             if (!event.data.parentToolCallId) state.partial += event.data.deltaContent;
         });
         try {
-            await session.sendAndWait({ prompt: text }, CHAT_TURN_TIMEOUT_MS);
+            await sendAndSettle(session, { prompt: text }, CHAT_TURN_TIMEOUT_MS, {
+                onMissedIdle: () => console.warn(`[reviewer] ${id}'s chat turn ended without session.idle; picked up from the runtime`),
+            });
         } catch (error) {
             await session.abort().catch(() => undefined);
             throw error;
@@ -291,7 +281,7 @@ export function sendReviewerChat(sessionId: string, scope: ReviewerScope, text: 
     );
 }
 
-/** Reopen a reviewer session in an interactive `copilot --resume` terminal. */
+/** Reopen a reviewer session in an interactive `agency copilot --resume` terminal. */
 export async function openReviewerTerminal(sessionId: string, title: string): Promise<void> {
     const id = asReviewerSessionId(sessionId);
     if (!id) throw new Error("invalid reviewer session id");
@@ -300,11 +290,11 @@ export async function openReviewerTerminal(sessionId: string, title: string): Pr
     }
     // Two runtimes writing one session would interleave its history.
     await closeReviewerSession(id);
-    const cli = await resolveCopilotCliPath();
+    const { command, args } = await resumeCommand(id);
     const safeTitle = title.replace(/["^&|<>%]/g, "").slice(0, 80) || "Copilot reviewer";
     const child = spawn(
         process.env.ComSpec || "cmd.exe",
-        ["/d", "/c", "start", `"${safeTitle}"`, `"${cli}"`, "--resume", id],
+        ["/d", "/c", "start", `"${safeTitle}"`, `"${command}"`, ...args],
         {
             cwd: sessionWorkingDirectory(),
             detached: true,

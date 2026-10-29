@@ -220,7 +220,10 @@ function buildDetail(container: HTMLElement, pr: PR, detail: Detail): void {
   if (detail.description && detail.description.trim()) {
     const section = paneSection("Description");
     const desc = el(`<div class="pr-desc md"></div>`);
-    desc.innerHTML = renderMarkdown(detail.description);
+    desc.innerHTML = renderMarkdown(detail.description, {
+      workItemUrl: (id) =>
+        `https://dev.azure.com/${encodeURIComponent(pr.org)}/${encodeURIComponent(pr.project)}/_workitems/edit/${id}`,
+    });
     hydratePrDescriptionImages(desc, pr.org);
     section.appendChild(desc);
     container.appendChild(section);

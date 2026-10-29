@@ -7,6 +7,8 @@ import type { Finding, SemanticFinding, Thread } from "./types.js";
 /** A `.file` box that can expand and lazy-load its diff on demand (see diff.ts). */
 export interface RevealableFile extends HTMLElement {
   _ensureOpen?: () => Promise<void>;
+  /** Show findings staged after the diff loaded (no-op until it has). */
+  _refreshStaged?: () => void;
 }
 
 const reducedMotion = (): boolean =>

@@ -14,6 +14,8 @@ const ERROR_TOAST_COOLDOWN_MS = 10 * 60 * 1000;
 let timer: ReturnType<typeof setInterval> | null = null;
 let consecutiveFailures = 0;
 let lastErrorToastAt = 0;
+/** One scan at a time: a slow poll skips the next tick instead of stacking requests. */
+let polling: Promise<void> | null = null;
 
 export function startInboxWatch(): void {
   if (timer) return;
@@ -37,12 +39,17 @@ async function load(): Promise<void> {
   }
 }
 
-/** Force an immediate scan (bell click / global refresh). */
+/** Force an immediate scan (bell click / global refresh). Joins one already running. */
 export async function refreshInbox(): Promise<void> {
   await poll();
 }
 
-async function poll(): Promise<void> {
+function poll(): Promise<void> {
+  if (!polling) polling = scan().finally(() => (polling = null));
+  return polling;
+}
+
+async function scan(): Promise<void> {
   try {
     const res = await postJSON("/api/inbox/poll", {});
     applyInbox({ items: res.items || [], unread: res.unread || 0 });

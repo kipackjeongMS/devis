@@ -1,18 +1,58 @@
 // Entry module: boot sequence, PR loading, org filter, settings screen, and the
 // top-level event wiring. This is the only module with module-eval side effects
 // (the final boot() call), so import order stays free of runtime cycles.
-import { $, view, filterbar, orgFilter, projectFilter, assignFilter, el, renderError, setPage } from "./dom.js";
-import { esc } from "./util.js";
+import {
+  $,
+  view,
+  filterbar,
+  orgFilter,
+  projectFilter,
+  queueTabs,
+  queueSearch,
+  scopeFields,
+  listPane,
+  el,
+  renderError,
+  setPage,
+} from "./dom.js";
+import { esc, timeAgo } from "./util.js";
 import { getJSON, postJSON, bindIdentity } from "./api.js";
 import { state, loadReviews } from "./state.js";
 import { toast } from "./toast.js";
-import { renderList } from "./list.js";
+import { renderList, setQueueView } from "./list.js";
 import { openDetail } from "./detail.js";
 import { initInbox } from "./inboxPanel.js";
 import { startInboxWatch, refreshInbox } from "./inboxWatch.js";
 import { initReadingPane, closePane } from "./readingPane.js";
+import { showPipelines, hidePipelines, reloadPipelines, showChainById } from "./pipelines.js";
+import { showJarvis, hideJarvis, reloadJarvis, resumeNoteDraft, openTaskById } from "./jarvis.js";
+import { jarvisSettings } from "./settingsJarvis.js";
 import { icon } from "./icons.js";
-import type { Assignment, PR } from "./types.js";
+import { showAgencyBanner } from "./staleBanner.js";
+import { applyShellClasses } from "./shell.js";
+import type { PR } from "./types.js";
+
+interface CopilotRuntimeInfo {
+  via: "agency" | "copilot" | null;
+  command: string | null;
+  warning: string | null;
+}
+
+/** How Copilot runs, read once per page. */
+let runtimeInfo: Promise<CopilotRuntimeInfo | null> | null = null;
+function copilotRuntime(): Promise<CopilotRuntimeInfo | null> {
+  runtimeInfo ??= getJSON("/api/copilot/runtime").catch(() => {
+    runtimeInfo = null;
+    return null;
+  });
+  return runtimeInfo;
+}
+
+/** Copilot running without Agency is worth a notice that stays until dismissed. */
+async function checkCopilotRuntime(): Promise<void> {
+  const info = await copilotRuntime();
+  if (info?.warning) showAgencyBanner(info.warning);
+}
 
 interface CanvasPrTarget {
   org: string;
@@ -44,10 +84,7 @@ async function resolveCanvasTarget(target: CanvasPrTarget): Promise<PR> {
 
 // ---------- boot ----------
 async function boot(): Promise<void> {
-  // The desktop shell overlays the caption buttons (wco) and may paint Mica behind the page.
-  const shellKind = new URLSearchParams(window.location.search).get("shell");
-  if (shellKind) document.documentElement.classList.add("wco");
-  if (shellKind === "mica") document.documentElement.classList.add("mica");
+  applyShellClasses(new URLSearchParams(window.location.search));
   initReadingPane();
   await bindIdentity();
   let target: CanvasPrTarget | null;
@@ -63,6 +100,9 @@ async function boot(): Promise<void> {
   }
   initInbox();
   startInboxWatch();
+  void checkCopilotRuntime();
+  // A quick-note edit the last page didn't get to save goes in now, not only once the Workspace opens.
+  resumeNoteDraft();
   if (target) {
     // Keep the normal list mounted underneath, but resolve/open the requested PR
     // independently so list filters and activity enrichment cannot block routing.
@@ -81,21 +121,79 @@ async function boot(): Promise<void> {
   await loadPRs();
 }
 
+let prsLoad = 0;
+/** When the list on screen was current: the last live load, or the snapshot's time. */
+let listAsOf: number | null = null;
+const listNotice = $("#listNotice");
+
+/** Say plainly when the list on screen couldn't be refreshed, with a retry; null clears it. */
+function noteStaleList(error: string | null): void {
+  if (error === null || listAsOf === null) {
+    listNotice.hidden = true;
+    listNotice.replaceChildren();
+    return;
+  }
+  const text = el(
+    `<span class="list-notice-text">Couldn't reach Azure DevOps, so this list is from ${esc(timeAgo(new Date(listAsOf).toISOString()))}. ${esc(error)}</span>`
+  );
+  const retry = el(`<button type="button" class="btn sm ghost">Retry</button>`);
+  retry.addEventListener("click", () => void loadPRs(true));
+  listNotice.replaceChildren(text, retry);
+  listNotice.hidden = false;
+}
+
 async function loadPRs(refreshActivity = false, stopPolling = true): Promise<void> {
+  const load = ++prsLoad;
+  // A refresh keeps the queue on screen (scroll, focus, open row) and swaps the rows in place when ADO answers.
+  const keepList = document.body.dataset.page === "queue" && !filterbar.hidden && state.prs.length > 0;
   setPage("queue");
-  view.innerHTML = '<div class="loading"><span class="spinner"></span> Loading pull requests…</div>';
+  const refreshBtn = $("#btnRefresh");
+  refreshBtn.setAttribute("aria-busy", "true");
+  if (!keepList) {
+    noteStaleList(null);
+    view.innerHTML = '<div class="loading"><span class="spinner"></span> Loading pull requests…</div>';
+  }
+  const reviews = loadReviews();
+  const live = getJSON(`/api/prs${refreshActivity ? "?refresh=1" : ""}`);
+  let settled = false;
+  let showingSnapshot = false;
+  if (!keepList && !state.prs.length) {
+    // First paint: the list from the last time ADO answered, until the live one lands.
+    void Promise.all([getJSON("/api/prs?cached=1"), reviews])
+      .then(([snapshot]) => {
+        if (settled || load !== prsLoad || !snapshot?.prs?.length) return;
+        showingSnapshot = true;
+        listAsOf = Date.parse(snapshot.at) || null;
+        state.prs = snapshot.prs;
+        setupFilters();
+        renderList(stopPolling);
+        window.dispatchEvent(new CustomEvent("ado-prs-loaded"));
+      })
+      .catch(() => undefined);
+  }
   try {
-    const [res] = await Promise.all([
-      getJSON(`/api/prs${refreshActivity ? "?refresh=1" : ""}`),
-      loadReviews(),
-    ]);
+    const [res] = await Promise.all([live, reviews]);
+    settled = true;
+    if (load !== prsLoad) return;
+    if (!res.prs?.length && res.errors?.length) {
+      throw new Error(res.errors.join("\n"));
+    }
     state.prs = res.prs || [];
+    listAsOf = Date.now();
+    noteStaleList(null);
     if (res.errors && res.errors.length) toast(res.errors[0], "err");
     setupFilters();
     renderList(stopPolling);
+    window.dispatchEvent(new CustomEvent("ado-prs-loaded"));
     if (res.activityPending > 0) void loadCommentActivity();
   } catch (e: any) {
-    renderError("Failed to load PRs: " + e.message);
+    settled = true;
+    if (load !== prsLoad) return;
+    if (keepList || showingSnapshot) noteStaleList(e.message);
+    else renderError("Failed to load PRs: " + e.message);
+    window.dispatchEvent(new CustomEvent("ado-prs-loaded"));
+  } finally {
+    if (load === prsLoad) refreshBtn.removeAttribute("aria-busy");
   }
 }
 
@@ -126,7 +224,12 @@ function setupFilters(): void {
   filterbar.hidden = false;
   populateOrgFilter();
   populateProjectFilter();
-  updateAssignment();
+}
+
+// A scope picker with a single choice is noise: hide it, and the row when both are.
+function syncScopeFields(): void {
+  const fields = [orgFilter, projectFilter].map((select) => select.closest<HTMLElement>(".filter-field")!);
+  scopeFields.hidden = fields.every((field) => field.hidden);
 }
 
 function populateOrgFilter(): void {
@@ -140,6 +243,8 @@ function populateOrgFilter(): void {
       )
       .join("");
   orgFilter.value = state.org;
+  orgFilter.closest<HTMLElement>(".filter-field")!.hidden = orgs.length <= 1 && state.org === "all";
+  syncScopeFields();
 }
 
 // Project options are the distinct projects present in the current org scope —
@@ -160,22 +265,8 @@ function populateProjectFilter(): void {
       .join("");
   projectFilter.value = state.project;
   projectFilter.disabled = projects.length === 0;
-}
-
-// Refresh the Me / Not me / All queue switch counts + pressed state within the
-// current org+project scope.
-function updateAssignment(): void {
-  let scoped = state.org === "all" ? state.prs : state.prs.filter((p) => p.org === state.org);
-  if (state.project !== "all") scoped = scoped.filter((p) => p.project === state.project);
-  const mine = scoped.filter((p) => p.mine).length;
-  const counts: Record<Assignment, number> = { mine, notmine: scoped.length - mine, all: scoped.length };
-  for (const btn of assignFilter.querySelectorAll<HTMLButtonElement>(".seg-btn")) {
-    const key = (btn.dataset.assign as Assignment) || "all";
-    const label = key === "mine" ? "Me" : key === "notmine" ? "Not me" : "All";
-    btn.innerHTML = `${label}<span class="seg-n">${counts[key]}</span>`;
-    btn.classList.toggle("active", state.assignment === key);
-    btn.setAttribute("aria-pressed", String(state.assignment === key));
-  }
+  projectFilter.closest<HTMLElement>(".filter-field")!.hidden = projects.length <= 1 && state.project === "all";
+  syncScopeFields();
 }
 
 // Return from settings to the queue (only meaningful once an org is configured).
@@ -183,7 +274,54 @@ function showQueue(): void {
   if (!(state.config.organizations || []).length) return;
   setPage("queue");
   filterbar.hidden = false;
+  view.scrollTop = 0;
   renderList();
+}
+
+// ---------- features ----------
+type Feature = "prs" | "pipelines" | "jarvis";
+const asFeature = (value: string | undefined): Feature =>
+  value === "pipelines" || value === "jarvis" ? value : "prs";
+const currentFeature = (): Feature => asFeature(document.body.dataset.feature);
+const FEATURE_TEXT: Record<Feature, { skip: string; skipLabel: string; refresh: string }> = {
+  prs: { skip: "#view", skipLabel: "Skip to pull requests", refresh: "Refresh pull requests" },
+  pipelines: { skip: "#pipelinesView", skipLabel: "Skip to pipelines", refresh: "Refresh pipelines" },
+  jarvis: { skip: "#jarvisView", skipLabel: "Skip to the Workspace", refresh: "Refresh the Workspace" },
+};
+
+function setFeature(feature: Feature): void {
+  const was = currentFeature();
+  document.body.dataset.feature = feature;
+  for (const tab of document.querySelectorAll<HTMLElement>(".feature-tab")) {
+    const on = tab.dataset.feature === feature;
+    tab.classList.toggle("active", on);
+    if (on) tab.setAttribute("aria-current", "page");
+    else tab.removeAttribute("aria-current");
+  }
+  const text = FEATURE_TEXT[feature];
+  const skip = $<HTMLAnchorElement>("#skipLink");
+  skip.href = text.skip;
+  skip.textContent = text.skipLabel;
+  const refresh = $("#btnRefresh");
+  refresh.title = text.refresh;
+  refresh.setAttribute("aria-label", text.refresh);
+  const onSettings = document.body.dataset.page === "settings";
+  const hasOrgs = (state.config.organizations || []).length > 0;
+  if (was === "pipelines" && feature !== "pipelines") hidePipelines();
+  if (was === "jarvis" && feature !== "jarvis") hideJarvis();
+  if (feature === "pipelines" || feature === "jarvis") {
+    if (onSettings) {
+      if (hasOrgs) showQueue();
+      else setPage("queue");
+    }
+    if (feature === "pipelines") showPipelines({ openSettings: renderSettings });
+    else showJarvis({ openSettings: renderSettings });
+  } else {
+    if (onSettings || !hasOrgs) {
+      if (hasOrgs) showQueue();
+      else renderSettings();
+    }
+  }
 }
 
 // ---------- settings ----------
@@ -197,7 +335,7 @@ function renderSettings(): void {
     el(
       `<header class="settings-heading">
          <h1>Settings</h1>
-         <p>Azure DevOps scopes and review defaults for this machine.</p>
+         <p>Azure DevOps scopes, review defaults and the Workspace for this machine.</p>
        </header>`
     )
   );
@@ -305,6 +443,17 @@ function renderSettings(): void {
   review.appendChild(el(`<h2 id="settingsReview">Copilot review</h2>`));
   wrap.appendChild(review);
 
+  // ---- how Copilot runs ----
+  const runtimeCard = settingsCard("terminal", "Copilot runtime", "Checking…", "settingsRuntime");
+  const runtimeText = runtimeCard.querySelector<HTMLElement>(".settings-card-text p")!;
+  review.appendChild(runtimeCard);
+  void copilotRuntime().then((info) => {
+    if (!info) runtimeText.textContent = "Couldn't tell how Copilot runs.";
+    else if (info.warning) runtimeText.textContent = info.warning;
+    else
+      runtimeText.innerHTML = `Every Copilot session runs through Agency, with all of its MCP servers on: <code>${esc(info.command || "")} copilot</code>`;
+  });
+
   // ---- PR review model selector ----
   let selectedModel = state.config.reviewModel || "";
   const modelCard = settingsCard(
@@ -384,16 +533,28 @@ function renderSettings(): void {
   dirCard.querySelector<HTMLElement>(".settings-card-control")!.appendChild(dirInput);
   review.appendChild(dirCard);
 
+  // ---- Jarvis: task folders and the codebase ----
+  const jarvis = jarvisSettings(state.config, () => [...orgs], settingsCard);
+  wrap.appendChild(jarvis.section);
+
   const actions = el(`<div class="settings-actions"></div>`);
   const save = el(`<button type="button" class="btn accent">Save</button>`) as HTMLButtonElement;
   save.addEventListener("click", async () => {
     save.disabled = true;
     try {
-      state.config = await postJSON("/api/config", { organizations: orgs, projects, reviewModel: selectedModel, reviewsDir: reviewsDir.trim() });
+      state.config = await postJSON("/api/config", {
+        organizations: orgs,
+        projects,
+        reviewModel: selectedModel,
+        reviewsDir: reviewsDir.trim(),
+        ...jarvis.values(),
+      });
+      void jarvis.saved();
       state.org = "all";
       state.project = "all";
       toast("Saved", "ok");
       await loadPRs();
+      void reloadPipelines();
     } catch (e: any) {
       toast("Save failed: " + e.message, "err");
       save.disabled = false;
@@ -432,34 +593,97 @@ function settingsCard(
 $("#btnSettings").addEventListener("click", renderSettings);
 $("#btnRefresh").addEventListener("click", () => {
   void refreshInbox();
-  if ((state.config.organizations || []).length) loadPRs(true);
+  const onSettings = document.body.dataset.page === "settings";
+  if (currentFeature() === "pipelines" && !onSettings) void reloadPipelines(true);
+  else if (currentFeature() === "jarvis" && !onSettings) {
+    // Today's review section reads the PR list, so refresh both.
+    void reloadJarvis();
+    if ((state.config.organizations || []).length) void loadPRs(true);
+  } else if ((state.config.organizations || []).length) loadPRs(true);
   else boot();
+});
+$(".feature-nav").addEventListener("click", (e) => {
+  const tab = (e.target as HTMLElement).closest<HTMLElement>(".feature-tab");
+  if (!tab) return;
+  const feature = asFeature(tab.dataset.feature);
+  if (feature !== currentFeature() || document.body.dataset.page === "settings") setFeature(feature);
 });
 orgFilter.addEventListener("change", () => {
   state.org = orgFilter.value;
   state.project = "all";
   populateProjectFilter();
-  updateAssignment();
   renderList();
 });
 projectFilter.addEventListener("change", () => {
   state.project = projectFilter.value;
-  updateAssignment();
   renderList();
 });
-assignFilter.addEventListener("click", (e) => {
-  const btn = (e.target as HTMLElement).closest(".seg-btn") as HTMLElement | null;
-  if (!btn) return;
-  state.assignment = (btn.dataset.assign as Assignment) || "all";
-  updateAssignment();
-  renderList();
+queueTabs.addEventListener("click", (e) => {
+  const tab = (e.target as HTMLElement).closest<HTMLElement>("[data-view]");
+  if (tab) setQueueView(tab.dataset.view === "all" ? "all" : "feed");
+});
+// Rebuilding the queue costs tens of ms with a few hundred rows, so typing waits
+// for a short pause instead of re-rendering on every keystroke.
+const SEARCH_DEBOUNCE_MS = 120;
+let searchTimer: ReturnType<typeof setTimeout> | null = null;
+function cancelSearchRender(): void {
+  if (searchTimer) clearTimeout(searchTimer);
+  searchTimer = null;
+}
+queueSearch.addEventListener("input", () => {
+  state.query = queueSearch.value;
+  cancelSearchRender();
+  searchTimer = setTimeout(() => {
+    searchTimer = null;
+    renderList(false);
+  }, SEARCH_DEBOUNCE_MS);
+});
+// Esc clears the search, then a second Esc leaves the field. Consuming the event
+// keeps the reading pane open underneath.
+queueSearch.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  e.preventDefault();
+  if (!queueSearch.value) {
+    queueSearch.blur();
+    return;
+  }
+  queueSearch.value = "";
+  state.query = "";
+  cancelSearchRender();
+  renderList(false);
+});
+// Ctrl+F finds in the queue, matching the pipeline catalog's search shortcut.
+window.addEventListener("keydown", (e) => {
+  if (e.defaultPrevented || !(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
+  if (e.key.toLowerCase() !== "f" || currentFeature() !== "prs") return;
+  if (document.body.dataset.page === "settings" || filterbar.hidden || listPane.inert) return;
+  if (document.querySelector(".ask-overlay")) return;
+  e.preventDefault();
+  queueSearch.focus();
+  queueSearch.select();
 });
 window.addEventListener("ado-pr-updated", () => {
-  if (document.body.dataset.page !== "settings") renderList(false);
+  if (document.body.dataset.page !== "settings" && !filterbar.hidden) renderList(false);
 });
-// Opening a PR (e.g. from the inbox) while on settings returns to the queue.
+// Opening a PR (e.g. from the inbox or Jarvis) returns to the Pull requests feature and its queue.
 window.addEventListener("ado-pr-open", (e) => {
-  if ((e as CustomEvent).detail && document.body.dataset.page === "settings") showQueue();
+  if (!(e as CustomEvent).detail) return;
+  if (currentFeature() !== "prs") setFeature("prs");
+  else if (document.body.dataset.page === "settings") showQueue();
+});
+// A task's validation chain, opened from the task: Pipelines shows it once its chains load.
+window.addEventListener("ado-open-chain", (e) => {
+  const id = (e as CustomEvent).detail?.chainId;
+  if (typeof id !== "string" || !id) return;
+  showChainById(id);
+  setFeature("pipelines");
+});
+// …and back: a task chain's banner opens its task in the Workspace.
+window.addEventListener("ado-open-task", (e) => {
+  const detail = (e as CustomEvent).detail;
+  if (typeof detail?.taskId !== "string") return;
+  setFeature("jarvis");
+  openTaskById(detail.taskId, detail.tab);
 });
 
 boot();

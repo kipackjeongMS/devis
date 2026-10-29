@@ -1,0 +1,13 @@
+Visual Studio Code and VS Code Insiders icons
+Copyright Microsoft Corporation. All rights reserved.
+Visual Studio Code, VS Code, and their icons are trademarks of Microsoft Corporation.
+These unmodified icons identify the IDEs opened by the workspace launcher.
+
+vscode.png:
+https://code.visualstudio.com/assets/branding/code-stable.png
+
+vscode-insiders.png:
+https://code.visualstudio.com/assets/branding/insiders-logo.png
+Published on https://code.visualstudio.com/insiders
+
+Brand guidelines: https://code.visualstudio.com/brand

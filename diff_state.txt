@@ -1,0 +1,38 @@
+diff --git a/web/src/state.ts b/web/src/state.ts
+index 630156c..f977e2f 100644
+--- a/web/src/state.ts
++++ b/web/src/state.ts
+@@ -1,7 +1,8 @@
+ // The single client-side state singleton plus review-result loading and the
+ // encapsulated background-review poll timer.
+ import { getJSON } from "./api.js";
+-import type { AppState, Review } from "./types.js";
++import { activeJobKey, reviewRowKey } from "./reviewKey.js";
++import type { ActiveReviewJob, AppState, Review } from "./types.js";
+ 
+ export const state: AppState = {
+   config: { organizations: [], projects: {}, reviewModel: "", reviewsDir: "" },
+@@ -10,15 +11,21 @@ export const state: AppState = {
+   project: "all",
+   assignment: "mine",
+   reviews: {},
++  activeReviewJobs: {},
+ };
+ 
+-// Fetch the map of stored review results (pr_id -> {status, summary, updated_at}).
++// Fetch stored review results keyed by organization, project, repository, and PR.
+ export async function loadReviews(): Promise<void> {
+   try {
+     const res = await getJSON("/api/review-results");
+     const map: Record<string, Review> = {};
+-    for (const r of res.reviews || []) map[r.pr_id] = r;
++    for (const r of res.reviews || []) {
++      map[reviewRowKey(r)] = r;
++    }
+     state.reviews = map;
++    const active: Record<string, ActiveReviewJob> = {};
++    for (const job of res.activeJobs || []) active[activeJobKey(job)] = job;
++    state.activeReviewJobs = active;
+   } catch {
+     /* non-fatal: badges just won't show */
+   }

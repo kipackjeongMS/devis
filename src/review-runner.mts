@@ -3,8 +3,8 @@
 // with `copilot --resume`) and publishes through the `publish_review` tool.
 
 import { randomUUID } from "node:crypto";
-import { defineTool, type MessageOptions, type Tool } from "@github/copilot-sdk";
-import { prSessionOptions, withCopilotClient } from "./copilot-runtime.mjs";
+import { defineTool, type Tool } from "@github/copilot-sdk";
+import { prSessionOptions, sendAndSettle, withCopilotClient, type SettleSession } from "./copilot-runtime.mjs";
 import { publishReview, PUBLISH_REVIEW_SCHEMA } from "./review-publish.mjs";
 import {
     acknowledgeReviewJobs,
@@ -16,10 +16,12 @@ import {
     failActiveReviewJob,
     getActiveReviewJobBySession,
     isReviewJobActive,
+    listActiveReviewJobs,
     requeueOrphanedReviewJobs,
     type ReviewJobInput,
     type ReviewJobRow,
 } from "./store.mjs";
+import type { WorkItem } from "./service-files.mjs";
 
 const RUNNER_SURFACE = "desktop";
 const MAX_QUEUE_BATCH = 50;
@@ -34,9 +36,8 @@ export const PUBLISH_NUDGE =
     "You have not called the `publish_review` tool yet. Call it now with the identity from the review task: status='done' with summary, story, semanticFindings and findings if the review is complete, or status='error' with an error message if it cannot be completed.";
 
 /** The part of a Copilot session the runner uses (a fake in the harness). */
-export interface ReviewSession {
+export interface ReviewSession extends SettleSession {
     readonly sessionId: string;
-    sendAndWait(options: MessageOptions, timeout?: number): Promise<unknown>;
     abort(): Promise<void>;
     disconnect(): Promise<void>;
 }
@@ -74,6 +75,19 @@ let pumping = false;
 let stopping = false;
 const inFlight = new Set<Promise<void>>();
 const openSessions = new Set<ReviewSession>();
+/** Reviews running here, by run id, for the background service's idle check. */
+const running = new Map<string, string>();
+
+/** Reviews running here and queued for this runner. */
+export async function reviewRunnerActivity(): Promise<WorkItem[]> {
+    const items: WorkItem[] = [...running.values()].map((label) => ({ kind: "review", label }));
+    if (!pumpTimer) return items;
+    await ensureDb();
+    for (const job of listActiveReviewJobs()) {
+        if (job.status === "queued") items.push({ kind: "review", label: `PR #${job.pr_id} (queued)` });
+    }
+    return items;
+}
 
 function errorMessage(error: unknown): string {
     return (error as Error)?.message || String(error);
@@ -83,7 +97,7 @@ function errorMessage(error: unknown): string {
 export function publishReviewTool(): Tool<unknown> {
     return defineTool("publish_review", {
         description:
-            "Publish the finished review of this pull request to ADO PR Ops. Call it exactly once when the review is complete (status 'done'), or with status 'error' if the review cannot be completed. If it rejects the input, correct the input and call it again.",
+            "Publish the finished review of this pull request to Devis. Call it exactly once when the review is complete (status 'done'), or with status 'error' if the review cannot be completed. If it rejects the input, correct the input and call it again.",
         parameters: PUBLISH_REVIEW_SCHEMA as unknown as Record<string, unknown>,
         skipPermission: true,
         defer: "never",
@@ -109,6 +123,15 @@ export function publishReviewTool(): Tool<unknown> {
 }
 
 async function runReviewJob(job: ReviewJobRow): Promise<void> {
+    running.set(job.run_id, `PR #${job.pr_id}: ${job.title}`);
+    try {
+        await runReviewJobInner(job);
+    } finally {
+        running.delete(job.run_id);
+    }
+}
+
+async function runReviewJobInner(job: ReviewJobRow): Promise<void> {
     let session: ReviewSession;
     try {
         session = await options.createSession(job, [publishReviewTool()]);
@@ -138,12 +161,15 @@ async function runReviewJob(job: ReviewJobRow): Promise<void> {
             project: job.project,
             repoId: job.repo_id,
         });
-        await session.sendAndWait(
+        const missedIdle = () => console.warn(`[review-runner] PR #${job.pr_id}'s review turn ended without session.idle; picked up from the runtime`);
+        await sendAndSettle(
+            session,
             { prompt: task.task_prompt, displayPrompt: `Review PR #${job.pr_id}: ${job.title}` },
             options.turnTimeoutMs,
+            { onMissedIdle: missedIdle },
         );
         if (isReviewJobActive(job.run_id) && !stopping) {
-            await session.sendAndWait({ prompt: PUBLISH_NUDGE }, options.nudgeTimeoutMs);
+            await sendAndSettle(session, { prompt: PUBLISH_NUDGE }, options.nudgeTimeoutMs, { onMissedIdle: missedIdle });
         }
         if (!stopping) {
             failActiveReviewJob(job.run_id, "The reviewer finished without publishing a review.");

@@ -6,6 +6,17 @@ import https from "node:https";
 import type { IncomingHttpHeaders, OutgoingHttpHeaders } from "node:http";
 import { getAzToken } from "./azauth.mjs";
 import {
+    mapRepositoryResources,
+    mapRunParameters,
+    pipelineRunBody,
+    runToBuild,
+    type BuildInfo,
+    type PipelineResource,
+    type RepositoryResource,
+    type ResourcePin,
+    type RunParameter,
+} from "./pipeline-graph.mjs";
+import {
     buildLifecyclePatch,
     type CompletionOptionsInput,
     type LifecycleAction,
@@ -151,6 +162,9 @@ export interface CreateThreadInput {
 // ---------------------------------------------------------------------------
 const getToken = (): Promise<string> => getAzToken(ADO_RESOURCE);
 
+/** An Azure DevOps access token from the az login, for git over HTTPS. */
+export const getAdoToken = getToken;
+
 // ---------------------------------------------------------------------------
 // HTTP helpers
 // ---------------------------------------------------------------------------
@@ -166,7 +180,14 @@ interface RawOptions {
     body?: unknown;
 }
 
-function rawRequest(method: string, url: string, { token, accept, body }: RawOptions = {}): Promise<RawResponse> {
+// Socket-idle limit for one ADO call: a stalled request would otherwise hold its
+// caller (and the UI spinner waiting on it) forever.
+const REQUEST_TIMEOUT_MS = 120_000;
+/** The largest ADO response read into memory; anything bigger is cut off with an error. */
+const MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
+
+function rawRequest(method: string, url: string, opts: RawOptions = {}, retried = false): Promise<RawResponse> {
+    const { token, accept, body } = opts;
     return new Promise((resolve, reject) => {
         const u = new URL(url);
         const payload = body != null ? Buffer.from(JSON.stringify(body)) : null;
@@ -183,7 +204,17 @@ function rawRequest(method: string, url: string, { token, accept, body }: RawOpt
             { method, headers },
             (res) => {
                 const chunks: Buffer[] = [];
-                res.on("data", (c: Buffer) => chunks.push(c));
+                let size = 0;
+                res.on("data", (c: Buffer) => {
+                    size += c.length;
+                    if (size > MAX_RESPONSE_BYTES) {
+                        chunks.length = 0;
+                        req.destroy(new Error(`ADO ${method} response is larger than ${MAX_RESPONSE_BYTES / 1024 / 1024} MB`));
+                        return;
+                    }
+                    chunks.push(c);
+                });
+                res.on("error", reject);
                 res.on("end", () =>
                     resolve({
                         status: res.statusCode || 0,
@@ -193,7 +224,18 @@ function rawRequest(method: string, url: string, { token, accept, body }: RawOpt
                 );
             },
         );
-        req.on("error", reject);
+        req.setTimeout(REQUEST_TIMEOUT_MS, () =>
+            req.destroy(new Error(`ADO ${method} timed out after ${REQUEST_TIMEOUT_MS / 1000}s`)),
+        );
+        req.on("error", (err: NodeJS.ErrnoException) => {
+            // The server may close an idle keep-alive socket just as we reuse it.
+            // A GET is safe to replay once on a fresh socket; writes never are.
+            if (!retried && method === "GET" && req.reusedSocket && err.code === "ECONNRESET") {
+                rawRequest(method, url, opts, true).then(resolve, reject);
+                return;
+            }
+            reject(err);
+        });
         if (payload) req.write(payload);
         req.end();
     });
@@ -248,7 +290,60 @@ export async function getMe(org: string): Promise<Me> {
     const u = cd.authenticatedUser || {};
     const me: Me = { id: u.id, name: u.providerDisplayName || u.customDisplayName || "me" };
     _meCache.set(org, me);
+    const account = u.properties?.Account?.$value;
+    _accountCache.set(org, typeof account === "string" && account ? account : null);
     return me;
+}
+
+const _accountCache = new Map<string, string | null>(); // org -> sign-in name, like you@contoso.com
+
+/** The signed-in user's account name in the org (usually their email), or null when ADO doesn't say. */
+export async function getMyAccount(org: string): Promise<string | null> {
+    if (!_accountCache.has(org)) {
+        _meCache.delete(org);
+        await getMe(org);
+    }
+    return _accountCache.get(org) || null;
+}
+
+/** The org's projects, by name. */
+export async function listProjects(org: string): Promise<string[]> {
+    const names: string[] = [];
+    let skip = 0;
+    for (let page = 0; page < 20; page++) {
+        const data = await adoJson("GET", `${orgBase(org)}/_apis/projects?$top=500&$skip=${skip}&stateFilter=wellFormed&${API}`);
+        const value: any[] = data?.value || [];
+        for (const p of value) if (typeof p?.name === "string") names.push(p.name);
+        if (value.length < 500) break;
+        skip += value.length;
+    }
+    return names.sort((a, b) => a.localeCompare(b));
+}
+
+export interface RepoInfo {
+    name: string;
+    defaultBranch: string | null;
+    size: number;
+    disabled: boolean;
+}
+
+/** A project's git repositories, by name. */
+export async function listRepositories(org: string, project: string): Promise<RepoInfo[]> {
+    const data = await adoJson("GET", `${orgBase(org)}/${enc(project)}/_apis/git/repositories?${API}`);
+    return ((data?.value || []) as any[])
+        .filter((r) => typeof r?.name === "string")
+        .map((r) => ({
+            name: r.name as string,
+            defaultBranch: typeof r.defaultBranch === "string" ? r.defaultBranch.replace(/^refs\/heads\//, "") : null,
+            size: typeof r.size === "number" ? r.size : 0,
+            disabled: !!r.isDisabled,
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** The URL `git clone` takes for a repo. */
+export function repoCloneUrl(org: string, project: string, repo: string): string {
+    return `${orgBase(org)}/${enc(project)}/_git/${enc(repo)}`;
 }
 
 // Normalize the reviewer list off a raw ADO PR record.
@@ -672,38 +767,593 @@ export async function updatePrLifecycle(
 }
 
 // ---------------------------------------------------------------------------
-// Minimal LCS line diff with 3-line context folding (no dependency)
+// Build pipelines (definitions + builds) for pipeline chains
 // ---------------------------------------------------------------------------
-function diffLines(a: string[], b: string[]): Hunk[] {
+export interface PipelineDefinition {
+    org: string;
+    project: string;
+    id: number;
+    name: string;
+    path: string;
+    url: string;
+    queueStatus: "enabled" | "paused" | "disabled";
+    latest: { status?: string; result?: string; buildNumber?: string; finishTime?: string } | null;
+}
+
+const QUEUE_STATUS = ["enabled", "paused", "disabled"] as const;
+const MAX_DEFINITION_PAGES = 5;
+
+function mapBuild(b: any): BuildInfo {
+    return {
+        id: Number(b?.id),
+        buildNumber: b?.buildNumber,
+        status: b?.status,
+        result: b?.result,
+        url: b?._links?.web?.href,
+        startTime: b?.startTime,
+        finishTime: b?.finishTime,
+    };
+}
+
+function mapDefinition(org: string, project: string, d: any): PipelineDefinition {
+    const raw = d.queueStatus;
+    const queueStatus = typeof raw === "number" ? (QUEUE_STATUS[raw] ?? "enabled") : QUEUE_STATUS.includes(raw) ? raw : "enabled";
+    const latest = d.latestCompletedBuild || d.latestBuild;
+    return {
+        org,
+        project,
+        id: Number(d.id),
+        name: String(d.name || `Pipeline ${d.id}`),
+        path: String(d.path || "\\"),
+        url: d._links?.web?.href || `${orgBase(org)}/${enc(project)}/_build?definitionId=${enc(String(d.id))}`,
+        queueStatus,
+        latest: latest
+            ? {
+                  status: latest.status,
+                  result: latest.result,
+                  buildNumber: latest.buildNumber,
+                  finishTime: latest.finishTime,
+              }
+            : null,
+    };
+}
+
+/** Build definitions in one project, name-sorted, following continuation tokens. */
+export async function listBuildDefinitions(org: string, project: string): Promise<PipelineDefinition[]> {
+    const token = await getToken();
+    const base =
+        `${orgBase(org)}/${enc(project)}/_apis/build/definitions?${API}` +
+        "&queryOrder=definitionNameAscending&includeLatestBuilds=true&$top=1000";
+    const out: PipelineDefinition[] = [];
+    let continuation = "";
+    for (let page = 0; page < MAX_DEFINITION_PAGES; page++) {
+        const url = continuation ? `${base}&continuationToken=${enc(continuation)}` : base;
+        const r = await rawRequest("GET", url, { token });
+        if (r.status < 200 || r.status >= 300) throw new Error(`ADO GET ${r.status}: ${r.text.slice(0, 500)}`);
+        const data = r.text ? JSON.parse(r.text) : {};
+        for (const d of (data.value || []) as any[]) out.push(mapDefinition(org, project, d));
+        const next = r.headers["x-ms-continuationtoken"];
+        continuation = (Array.isArray(next) ? next[0] : next) || "";
+        if (!continuation) break;
+    }
+    return out;
+}
+
+const buildsBase = (org: string, project: string): string => `${orgBase(org)}/${enc(project)}/_apis/build/builds`;
+
+/** Queue a build of one definition; a blank branch uses the pipeline's default. */
+export async function queueBuild(
+    org: string,
+    project: string,
+    definitionId: number,
+    sourceBranch?: string,
+): Promise<BuildInfo> {
+    const body: Record<string, unknown> = { definition: { id: definitionId } };
+    if (sourceBranch) body.sourceBranch = sourceBranch;
+    return mapBuild(await adoJson("POST", `${buildsBase(org, project)}?${API}`, body));
+}
+
+export async function getBuild(org: string, project: string, buildId: number): Promise<BuildInfo> {
+    return mapBuild(await adoJson("GET", `${buildsBase(org, project)}/${enc(String(buildId))}?${API}`));
+}
+
+export async function cancelBuild(org: string, project: string, buildId: number): Promise<BuildInfo> {
+    const url = `${buildsBase(org, project)}/${enc(String(buildId))}?${API}`;
+    return mapBuild(await adoJson("PATCH", url, { status: "cancelling" }));
+}
+
+export interface DefinitionInfo {
+    /** YAML pipelines take runtime parameters and pipeline resources; classic ones don't. */
+    yaml: boolean;
+    projectId: string;
+    defaultBranch: string;
+    name: string;
+    path: string;
+    projectName: string;
+    queueStatus: "enabled" | "paused" | "disabled";
+    /** The repository the pipeline builds; `type` is "TfsGit" for Azure Repos. */
+    repository: { id: string; name: string; type: string } | null;
+}
+
+export async function getDefinitionInfo(org: string, project: string, definitionId: number): Promise<DefinitionInfo> {
+    const d = await adoJson("GET", `${orgBase(org)}/${enc(project)}/_apis/build/definitions/${enc(String(definitionId))}?${API}`);
+    const raw = d?.queueStatus;
+    const queueStatus = typeof raw === "number" ? (QUEUE_STATUS[raw] ?? "enabled") : QUEUE_STATUS.includes(raw) ? raw : "enabled";
+    const repo = d?.repository;
+    return {
+        yaml: Number(d?.process?.type) === 2,
+        projectId: String(d?.project?.id || ""),
+        defaultBranch: String(repo?.defaultBranch || ""),
+        name: String(d?.name || `Pipeline ${definitionId}`),
+        path: String(d?.path || "\\"),
+        projectName: String(d?.project?.name || project),
+        queueStatus,
+        repository: repo?.id ? { id: String(repo.id), name: String(repo.name || ""), type: String(repo.type || "") } : null,
+    };
+}
+
+/** Whether a branch exists in an Azure Repos repository. */
+export async function branchExists(org: string, project: string, repoId: string, branch: string): Promise<boolean> {
+    const name = branch.replace(/^refs\/heads\//, "");
+    const data = await adoJson("GET", `${repoBase(org, project, repoId)}/refs?filter=${enc(`heads/${name}`)}&${API}`);
+    return ((data?.value || []) as any[]).some((r) => r?.name === `refs/heads/${name}`);
+}
+
+export interface BuildFailure {
+    /** The failed step, job or stage, like "Run smoke tests". */
+    name: string;
+    type: string;
+    /** The first error messages ADO recorded for it. */
+    errors: string[];
+    logUrl: string | null;
+}
+
+/** What failed in a build: the failed steps first, each with its first errors and log. */
+export async function getBuildFailures(org: string, project: string, buildId: number): Promise<BuildFailure[]> {
+    const data = await adoJson("GET", `${buildsBase(org, project)}/${enc(String(buildId))}/timeline?${API}`);
+    const failed = ((data?.records || []) as any[]).filter((r) => r?.result === "failed" || r?.result === "canceled");
+    const rank = (t: string) => (t === "Task" ? 0 : t === "Job" ? 1 : t === "Stage" ? 2 : 3);
+    return failed
+        .sort((a, b) => rank(String(a.type)) - rank(String(b.type)))
+        .slice(0, 5)
+        .map((r) => ({
+            name: String(r.name || r.type || "A step"),
+            type: String(r.type || ""),
+            errors: ((r.issues || []) as any[])
+                .filter((i) => i?.type === "error" && typeof i.message === "string")
+                .map((i) => String(i.message).slice(0, 300))
+                .slice(0, 3),
+            logUrl: typeof r.log?.url === "string" ? r.log.url : null,
+        }));
+}
+
+export interface RunParametersInfo {
+    parameters: RunParameter[];
+    resources: PipelineResource[];
+    /** `resources.repositories` other than the pipeline's own (`self`). */
+    repositories: RepositoryResource[];
+    /** YAML problems Azure DevOps found on that branch (for example a template that fails to expand). */
+    errors: string[];
+}
+
+const RUN_PARAMS_PROVIDER = "ms.vss-build-web.pipeline-run-parameters-data-provider";
+
+// Undocumented: the data provider behind the portal's "Run pipeline" panel. It expands
+// the pipeline's YAML (templates included) on a branch and returns its runtime
+// parameters and `resources.pipelines`; there is no public REST API for either.
+export async function getRunParameters(
+    org: string,
+    project: string,
+    projectId: string,
+    definitionId: number,
+    branch: string,
+): Promise<RunParametersInfo> {
+    const body = {
+        contributionIds: [RUN_PARAMS_PROVIDER],
+        dataProviderContext: {
+            properties: {
+                pipelineId: definitionId,
+                sourceBranch: branch,
+                sourceVersion: "",
+                onlyFetchTemplateParameters: false,
+                sourcePage: { routeId: "ms.vss-build-web.pipeline-details-route", routeValues: { project } },
+            },
+        },
+    };
+    const url = `${orgBase(org)}/_apis/Contribution/HierarchyQuery/project/${enc(projectId)}?api-version=7.1-preview.1`;
+    const data = await adoJson("POST", url, body);
+    const p = data?.dataProviders?.[RUN_PARAMS_PROVIDER];
+    if (!p) {
+        const failure = data?.dataProviderExceptions?.[RUN_PARAMS_PROVIDER]?.message;
+        throw new Error(failure ? String(failure).slice(0, 500) : "Azure DevOps did not return this pipeline's parameters");
+    }
+    const errors = (Array.isArray(p.errors) ? p.errors : [])
+        .map((e: any) => (typeof e === "string" ? e : String(e?.message ?? JSON.stringify(e))))
+        .filter(Boolean)
+        .slice(0, 10);
+    const resources: PipelineResource[] = (Array.isArray(p.pipelineResources) ? p.pipelineResources : [])
+        .filter((r: any) => typeof r?.alias === "string" && typeof r?.name === "string")
+        .map((r: any) => ({ alias: r.alias, name: r.name, ...(typeof r.project === "string" && r.project ? { project: r.project } : {}) }));
+    return { parameters: mapRunParameters(p.templateParameters), resources, repositories: mapRepositoryResources(p.repositoryResources), errors };
+}
+
+/** Run a YAML pipeline with pinned pipeline resources, parameter overrides and repository branches. */
+export async function runPipeline(
+    org: string,
+    project: string,
+    definitionId: number,
+    branch: string,
+    pins: ResourcePin[],
+    params: Record<string, string> | undefined,
+    repos?: Record<string, string>,
+): Promise<BuildInfo> {
+    const url = `${orgBase(org)}/${enc(project)}/_apis/pipelines/${enc(String(definitionId))}/runs?${API}`;
+    return runToBuild(await adoJson("POST", url, pipelineRunBody(branch, pins, params, repos)));
+}
+
+// ---------------------------------------------------------------------------
+// Work items (Jarvis tasks)
+// ---------------------------------------------------------------------------
+export interface WorkItemInfo {
+    org: string;
+    project: string;
+    id: number;
+    title: string;
+    type: string;
+    state: string;
+    url: string;
+    parentId: number | null;
+}
+
+const WORK_ITEM_FIELDS = ["System.Title", "System.WorkItemType", "System.State", "System.TeamProject", "System.Parent"];
+
+/** Work items by id, in one org. Ids that do not exist (or are not visible) are left out. */
+export async function getWorkItems(org: string, ids: number[]): Promise<WorkItemInfo[]> {
+    const wanted = [...new Set(ids.filter((id) => Number.isSafeInteger(id) && id > 0))];
+    const out: WorkItemInfo[] = [];
+    for (let i = 0; i < wanted.length; i += 200) {
+        const chunk = wanted.slice(i, i + 200);
+        const data = await adoJson(
+            "GET",
+            `${orgBase(org)}/_apis/wit/workitems?ids=${chunk.join(",")}&fields=${enc(WORK_ITEM_FIELDS.join(","))}&errorPolicy=omit&${API}`,
+        );
+        for (const item of data?.value || []) {
+            if (!item || typeof item.id !== "number") continue;
+            const f = item.fields || {};
+            const project = String(f["System.TeamProject"] || "");
+            const parent = Number(f["System.Parent"]);
+            out.push({
+                org,
+                project,
+                id: item.id,
+                title: String(f["System.Title"] || `Work item ${item.id}`),
+                type: String(f["System.WorkItemType"] || "Work item"),
+                state: String(f["System.State"] || ""),
+                url: `${orgBase(org)}/${enc(project)}/_workitems/edit/${item.id}`,
+                parentId: Number.isSafeInteger(parent) && parent > 0 ? parent : null,
+            });
+        }
+    }
+    return out;
+}
+
+/** HTML from a rich-text work item field as plain text, keeping its line breaks and list items. */
+export function htmlToText(html: string): string {
+    const entities: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
+    return html
+        .replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, "")
+        .replace(/<br\s*\/?>/gi, "\n")
+        .replace(/<li[^>]*>/gi, "\n- ")
+        .replace(/<\/(p|div|li|ul|ol|h[1-6]|tr|table|blockquote|pre)>/gi, "\n")
+        .replace(/<[^>]+>/g, "")
+        .replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (whole, code: string) => {
+            if (code[0] === "#") {
+                const n = code[1] === "x" || code[1] === "X" ? parseInt(code.slice(2), 16) : parseInt(code.slice(1), 10);
+                return Number.isFinite(n) && n > 0 && n < 0x110000 ? String.fromCodePoint(n) : whole;
+            }
+            return entities[code.toLowerCase()] ?? whole;
+        })
+        .replace(/[ \t\u00a0]+\n/g, "\n")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+}
+
+const DESCRIPTION_FIELDS = ["System.Description", "Microsoft.VSTS.TCM.ReproSteps", "Microsoft.VSTS.Common.AcceptanceCriteria"];
+
+/** A work item's description as plain text: its Description, a bug's repro steps, and its acceptance criteria. */
+export async function getWorkItemDescription(org: string, id: number): Promise<string> {
+    const data = await adoJson(
+        "GET",
+        `${orgBase(org)}/_apis/wit/workitems?ids=${id}&fields=${enc(DESCRIPTION_FIELDS.join(","))}&errorPolicy=omit&${API}`,
+    );
+    const f = data?.value?.[0]?.fields || {};
+    const parts: string[] = [];
+    const description = htmlToText(String(f["System.Description"] || ""));
+    const repro = htmlToText(String(f["Microsoft.VSTS.TCM.ReproSteps"] || ""));
+    const criteria = htmlToText(String(f["Microsoft.VSTS.Common.AcceptanceCriteria"] || ""));
+    if (description) parts.push(description);
+    if (repro) parts.push(`Repro steps:\n${repro}`);
+    if (criteria) parts.push(`Acceptance criteria:\n${criteria}`);
+    return parts.join("\n\n");
+}
+
+// ---------------------------------------------------------------------------
+// Jarvis: a task's pull requests
+// ---------------------------------------------------------------------------
+
+/** One PR as ADO returns it, or null when it doesn't exist (or isn't visible). */
+export async function getPullRequestRaw(org: string, project: string, repo: string, prId: number): Promise<any | null> {
+    const token = await getToken();
+    const r = await rawRequest("GET", `${repoBase(org, project, repo)}/pullRequests/${prId}?${API}`, { token });
+    if (r.status === 404) return null;
+    if (r.status < 200 || r.status >= 300) throw new Error(`ADO GET ${r.status}: ${r.text.slice(0, 300)}`);
+    const raw = r.text ? JSON.parse(r.text) : null;
+    return raw && typeof raw.pullRequestId === "number" ? raw : null;
+}
+
+/** A PR by its number alone (numbers are unique in an organization), or null when it isn't there. */
+export async function getPullRequestById(org: string, prId: number): Promise<any | null> {
+    const token = await getToken();
+    const r = await rawRequest("GET", `${orgBase(org)}/_apis/git/pullrequests/${enc(String(prId))}?${API}`, { token });
+    if (r.status === 404) return null;
+    if (r.status < 200 || r.status >= 300) throw new Error(`ADO GET ${r.status}: ${r.text.slice(0, 300)}`);
+    const raw = r.text ? JSON.parse(r.text) : null;
+    return raw && typeof raw.pullRequestId === "number" ? raw : null;
+}
+
+export interface WorkItemPrLink {
+    projectId: string;
+    repoId: string;
+    prId: number;
+}
+
+/** A work item's fields and the pull requests linked to it in ADO. Null when it doesn't exist. */
+export async function getWorkItemPrLinks(
+    org: string,
+    id: number,
+): Promise<{ item: WorkItemInfo; prs: WorkItemPrLink[] } | null> {
+    const token = await getToken();
+    const r = await rawRequest("GET", `${orgBase(org)}/_apis/wit/workitems/${id}?$expand=relations&${API}`, { token });
+    if (r.status === 404) return null;
+    if (r.status < 200 || r.status >= 300) throw new Error(`ADO GET ${r.status}: ${r.text.slice(0, 300)}`);
+    const data = JSON.parse(r.text || "{}");
+    const f = data.fields || {};
+    const project = String(f["System.TeamProject"] || "");
+    const parent = Number(f["System.Parent"]);
+    const item: WorkItemInfo = {
+        org,
+        project,
+        id,
+        title: String(f["System.Title"] || `Work item ${id}`),
+        type: String(f["System.WorkItemType"] || "Work item"),
+        state: String(f["System.State"] || ""),
+        url: `${orgBase(org)}/${enc(project)}/_workitems/edit/${id}`,
+        parentId: Number.isSafeInteger(parent) && parent > 0 ? parent : null,
+    };
+    const prs: WorkItemPrLink[] = [];
+    for (const rel of (data.relations || []) as any[]) {
+        const link = parsePrArtifactLink(rel?.url);
+        if (rel?.rel === "ArtifactLink" && link) prs.push(link);
+    }
+    return { item, prs };
+}
+
+/** "vstfs:///Git/PullRequestId/{projectId}%2F{repoId}%2F{prId}" → its parts. */
+export function parsePrArtifactLink(url: unknown): WorkItemPrLink | null {
+    if (typeof url !== "string") return null;
+    const m = /^vstfs:\/\/\/Git\/PullRequestId\/(.+)$/i.exec(url.trim());
+    if (!m) return null;
+    let parts: string[];
+    try {
+        parts = decodeURIComponent(m[1]).split("/");
+    } catch {
+        return null;
+    }
+    const prId = Number(parts[2]);
+    if (parts.length !== 3 || !parts[0] || !parts[1] || !Number.isSafeInteger(prId) || prId < 1) return null;
+    return { projectId: parts[0], repoId: parts[1], prId };
+}
+
+/** PRs from one source branch, opened by one person, any status, newest first. */
+export async function listBranchPrs(org: string, project: string, repo: string, branch: string, creatorId: string): Promise<any[]> {
+    const q =
+        `searchCriteria.sourceRefName=${enc(`refs/heads/${branch}`)}&searchCriteria.creatorId=${enc(creatorId)}` +
+        `&searchCriteria.status=all&$top=20&${API}`;
+    const data = await adoJson("GET", `${repoBase(org, project, repo)}/pullrequests?${q}`);
+    return ((data?.value || []) as any[]).filter((pr) => pr && typeof pr.pullRequestId === "number");
+}
+
+export interface PrChecks {
+    passed: number;
+    failed: number;
+    running: number;
+    total: number;
+    /** Names of the blocking checks that failed, like "Build" or "Minimum number of reviewers". */
+    failing: string[];
+}
+
+/** The PR's blocking branch policies (builds, reviewers, linked work items…), summed up. */
+export async function getPrChecks(org: string, projectId: string, prId: number): Promise<PrChecks> {
+    const artifact = `vstfs:///CodeReview/CodeReviewId/${projectId}/${prId}`;
+    const data = await adoJson(
+        "GET",
+        `${orgBase(org)}/${enc(projectId)}/_apis/policy/evaluations?artifactId=${enc(artifact)}&api-version=7.1-preview.1`,
+    );
+    const out: PrChecks = { passed: 0, failed: 0, running: 0, total: 0, failing: [] };
+    for (const e of (data?.value || []) as any[]) {
+        const config = e?.configuration || {};
+        if (config.isEnabled === false || config.isBlocking === false) continue;
+        const status = String(e?.status || "");
+        if (status === "notApplicable") continue;
+        out.total++;
+        if (status === "approved") out.passed++;
+        else if (status === "rejected" || status === "broken") {
+            out.failed++;
+            const name = String(config.settings?.displayName || config.type?.displayName || "A check");
+            if (!out.failing.includes(name)) out.failing.push(name);
+        } else out.running++;
+    }
+    return out;
+}
+
+export interface PrBuildPolicy {
+    definitionId: number;
+    /** The policy's display name, or the pipeline's id when it has none. */
+    name: string;
+    /** A failing build blocks completing the PR. */
+    blocking: boolean;
+    /** approved · rejected · running · queued · broken … as ADO reports it. */
+    status: string;
+}
+
+/** The PR's build validation policies: the pipelines that must build it. Blocking ones first. */
+export async function getPrBuildPolicies(org: string, projectId: string, prId: number): Promise<PrBuildPolicy[]> {
+    const artifact = `vstfs:///CodeReview/CodeReviewId/${projectId}/${prId}`;
+    const data = await adoJson(
+        "GET",
+        `${orgBase(org)}/${enc(projectId)}/_apis/policy/evaluations?artifactId=${enc(artifact)}&api-version=7.1-preview.1`,
+    );
+    const out = new Map<number, PrBuildPolicy>();
+    for (const e of (data?.value || []) as any[]) {
+        const config = e?.configuration || {};
+        const id = Number(config.settings?.buildDefinitionId);
+        if (config.isEnabled === false || !Number.isSafeInteger(id) || id <= 0) continue;
+        if (String(e?.status || "") === "notApplicable") continue;
+        const policy: PrBuildPolicy = {
+            definitionId: id,
+            name: String(config.settings?.displayName || `Pipeline ${id}`),
+            blocking: config.isBlocking !== false,
+            status: String(e?.status || ""),
+        };
+        const seen = out.get(id);
+        if (!seen || (policy.blocking && !seen.blocking)) out.set(id, policy);
+    }
+    return [...out.values()].sort((a, b) => Number(b.blocking) - Number(a.blocking));
+}
+
+/** Comment threads people still need to resolve (active or pending), system notes left out. */
+export async function countUnresolvedThreads(org: string, project: string, repoId: string, prId: number): Promise<number> {
+    const data = await adoJson("GET", `${repoBase(org, project, repoId)}/pullRequests/${prId}/threads?${API}`);
+    return ((data?.value || []) as any[]).filter((t) => {
+        if (!t || t.isDeleted) return false;
+        if (t.status !== "active" && t.status !== "pending") return false;
+        const first = (t.comments || [])[0];
+        return !!first && first.commentType !== "system";
+    }).length;
+}
+
+// ---------------------------------------------------------------------------
+// Minimal line diff (Myers) with 3-line context folding (no dependency)
+// ---------------------------------------------------------------------------
+/** Myers' diff keeps about (D+1)² numbers for D changed lines: past this many, a changed middle shows as replaced. */
+export const DIFF_MAX_EDITS = 2_000;
+
+const SAME = 0;
+const DEL = 1;
+const ADD = 2;
+
+/**
+ * Myers' shortest edit script from `a` to `b`: SAME, DEL (a line of `a`) or ADD
+ * (a line of `b`) per step, deletions before additions in a change. Time is
+ * O((N+M)·D) and memory O(D²), so a small edit in a big file stays cheap.
+ * Returns null when more than `maxEdits` lines differ.
+ */
+function editScript(a: string[], b: string[], maxEdits: number): Uint8Array | null {
     const n = a.length;
     const m = b.length;
-    // LCS length table (rolling not used; n,m capped by MAX above).
-    const dp = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
-    for (let i = n - 1; i >= 0; i--) {
-        for (let j = m - 1; j >= 0; j--) {
-            dp[i][j] = a[i] === b[j]
-                ? dp[i + 1][j + 1] + 1
-                : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    const limit = Math.min(n + m, maxEdits);
+    const off = limit + 1;
+    const v = new Int32Array(2 * limit + 3);
+    // trace[d] holds the furthest x on diagonals -d..d after d edits.
+    const trace: Int32Array[] = [];
+    let found = -1;
+    for (let d = 0; d <= limit && found < 0; d++) {
+        for (let k = -d; k <= d; k += 2) {
+            let x = k === -d || (k !== d && v[off + k - 1] < v[off + k + 1]) ? v[off + k + 1] : v[off + k - 1] + 1;
+            let y = x - k;
+            while (x < n && y < m && a[x] === b[y]) {
+                x++;
+                y++;
+            }
+            v[off + k] = x;
+            if (x >= n && y >= m) {
+                found = d;
+                break;
+            }
         }
+        trace.push(v.slice(off - d, off + d + 1));
     }
-    const ops: DiffOp[] = [];
-    let i = 0;
-    let j = 0;
-    while (i < n && j < m) {
-        if (a[i] === b[j]) {
-            ops.push({ t: "ctx", text: a[i], o: i + 1, nn: j + 1 });
-            i++;
-            j++;
-        } else if (dp[i + 1][j] >= dp[i][j + 1]) {
-            ops.push({ t: "del", text: a[i], o: i + 1, nn: null });
-            i++;
+    if (found < 0) return null;
+
+    const script = new Uint8Array(n + m - (n + m - found) / 2);
+    let at = script.length;
+    let x = n;
+    let y = m;
+    for (let d = found; d > 0; d--) {
+        const prev = trace[d - 1];
+        const k = x - y;
+        const down = k === -d || (k !== d && prev[k - 1 + d - 1] < prev[k + 1 + d - 1]);
+        const pk = down ? k + 1 : k - 1;
+        const px = prev[pk + d - 1];
+        const py = px - pk;
+        while (x > px && y > py) {
+            script[--at] = SAME;
+            x--;
+            y--;
+        }
+        if (down) {
+            script[--at] = ADD;
+            y--;
         } else {
-            ops.push({ t: "add", text: b[j], o: null, nn: j + 1 });
-            j++;
+            script[--at] = DEL;
+            x--;
         }
     }
-    while (i < n) ops.push({ t: "del", text: a[i], o: ++i, nn: null });
-    while (j < m) ops.push({ t: "add", text: b[j], o: null, nn: ++j });
+    while (x > 0 && y > 0) {
+        script[--at] = SAME;
+        x--;
+        y--;
+    }
+    return script;
+}
+
+export function diffLines(a: string[], b: string[]): Hunk[] {
+    // Unchanged lines at both ends need no search; most edits leave most of a file alone.
+    let head = 0;
+    while (head < a.length && head < b.length && a[head] === b[head]) head++;
+    let tail = 0;
+    while (tail < a.length - head && tail < b.length - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
+    const midA = a.slice(head, a.length - tail);
+    const midB = b.slice(head, b.length - tail);
+    const n = midA.length;
+    const m = midB.length;
+    const ops: DiffOp[] = [];
+    for (let k = 0; k < head; k++) ops.push({ t: "ctx", text: a[k], o: k + 1, nn: k + 1 });
+    const script = n > 0 && m > 0 ? editScript(midA, midB, DIFF_MAX_EDITS) : null;
+    if (!script) {
+        // One side is empty, or too much changed to align line by line within the budget.
+        for (let k = 0; k < n; k++) ops.push({ t: "del", text: midA[k], o: head + k + 1, nn: null });
+        for (let k = 0; k < m; k++) ops.push({ t: "add", text: midB[k], o: null, nn: head + k + 1 });
+    } else {
+        let i = 0;
+        let j = 0;
+        for (const step of script) {
+            if (step === SAME) {
+                ops.push({ t: "ctx", text: midA[i], o: head + i + 1, nn: head + j + 1 });
+                i++;
+                j++;
+            } else if (step === DEL) {
+                ops.push({ t: "del", text: midA[i], o: head + i + 1, nn: null });
+                i++;
+            } else {
+                ops.push({ t: "add", text: midB[j], o: null, nn: head + j + 1 });
+                j++;
+            }
+        }
+    }
+    for (let k = 0; k < tail; k++) {
+        ops.push({ t: "ctx", text: a[a.length - tail + k], o: a.length - tail + k + 1, nn: b.length - tail + k + 1 });
+    }
 
     // Fold long unchanged runs, keeping 3 lines of context around changes.
     const CTX = 3;

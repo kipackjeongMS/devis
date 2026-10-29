@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <!--
+    The code window: one per worker, opened from the task modal's "View changes".
+    Same glass field and title bar as index.html. code.js reads ?worker=<sessionId> and mounts the
+    changes view (repo tree + diff) into #code.
+  -->
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Changes · Devis</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body data-page="code">
+    <header class="titlebar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg class="ic" viewBox="0 0 16 16" focusable="false">
+            <circle cx="4.5" cy="3.75" r="1.5"></circle>
+            <circle cx="4.5" cy="12.25" r="1.5"></circle>
+            <circle cx="11.5" cy="12.25" r="1.5"></circle>
+            <path d="M4.5 5.25v5.5M11.5 10.75V7a2.5 2.5 0 0 0-2.5-2.5H6.5M8 3l-1.5 1.5L8 6"></path>
+          </svg>
+        </span>
+        <span class="brand-name" id="codeTitle">Changes</span>
+      </div>
+    </header>
+    <main id="code" class="cw" aria-label="Worker changes"></main>
+    <script type="module" src="code.js"></script>
+  </body>
+</html>

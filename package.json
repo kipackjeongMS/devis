@@ -1,8 +1,8 @@
 {
-  "name": "ado-pr-ops",
+  "name": "devis",
   "version": "1.0.0",
   "private": true,
-  "productName": "ADO PR Ops",
+  "productName": "Devis",
   "description": "Desktop console for reviewing Azure DevOps pull requests with GitHub Copilot.",
   "main": "main.mjs",
   "scripts": {

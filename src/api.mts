@@ -2,14 +2,18 @@
 // the loopback server.
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { sendJson, sendBuffer, readBody } from "./http.mjs";
+import { BodyTooLargeError, sendJson, sendBuffer, readBody } from "./http.mjs";
 import { readConfig, writeConfig } from "./config.mjs";
-import { ensureDb, getReview, listReviews, listActiveReviewJobs, upsertReview, publishReviewRun, expireStaleReviews, markFindingPosted, markSemanticFindingPosted, setFindingHumanizedComment, setSemanticFindingHumanizedComment, setDismissed, listPlateDismissals, setPlateDismissed, listNotifications, unreadCount, markNotificationsRead, markAllNotificationsRead, reviewIdentityKey, legacyReviewKey, pruneCommentActivity, type ReviewIdentity } from "./store.mjs";
+import { ensureDb, getReview, listReviews, listActiveReviewJobs, upsertReview, publishReviewRun, expireStaleReviews, markFindingPosted, markSemanticFindingPosted, setFindingHumanizedComment, setSemanticFindingHumanizedComment, setDismissed, listPlateDismissals, onPlateDismissed, setPlateDismissed, listNotifications, unreadCount, markNotificationsRead, markAllNotificationsRead, reviewIdentityKey, legacyReviewKey, pruneCommentActivity, type ReviewIdentity } from "./store.mjs";
 import { commentActivity } from "./comment-activity.mjs";
+import { answerAsks } from "./comms.mjs";
+import { readPrSnapshot, savePrSnapshot } from "./pr-snapshot.mjs";
+import type { WorkItem } from "./service-files.mjs";
 import type { Finding, SemanticFinding } from "./store.mjs";
 import { writeReviewMarkdown } from "./reviews-md.mjs";
 import { scanInbox, recordWatchFromAdoWrite } from "./inbox.mjs";
-import { rephraseComment, buildRephrasePrompt, cleanRephrase } from "./rephrase.mjs";
+import { rephraseComment, buildRephrasePrompt, cleanRephrase, REPHRASE_INSTRUCTIONS_MAX } from "./rephrase.mjs";
+import { voiceGuide } from "./user-skills.mjs";
 import {
     asReviewerSessionId,
     getReviewerChat,
@@ -18,7 +22,7 @@ import {
     runInReviewerSession,
     sendReviewerChat,
 } from "./reviewer-session.mjs";
-import { runOneShot } from "./copilot-runtime.mjs";
+import { resolveCopilotRuntime, runOneShot } from "./copilot-runtime.mjs";
 import { queueReviewTargets } from "./review-task.mjs";
 import {
     listAssignedPRs,
@@ -32,11 +36,36 @@ import {
     updateThreadStatus,
     setMyVote,
     updatePrLifecycle,
+    listBuildDefinitions,
+    getDefinitionInfo,
+    getRunParameters,
+    type PipelineDefinition,
     type Pr,
 } from "./ado.mjs";
+import { normalizeBranch, validateGraph } from "./pipeline-graph.mjs";
+import {
+    PipelineStoreError,
+    appBuilds,
+    blockResults,
+    deleteChain,
+    enqueueRunCommand,
+    getChain,
+    getRun,
+    latestRun,
+    listChains,
+    requestRunCancel,
+    saveChain,
+    startChainRun,
+    takeCommandResult,
+    triggerNode,
+} from "./pipeline-store.mjs";
+import { describeAdoError, tickPipelineRunner, wakePipelineRunner } from "./pipeline-runner.mjs";
 import { parseThreadStatus, parseVote, parseLifecycleAction, parseCompletionOptions } from "./pr-actions.mjs";
 import { parsePrCanvasTarget } from "./canvas-target.mjs";
-import { getAvailableModels } from "./models.mjs";
+import { getModelCatalog } from "./models.mjs";
+import { handleJarvisApi } from "./jarvis-api.mjs";
+import { notePrActivity, rememberPrs } from "./jarvis-today.mjs";
+import { recordEvent } from "./jarvis-store.mjs";
 import {
     getPrDescriptionImage,
     PrDescriptionImageError,
@@ -83,8 +112,12 @@ function asReviewIdentity(value: Record<string, unknown>): ReviewIdentity {
 
 const COMMENT_ACTIVITY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
+// Hiding, restoring, and a queued review un-hiding a PR all change the review queue
+// the overview and the Lead count, so the remembered PR list follows every one.
+onPlateDismissed((identities, dismissed) => notePrActivity(identities, { hidden: dismissed }));
+
 // Best-effort: the ADO write (or read) already succeeded, so never fail the request.
-async function noteCommentActivity(value: Record<string, unknown>, commented: boolean): Promise<void> {
+async function noteCommentActivity(value: Record<string, unknown>, commented: boolean, wrote = false): Promise<void> {
     const ref = {
         org: String(value.org ?? ""),
         project: String(value.project ?? ""),
@@ -92,6 +125,9 @@ async function noteCommentActivity(value: Record<string, unknown>, commented: bo
         prId: String(value.prId ?? ""),
     };
     if (!ref.org || !ref.project || !ref.repoId || !ref.prId) return;
+    notePrActivity([ref], { commented });
+    // Only a comment written now answers a Teams ask: having commented before says nothing about a newer ask.
+    if (wrote) void answerAsks([ref], "you commented on the PR").catch((error: Error) => console.warn(`[comms] answering asks: ${error.message}`));
     try {
         await ensureDb();
         await commentActivity.record(ref, commented);
@@ -123,10 +159,26 @@ async function availableReviewerSession(value: unknown): Promise<string | null> 
     }
 }
 
+/** Inline plus semantic finding count. Findings are append-only, so growth means new ones. */
+function reviewFindingCount(row: ReturnType<typeof getReview>): number {
+    const shaped = shapeReview(row);
+    if (!shaped) return 0;
+    return (shaped.findingsList as unknown[]).length + (shaped.semanticFindingsList as unknown[]).length;
+}
+
+/** Review batches being prepared (PR files read, nothing queued yet). */
+let preparingReviews = 0;
+
+/** API work in flight that ends in saved state, for the background service's idle check. */
+export function apiActivity(): WorkItem[] {
+    return preparingReviews ? [{ kind: "review", label: `Preparing ${preparingReviews === 1 ? "a review batch" : `${preparingReviews} review batches`}` }] : [];
+}
+
 export async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
     const p = url.pathname;
     const q = url.searchParams;
-    console.error(`[api] ${req.method} ${p}`);
+    if (p.startsWith("/api/jarvis/")) return handleJarvisApi(req, res, url);
+    console.log(`[api] ${req.method} ${p}`);
 
     try {
         // ---- server identity (stale-connection detection, see STARTED_AT above) ----
@@ -143,9 +195,19 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
             return sendJson(res, 200, await writeConfig(body));
         }
 
-        // ---- available AI models for PR review ----
+        // ---- available AI models (ids), and each with the reasoning efforts it takes ----
         if (p === "/api/models" && req.method === "GET") {
-            return sendJson(res, 200, { models: await getAvailableModels() });
+            const catalog = await getModelCatalog();
+            return sendJson(res, 200, { models: catalog.map((m) => m.id), catalog });
+        }
+        // ---- how Copilot runs: through Agency, or the plain CLI with a warning ----
+        if (p === "/api/copilot/runtime" && req.method === "GET") {
+            try {
+                const { via, command, warning } = await resolveCopilotRuntime();
+                return sendJson(res, 200, { via, command, warning });
+            } catch (error) {
+                return sendJson(res, 200, { via: null, command: null, warning: `Copilot isn't available: ${(error as Error).message}` });
+            }
         }
 
         // ---- active PRs across all configured (org, project) scopes ----
@@ -154,6 +216,23 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
         // Filtering by org/project/assignment happens client-side.
         if (p === "/api/prs" && req.method === "GET") {
             const cfg = await readConfig();
+            const markDismissed = (list: Pr[]): void => {
+                const dismissed = listPlateDismissals();
+                for (const pr of list) {
+                    const identity = { prId: pr.id, org: pr.org, project: pr.project, repoId: pr.repoId };
+                    pr.plateDismissed =
+                        dismissed.has(reviewIdentityKey(identity)) ||
+                        dismissed.has(legacyReviewKey(pr.id));
+                }
+            };
+            // The last complete list, for the page's first paint while the live one loads.
+            if (q.get("cached") === "1") {
+                await ensureDb();
+                const snapshot = readPrSnapshot(cfg);
+                if (!snapshot) return sendJson(res, 200, { prs: null });
+                markDismissed(snapshot.prs);
+                return sendJson(res, 200, { prs: snapshot.prs, errors: [], activityPending: 0, cached: true, at: snapshot.at });
+            }
             const refreshActivity = q.get("refresh") === "1";
             const prs: Pr[] = [];
             const errors: string[] = [];
@@ -188,18 +267,20 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
             }
             await Promise.all(tasks);
             await ensureDb();
-            const dismissed = listPlateDismissals();
-            for (const pr of prs) {
-                const identity = { prId: pr.id, org: pr.org, project: pr.project, repoId: pr.repoId };
-                pr.plateDismissed =
-                    dismissed.has(reviewIdentityKey(identity)) ||
-                    dismissed.has(legacyReviewKey(pr.id));
-            }
+            markDismissed(prs);
             prs.sort((a, b) => new Date(b.created).getTime() - new Date(a.created).getTime());
             pruneCommentActivity(Date.now() - COMMENT_ACTIVITY_RETENTION_MS);
             // Phase 1: cached "I commented" values only; stale PRs are checked in the
             // background and the client collects them from /api/pr-activity.
             const activityPending = await commentActivity.apply(prs, refreshActivity);
+            rememberPrs(prs);
+            if (!errors.length) {
+                try {
+                    savePrSnapshot(cfg, prs);
+                } catch (e) {
+                    console.warn(`[api] could not keep the PR list for the next launch: ${(e as Error).message}`);
+                }
+            }
             return sendJson(res, 200, { prs, errors, activityPending });
         }
 
@@ -207,7 +288,9 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
         if (p === "/api/pr-activity" && req.method === "GET") {
             const cfg = await readConfig();
             await ensureDb();
-            return sendJson(res, 200, await commentActivity.settle(cfg.organizations));
+            const settled = await commentActivity.settle(cfg.organizations);
+            notePrActivity(settled.commented, { commented: true });
+            return sendJson(res, 200, settled);
         }
 
         // ---- resolve one PR summary for a canvas deep-link ----
@@ -296,7 +379,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
                 org: b.org, project: b.project, repoId: b.repoId, prId: b.prId, threadId: b.threadId,
                 commentId: created?.id, publishedAt: created?.publishedDate ?? null,
             });
-            await noteCommentActivity(b, true);
+            await noteCommentActivity(b, true, true);
             return sendJson(res, 200, created);
         }
 
@@ -311,7 +394,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
                 org: b.org, project: b.project, repoId: b.repoId, prId: b.prId, threadId: created.id,
                 commentId: created.comments?.[0]?.id, publishedAt: created.comments?.[0]?.published ?? null,
             });
-            await noteCommentActivity(b, true);
+            await noteCommentActivity(b, true, true);
             return sendJson(res, 200, created);
         }
 
@@ -334,7 +417,19 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
             } catch (e) {
                 return sendJson(res, 400, { error: (e as Error).message });
             }
-            return sendJson(res, 200, await setMyVote(b.org, b.project, b.repoId, b.prId, vote));
+            const voted = await setMyVote(b.org, b.project, b.repoId, b.prId, vote);
+            notePrActivity([{ org: b.org, project: b.project, repoId: b.repoId, prId: b.prId }], { vote });
+            if (vote !== 0) void answerAsks([{ org: b.org, prId: b.prId }], "you voted on the PR").catch((error: Error) => console.warn(`[comms] answering asks: ${error.message}`));
+            // Jarvis keeps reviews in its history; a failure there must not undo the vote.
+            if (vote !== 0) {
+                const title = typeof b.title === "string" ? b.title.slice(0, 200) : "";
+                await recordEvent(
+                    "pr.reviewed",
+                    `${vote === 10 ? "Approved" : "Approved with suggestions"} PR #${b.prId}${title ? ` ${title}` : ""}`,
+                    { ref: { org: b.org, project: b.project, repoId: b.repoId, prId: Number(b.prId), vote, title } },
+                ).catch((e: Error) => console.error(`[jarvis] review not recorded: ${e.message}`));
+            }
+            return sendJson(res, 200, voted);
         }
         if (p === "/api/pr-lifecycle" && req.method === "POST") {
             const b = await readBody(req);
@@ -350,7 +445,14 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
 
         // ---- durable, bounded review queue run by the desktop review runner ----
         if (p === "/api/review/queue-targets" && req.method === "POST") {
-            return sendJson(res, 200, await queueReviewTargets(await readBody(req)));
+            const body = await readBody(req);
+            // Preparing a batch reads every PR's files before anything is queued; the service waits for it.
+            preparingReviews++;
+            try {
+                return sendJson(res, 200, await queueReviewTargets(body));
+            } finally {
+                preparingReviews--;
+            }
         }
 
         // ---- chat with the session that reviewed a PR ----
@@ -363,7 +465,9 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
             };
             const sessionId = await reviewerSessionFor(identity);
             if (!sessionId) return sendJson(res, 404, { error: "The Copilot session that reviewed this PR is no longer available." });
-            return sendJson(res, 200, await getReviewerChat(sessionId, identity));
+            const chat = await getReviewerChat(sessionId, identity);
+            // Lets the chat refresh the review when the reviewer stages new findings.
+            return sendJson(res, 200, { ...chat, findingCount: reviewFindingCount(getReview(identity)) });
         }
         if (p === "/api/reviewer-chat" && req.method === "POST") {
             const b = await readBody(req);
@@ -498,7 +602,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
                 activeJobs: listActiveReviewJobs(),
             });
         }
-        // User-driven My Plate lifecycle: remove (dismiss) or restore any PR.
+        // User-driven My feed lifecycle: hide (dismiss) or restore any PR.
         // Body: { prs: ReviewIdentity[], dismissed?: boolean } — dismissed defaults to true.
         if (p === "/api/review/dismiss" && req.method === "POST") {
             const b = await readBody(req);
@@ -527,7 +631,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
             if (b.findingId != null) {
                 markFindingPosted(asReviewIdentity(b), String(b.findingId));
             }
-            await noteCommentActivity(b, true);
+            await noteCommentActivity(b, true, true);
             return sendJson(res, 200, created);
         }
 
@@ -559,7 +663,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
                 commentId: created.comments?.[0]?.id,
                 publishedAt: created.comments?.[0]?.published ?? null,
             });
-            await noteCommentActivity(b, true);
+            await noteCommentActivity(b, true, true);
             return sendJson(res, 200, created);
         }
 
@@ -581,6 +685,9 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
                 comment: String(b.comment),
                 title: b.title ? String(b.title) : undefined,
                 model: b.model ? String(b.model) : undefined,
+                instructions: typeof b.instructions === "string" ? b.instructions.trim().slice(0, REPHRASE_INSTRUCTIONS_MAX) : undefined,
+                // Posted under the user's name: written in their voice when they have the skill for it.
+                voice: voiceGuide(),
             };
             const persist = async (text: string): Promise<string> => {
                 if (findingId) {
@@ -605,9 +712,9 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
                 } catch (e) {
                     console.error(`[rephrase] reviewer session unavailable, using a fresh run: ${(e as Error).message}`);
                 }
-                if (text) return sendJson(res, 200, { text: await persist(text), via: "reviewer-session" });
+                if (text) return sendJson(res, 200, { text: await persist(text), via: "reviewer-session", voice: !!input.voice });
             }
-            return sendJson(res, 200, { text: await persist(await rephraseComment(input)), via: "fresh" });
+            return sendJson(res, 200, { text: await persist(await rephraseComment(input)), via: "fresh", voice: !!input.voice });
         }
 
         // ---- notification inbox (peer comments/replies on my authored PRs) ----
@@ -630,10 +737,193 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
             return sendJson(res, 200, { unread: unreadCount() });
         }
 
+        // ---- pipelines: catalog of build definitions + chains of them ----
+        // Only configured projects are listed; orgs without projects are
+        // reported so the UI can point at Settings.
+        if (p === "/api/pipelines" && req.method === "GET") {
+            const cfg = await readConfig();
+            const refresh = q.get("refresh") === "1";
+            const pipelines: PipelineDefinition[] = [];
+            const errors: string[] = [];
+            const unscopedOrgs: string[] = [];
+            await Promise.all(
+                cfg.organizations.flatMap((org) => {
+                    const projects = cfg.projects[org] || [];
+                    if (!projects.length) {
+                        unscopedOrgs.push(org);
+                        return [];
+                    }
+                    return projects.map(async (project) => {
+                        try {
+                            pipelines.push(...(await cachedDefinitions(org, project, refresh)));
+                        } catch (e) {
+                            errors.push(`${org}/${project}: ${describeAdoError(e)}`);
+                        }
+                    });
+                }),
+            );
+            return sendJson(res, 200, { pipelines, errors, unscopedOrgs });
+        }
+        if (p === "/api/pipeline-chains" && req.method === "GET") {
+            return sendJson(res, 200, { chains: await listChains() });
+        }
+        if (p === "/api/pipeline-chain" && req.method === "GET") {
+            const id = q.get("id") || "";
+            const chain = await getChain(id);
+            if (!chain) return sendJson(res, 404, { error: "Chain not found" });
+            return sendJson(res, 200, { chain, run: await latestRun(id) });
+        }
+        if (p === "/api/pipeline-chain-builds" && req.method === "GET") {
+            return sendJson(res, 200, { builds: await appBuilds(q.get("id") || "") });
+        }
+        if (p === "/api/pipeline-chain-results" && req.method === "GET") {
+            return sendJson(res, 200, { results: await blockResults(q.get("id") || "") });
+        }
+        if (p === "/api/pipeline-run" && req.method === "GET") {
+            const run = await getRun(q.get("runId") || "");
+            if (!run) return sendJson(res, 404, { error: "Run not found" });
+            return sendJson(res, 200, { run });
+        }
+        if (p === "/api/pipeline-chains/save" && req.method === "POST") {
+            const b = await readBody(req);
+            const cfg = await readConfig();
+            let graph;
+            try {
+                graph = validateGraph(b?.graph, cfg.organizations);
+            } catch (e) {
+                return sendJson(res, 400, { error: (e as Error).message });
+            }
+            const id = typeof b?.id === "string" && b.id ? b.id : undefined;
+            const expectedUpdatedAt = typeof b?.updatedAt === "string" && b.updatedAt ? b.updatedAt : undefined;
+            const chain = await saveChain({ id, name: b?.name, graph, expectedUpdatedAt });
+            // A save during a run queued a "graph" command; apply it now, not on the next poll.
+            wakePipelineRunner();
+            return sendJson(res, 200, { chain });
+        }
+        // Runtime parameters and pipeline resources of one YAML pipeline on a branch,
+        // for the block inspector. The runner looks these up again, uncached, at queue time.
+        if (p === "/api/pipeline-definition-info" && req.method === "GET") {
+            const cfg = await readConfig();
+            const org = cfg.organizations.find((o) => o.toLowerCase() === (q.get("org") || "").toLowerCase());
+            const project = (q.get("project") || "").trim();
+            const definitionId = Number(q.get("id"));
+            if (!org || !project || !Number.isInteger(definitionId) || definitionId <= 0) {
+                return sendJson(res, 400, { error: "Unknown pipeline" });
+            }
+            const refresh = q.get("refresh") === "1";
+            try {
+                const definition = await cachedLookup(
+                    `def\u0000${org}\u0000${project}\u0000${definitionId}`,
+                    DEFINITION_INFO_MS,
+                    refresh,
+                    () => getDefinitionInfo(org, project, definitionId),
+                );
+                const base = { yaml: definition.yaml, defaultBranch: definition.defaultBranch };
+                if (!definition.yaml) return sendJson(res, 200, { ...base, parameters: [], resources: [], repositories: [], errors: [] });
+                const branch = normalizeBranch(q.get("branch")) || definition.defaultBranch;
+                const info = await cachedLookup(
+                    `params\u0000${org}\u0000${project}\u0000${definitionId}\u0000${branch}`,
+                    RUN_PARAMETERS_MS,
+                    refresh,
+                    () => getRunParameters(org, project, definition.projectId, definitionId, branch),
+                );
+                return sendJson(res, 200, { ...base, ...info });
+            } catch (e) {
+                return sendJson(res, 502, { error: describeAdoError(e) });
+            }
+        }
+        if (p === "/api/pipeline-chains/delete" && req.method === "POST") {
+            const b = await readBody(req);
+            return sendJson(res, 200, { deleted: await deleteChain(String(b?.id || "")) });
+        }
+        if (p === "/api/pipeline-chains/run" && req.method === "POST") {
+            const b = await readBody(req);
+            const run = await startChainRun(String(b?.id || ""));
+            wakePipelineRunner();
+            return sendJson(res, 200, { run });
+        }
+        if (p === "/api/pipeline-runs/cancel" && req.method === "POST") {
+            const b = await readBody(req);
+            const runId = String(b?.runId || "");
+            if (!(await requestRunCancel(runId))) {
+                return sendJson(res, 409, { error: "This run has already finished" });
+            }
+            wakePipelineRunner();
+            return sendJson(res, 200, { run: await getRun(runId) });
+        }
+        if (p === "/api/pipeline-chains/trigger" && req.method === "POST") {
+            const b = await readBody(req);
+            const { run, commandId } = await triggerNode(String(b?.id || ""), String(b?.nodeId || ""));
+            if (commandId === null) {
+                wakePipelineRunner();
+                return sendJson(res, 200, { run });
+            }
+            return sendCommandResult(res, run.runId, commandId);
+        }
+        if (p === "/api/pipeline-runs/stop-node" && req.method === "POST") {
+            const b = await readBody(req);
+            const runId = String(b?.runId || "");
+            const commandId = await enqueueRunCommand(runId, "stop", String(b?.nodeId || ""));
+            return sendCommandResult(res, runId, commandId);
+        }
+
         return sendJson(res, 404, { error: "no such endpoint" });
     } catch (e) {
+        if (e instanceof PipelineStoreError) return sendJson(res, e.status, { error: e.message });
+        if (e instanceof BodyTooLargeError) return sendJson(res, e.status, { error: e.message });
         return sendJson(res, 500, { error: (e as Error).message || String(e) });
     }
+}
+
+// The runner applies run commands on its next tick; wait for it (bounded) so the
+// caller learns whether the command was accepted. 202 = still pending.
+const COMMAND_WAIT_MS = 20_000;
+
+async function sendCommandResult(res: ServerResponse, runId: string, commandId: number): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([tickPipelineRunner(), new Promise((resolve) => (timer = setTimeout(resolve, COMMAND_WAIT_MS)))]);
+    clearTimeout(timer);
+    const result = await takeCommandResult(commandId);
+    if (result?.status === "rejected") return sendJson(res, 409, { error: result.error || "The runner refused this request" });
+    const run = await getRun(runId);
+    if (result?.status === "done") return sendJson(res, 200, { run });
+    return sendJson(res, 202, { run, pending: true });
+}
+
+// Build definitions change rarely; cache per project for ten minutes and share
+// in-flight requests. A failed fetch is dropped so the next call retries.
+const PIPELINE_CACHE_MS = 10 * 60_000;
+const pipelineCache = new Map<string, { at: number; items: Promise<PipelineDefinition[]> }>();
+
+function cachedDefinitions(org: string, project: string, refresh: boolean): Promise<PipelineDefinition[]> {
+    const key = `${org}\u0000${project}`;
+    const hit = pipelineCache.get(key);
+    if (hit && !refresh && Date.now() - hit.at < PIPELINE_CACHE_MS) return hit.items;
+    const items = listBuildDefinitions(org, project);
+    pipelineCache.set(key, { at: Date.now(), items });
+    items.catch(() => {
+        if (pipelineCache.get(key)?.items === items) pipelineCache.delete(key);
+    });
+    return items;
+}
+
+// Inspector lookups: a definition's kind rarely changes; parameters follow the YAML on
+// a branch, so they expire quickly. Failures are dropped so the next call retries.
+const DEFINITION_INFO_MS = 5 * 60_000;
+const RUN_PARAMETERS_MS = 60_000;
+const lookupCache = new Map<string, { at: number; ttl: number; value: Promise<unknown> }>();
+
+function cachedLookup<T>(key: string, ttl: number, refresh: boolean, load: () => Promise<T>): Promise<T> {
+    const at = Date.now();
+    const hit = lookupCache.get(key);
+    if (hit && !refresh && at - hit.at < hit.ttl) return hit.value as Promise<T>;
+    for (const [k, v] of lookupCache) if (at - v.at >= v.ttl) lookupCache.delete(k);
+    const value = load();
+    lookupCache.set(key, { at, ttl, value });
+    value.catch(() => {
+        if (lookupCache.get(key)?.value === value) lookupCache.delete(key);
+    });
+    return value;
 }
 
 // Shape structured review arrays for the client and drop their raw JSON columns.

@@ -3,187 +3,1667 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ADO PR Ops — design system</title>
+<title>Devis design system</title>
 <link rel="stylesheet" href="style.css">
 <style>
-  /* Reference-page scaffolding only; every component below uses the app's real classes. */
-  html, body { height: auto; overflow: auto; }
-  body { display: block; }
-  .ds { max-width: 1040px; margin: 0 auto; padding: 48px 32px 96px; }
-  .ds h1 { margin: 0; font: 600 28px/36px var(--font-display); }
-  .ds-lede { max-width: 68ch; margin: 8px 0 0; color: var(--text-2); }
-  .ds section { margin-top: 48px; }
-  .ds h2 { margin: 0 0 4px; font: 600 20px/28px var(--font-display); }
-  .ds h2 + p { margin: 0 0 16px; color: var(--text-3); font-size: 13px; }
-  .ds-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
-  .ds-swatch { overflow: hidden; border: 1px solid var(--stroke-card); border-radius: var(--r-surface); background: var(--layer); }
-  .ds-chip { height: 56px; border-bottom: 1px solid var(--divider); }
-  .ds-swatch div:last-child { padding: 8px 10px; font: 12px/16px var(--mono); color: var(--text-2); }
-  .ds-swatch small { display: block; color: var(--text-3); }
-  .ds-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-  .ds-stage { padding: 16px; border: 1px solid var(--stroke-card); border-radius: var(--r-surface); background: var(--layer); }
-  .ds-stage + .ds-stage { margin-top: 8px; }
-  .ds-label { margin: 0 0 8px; color: var(--text-3); font-size: 12px; }
-  .ds-type > div { display: grid; grid-template-columns: 160px 1fr; align-items: baseline; gap: 16px; padding: 8px 0; border-bottom: 1px solid var(--divider); }
-  .ds-type code { color: var(--text-3); font-size: 12px; }
-  .ds-queue { width: 420px; max-width: 100%; }
-  .ds-icons { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 4px; }
-  .ds-icons span { display: flex; align-items: center; gap: 8px; padding: 8px; color: var(--text-2); font-size: 12px; }
-  .ds-flyout { position: static; visibility: visible; opacity: 1; transform: none; display: inline-block; }
+  /* Reference-page scaffold only. Every specimen below uses the app's real classes from style.css;
+     ds-* rules lay the page out and never restyle a component. */
+  html { height: auto; overflow-y: auto; scroll-behavior: smooth; }
+  body { display: block; height: auto; min-height: 100%; overflow: visible; }
+  .ds-shell { display: grid; grid-template-columns: 208px minmax(0, 1fr); gap: 32px; max-width: 1440px; margin: 0 auto; padding: 16px 24px 120px 16px; }
+  .ds-rail { position: sticky; top: 16px; align-self: start; max-height: calc(100vh - 32px); overflow-y: auto; padding: 12px 8px 16px; }
+  .ds-rail-brand { display: flex; align-items: center; gap: 10px; padding: 4px 8px 4px; }
+  .ds-rail-brand b { font-size: var(--fs-label); font-weight: 600; line-height: 20px; }
+  .ds-rail h2 { margin: 16px 8px 4px; color: var(--text-3); font-size: var(--fs-caption); font-weight: 400; line-height: var(--lh-caption); }
+  .ds-rail ol { margin: 0; padding: 0; list-style: none; }
+  .ds-rail a { position: relative; display: block; padding: 6px 8px 6px 14px; border-radius: var(--r-control); color: var(--text-2); font-size: var(--fs-label); line-height: 20px; text-decoration: none; transition: background var(--t-fast) linear, color var(--t-fast) linear; }
+  .ds-rail a:hover { background: var(--fill-hover); color: var(--text-1); }
+  .ds-rail a[aria-current="true"] { background: var(--accent-tint); color: var(--text-1); }
+  .ds-rail a[aria-current="true"]::before { content: ""; position: absolute; top: 8px; bottom: 8px; left: 3px; width: 3px; border-radius: 999px; background: var(--accent); box-shadow: 0 0 8px var(--accent-glow); }
+  .ds-main { min-width: 0; max-width: 1180px; }
+
+  .ds-hero { padding-top: 20px; }
+  .ds-hero h1 { margin: 0; font: 600 var(--fs-display)/var(--lh-display) var(--font-display); }
+  .ds-hero-sub { margin: 2px 0 12px; color: var(--accent-text); font: 600 var(--fs-body)/20px var(--font-display); }
+  .ds-lede { max-width: 72ch; margin: 0; color: var(--text-2); font-size: var(--fs-body); line-height: var(--lh-body); }
+  .ds-rules { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 32px; margin: 24px 0 0; }
+  .ds-rules > div { padding: 12px 0; border-top: 1px solid var(--divider); }
+  .ds-rules dt { font-size: var(--fs-body); font-weight: 600; line-height: 20px; }
+  .ds-rules dd { margin: 2px 0 0; color: var(--text-2); font-size: var(--fs-label); line-height: 20px; }
+
+  .ds-chapter { scroll-margin-top: 16px; }
+  .ds-chapter > h2 { margin: 72px 0 4px; padding-top: 24px; border-top: 1px solid var(--divider); font: 600 var(--fs-display)/var(--lh-display) var(--font-display); }
+  .ds-topic { margin-top: 48px; scroll-margin-top: 16px; }
+  .ds-topic > h3 { margin: 0 0 6px; font: 600 var(--fs-title)/var(--lh-title) var(--font-display); }
+  .ds-text { max-width: 72ch; margin: 0 0 16px; color: var(--text-2); font-size: var(--fs-label); line-height: 20px; }
+  .ds-text code, .ds-lede code, .ds-table code, .ds-rules code { padding: 0 4px; border-radius: var(--r-control); background: var(--fill-hover); color: var(--text-1); font-size: var(--fs-caption); }
+  .ds-cap { margin: 0 0 8px; color: var(--text-3); font-size: var(--fs-caption); line-height: var(--lh-caption); }
+  .ds-stage { padding: 24px; }
+  .ds-stage + .ds-stage, .ds-stage + .ds-cols, .ds-cols + .ds-stage { margin-top: var(--gutter); }
+  .ds-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+  .ds-block + .ds-block { margin-top: 24px; }
+  .ds-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 24px 32px; align-items: start; }
+  .ds-pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); gap: var(--gutter); align-items: start; }
+
+  .ds-table { width: 100%; border-collapse: collapse; font-size: var(--fs-label); line-height: 20px; }
+  .ds-table th { padding: 0 16px 6px 0; border-bottom: 1px solid var(--divider); color: var(--text-3); font-size: var(--fs-caption); font-weight: 400; line-height: var(--lh-caption); text-align: left; }
+  .ds-table td { padding: 8px 16px 8px 0; border-bottom: 1px solid var(--divider); color: var(--text-2); vertical-align: top; }
+  .ds-table td:first-child { color: var(--text-1); white-space: nowrap; }
+  .ds-table .mono { font: var(--fs-caption)/20px var(--mono); font-variant-numeric: tabular-nums; }
+
+  /* The composed app: panes sit on a field, never inside another pane. */
+  .ds-app { display: flex; flex-direction: column; height: 620px; margin-top: 32px; overflow: hidden; border: 1px solid var(--edge); border-radius: var(--r-pane);
+    background: linear-gradient(var(--hud-line) 1px, transparent 1px) 0 0 / 32px 32px, linear-gradient(90deg, var(--hud-line) 1px, transparent 1px) 0 0 / 32px 32px,
+      radial-gradient(70% 60% at 6% -8%, var(--pool-key), transparent 70%), radial-gradient(60% 60% at 102% 108%, var(--pool-rim), transparent 70%), var(--ink);
+    box-shadow: var(--shadow-dialog); }
+  .ds-app .titlebar { padding-right: 8px; }
+  .ds-app .workspace { min-height: 0; }
+
+  /* Foundations */
+  .ds-depth { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; padding: 24px; border-radius: var(--r-pane);
+    background: repeating-linear-gradient(135deg, rgba(76, 214, 255, .1) 0 2px, transparent 2px 14px), radial-gradient(80% 90% at 0 0, var(--pool-key), transparent 70%), var(--ink); }
+  .ds-tier { display: flex; min-height: 136px; flex-direction: column; justify-content: flex-end; gap: 2px; padding: 12px; border: 1px solid var(--edge); border-top-color: var(--edge-top); border-radius: var(--r-surface); }
+  .ds-tier strong { font-size: var(--fs-label); line-height: 20px; }
+  .ds-tier small { color: var(--text-3); font: var(--fs-caption)/var(--lh-caption) var(--mono); }
+  .ds-tier.t-field { border-style: dashed; border-color: var(--stroke-control); background: transparent; }
+  .ds-tier.t-pane { background: var(--glass); box-shadow: var(--sheen), var(--shadow-pane); }
+  .ds-tier.t-raised { background: var(--glass-2); }
+  .ds-tier.t-head { background: var(--glass-head); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); }
+  .ds-tier.t-float { background: var(--glass-float); box-shadow: var(--shadow-flyout); -webkit-backdrop-filter: var(--blur-float); backdrop-filter: var(--blur-float); }
+  .ds-tier.t-dialog { border-radius: var(--r-pane); background: var(--glass-float); box-shadow: var(--sheen), var(--shadow-dialog); }
+  .ds-swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); gap: 0 20px; }
+  .ds-swatch { display: flex; min-width: 0; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--divider); }
+  .ds-chip { flex: none; width: 36px; height: 36px; border: 1px solid var(--stroke-card); border-radius: var(--r-control);
+    background: linear-gradient(var(--c), var(--c)), repeating-conic-gradient(#0c0c0c 0 25%, #1c1c1c 0 50%) 0 0 / 10px 10px; }
+  .ds-swatch span { min-width: 0; }
+  .ds-swatch code { display: block; color: var(--text-1); font-size: var(--fs-caption); line-height: var(--lh-caption); }
+  .ds-swatch small { display: block; overflow: hidden; color: var(--text-3); font: var(--fs-caption)/var(--lh-caption) var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+  .ds-type { display: grid; grid-template-columns: 168px minmax(0, 1fr); gap: 0 24px; }
+  .ds-type > * { padding: 12px 0; border-bottom: 1px solid var(--divider); }
+  .ds-type dt { color: var(--text-3); font-size: var(--fs-caption); line-height: var(--lh-caption); }
+  .ds-type dt code { display: block; margin-top: 2px; color: var(--text-2); font-size: var(--fs-caption); }
+  .ds-type dd { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ds-shapes { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 24px; }
+  .ds-shape { display: grid; width: 120px; height: 72px; place-items: center; border: 1px solid var(--stroke-card); background: var(--card); color: var(--text-3); font: var(--fs-caption)/var(--lh-caption) var(--mono); }
+  .ds-shape.pill { width: 96px; height: 24px; border-radius: 999px; }
+  .ds-bar { width: 3px; height: 72px; border-radius: 999px; background: var(--accent); box-shadow: 0 0 8px var(--accent-glow); }
+  .ds-pillbar { width: 16px; height: 3px; border-radius: 999px; background: var(--accent); box-shadow: 0 0 8px var(--accent-glow); }
+  .ds-shape-label { display: grid; justify-items: center; gap: 8px; color: var(--text-3); font-size: var(--fs-caption); line-height: var(--lh-caption); }
+  .ds-motion { display: grid; grid-template-columns: 200px minmax(0, 1fr) 240px; gap: 32px; align-items: center; }
+  .ds-curve { width: 200px; height: 200px; border: 1px solid var(--divider); border-radius: var(--r-surface); background: var(--well); }
+  .ds-curve path.c { fill: none; stroke: var(--accent); stroke-width: 2; }
+  .ds-curve path.g { fill: none; stroke: var(--divider); stroke-dasharray: 3 4; }
+  .ds-durs { display: grid; gap: 12px; }
+  .ds-dur { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 12px; align-items: center; }
+  .ds-dur code { color: var(--text-2); font-size: var(--fs-caption); }
+  .ds-dur i { display: block; width: calc(var(--ms) * 1px); max-width: 100%; height: 6px; border-radius: 999px; background: var(--accent-tint-2); }
+  .ds-replay { display: grid; gap: 12px; justify-items: start; }
+  .ds-replay-card { width: 100%; padding: 16px; border: 1px solid var(--stroke-card); border-radius: var(--r-surface); background: var(--card); }
+  .ds-replay-card.play { animation: pane-in var(--t-slower) var(--ease); }
+  .ds-replay-card b { display: block; font: 600 var(--fs-body)/20px var(--font-display); }
+  .ds-replay-card span { color: var(--text-3); font: var(--fs-caption)/var(--lh-caption) var(--mono); }
+  .ds-icons { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 4px; margin: 0; }
+  .ds-icons figure { display: grid; justify-items: center; gap: 8px; margin: 0; padding: 14px 4px 10px; border-radius: var(--r-control); color: var(--text-2); }
+  .ds-icons figure:hover { background: var(--fill-hover); color: var(--text-1); }
+  .ds-icons figcaption { color: var(--text-3); font: var(--fs-caption)/var(--lh-caption) var(--mono); }
+
+  /* Components: floats and dialogs shown at rest instead of positioned over the page. */
+  .ds-float { position: relative !important; inset: auto !important; top: auto !important; left: auto !important; transform: none !important; animation: none !important; }
+  .ds-floats { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 24px; }
+  .ds-dialog-stage { position: relative; min-height: 480px; overflow: hidden; border: 1px solid var(--edge); border-radius: var(--r-pane);
+    background: repeating-linear-gradient(135deg, rgba(76, 214, 255, .08) 0 2px, transparent 2px 14px), radial-gradient(70% 70% at 0 0, var(--pool-key), transparent 70%), var(--ink); }
+  .ds-dialog-stage .ask-overlay { position: relative; inset: auto; z-index: 1; min-height: 480px; animation: none; }
+  .ds-dialog-stage .ds-ghost { position: absolute; inset: 0; }
+  .ds-ghost { padding: 32px; color: var(--text-2); font-size: var(--fs-body); line-height: var(--lh-body); }
+  .ds-reading { height: 420px; }
+  .ds-empty-frame { height: 320px; }
+  .ds-empty-frame.chain-pane { grid-template-rows: minmax(0, 1fr); }
+  .ds-list { height: 560px; }
+
+  /* Pipelines */
+  .ds-pipes .pipelines-view { display: block; }
+  .ds-pipes .chain-pane { height: 660px; }
+  .ds-pipes-row { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: var(--gutter); margin-top: var(--gutter); align-items: start; }
+  .ds-pipes-row .pipeline-catalog { display: flex; height: 560px; flex-direction: column; overflow: hidden; }
+  .ds-solo .chain-inspector { position: static; display: flex; width: auto; border: 0; background: transparent; box-shadow: none; }
+  .ds-blockgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(248px, 1fr)); gap: 32px 24px; padding: 32px 24px; border-radius: var(--r-surface); background: var(--well); }
+  .ds-blockgrid .chain-node { position: relative !important; left: auto !important; top: auto !important; }
+  .ds-blockgrid figure { display: grid; gap: 8px; margin: 0; }
+  .ds-blockgrid figcaption, .ds-arrows figcaption { color: var(--text-3); font-size: var(--fs-caption); line-height: var(--lh-caption); }
+  .ds-arrows { display: grid; grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); gap: 16px; }
+  .ds-arrows figure { display: grid; gap: 8px; margin: 0; padding: 12px; border-radius: var(--r-surface); background: var(--well); }
+  .ds-arrows svg { width: 100%; height: 40px; overflow: visible; }
+
+  /* Patterns */
+  .ds-kbd { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 24px 32px; }
+  .ds-kbd dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0 16px; margin: 0; }
+  .ds-kbd dt, .ds-kbd dd { margin: 0; padding: 7px 0; border-bottom: 1px solid var(--divider); font-size: var(--fs-label); line-height: 20px; }
+  .ds-kbd dd { color: var(--text-2); }
+  .ds-kbd kbd { display: inline-block; min-width: 20px; margin-right: 2px; padding: 0 6px; border: 1px solid var(--stroke-control); border-bottom-width: 2px; border-radius: var(--r-control); background: var(--control); color: var(--text-1); font-size: var(--fs-caption); line-height: 18px; text-align: center; }
+  .ds-dodont { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 32px; }
+  .ds-dodont h4 { margin: 0 0 4px; font-size: var(--fs-body); line-height: 20px; }
+  .ds-dodont ul { margin: 0; padding: 0; list-style: none; }
+  .ds-dodont li { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--divider); color: var(--text-2); font-size: var(--fs-label); line-height: 20px; }
+  .ds-dodont li .ic { margin-top: 2px; }
+  .ds-do .ic { color: var(--success); }
+  .ds-dont .ic { color: var(--critical); }
+  .ds-lanes { margin: 0; padding: 0; list-style: none; counter-reset: lane; }
+  .ds-lanes li { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--divider); counter-increment: lane; color: var(--text-2); font-size: var(--fs-label); line-height: 20px; }
+  .ds-lanes li::before { content: counter(lane); color: var(--accent-text); font: 600 var(--fs-caption)/20px var(--mono); }
+  .ds-lanes b { color: var(--text-1); font-weight: 600; }
+  .ds-foot { margin-top: 72px; padding-top: 16px; border-top: 1px solid var(--divider); color: var(--text-3); font-size: var(--fs-caption); line-height: var(--lh-caption); }
+
+  @media (max-width: 1100px) {
+    .ds-shell { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+    .ds-rail { position: static; max-height: none; }
+    .ds-rail nav { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+    .ds-rail h2 { width: 100%; margin: 8px 8px 0; }
+    .ds-rail ol { display: flex; flex-wrap: wrap; gap: 2px; }
+    .ds-depth { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .ds-motion { grid-template-columns: 200px minmax(0, 1fr); }
+    .ds-pipes-row { grid-template-columns: minmax(0, 1fr); }
+  }
+  @media (max-width: 760px) {
+    .ds-rules, .ds-dodont { grid-template-columns: minmax(0, 1fr); }
+    .ds-depth { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .ds-type { grid-template-columns: minmax(0, 1fr); }
+    .ds-type dt { padding-bottom: 0; border-bottom: 0; }
+    .ds-motion { grid-template-columns: minmax(0, 1fr); }
+  }
 </style>
 </head>
 <body>
-<main class="ds">
-  <h1>ADO PR Ops design system</h1>
-  <p class="ds-lede">A Windows 11 Fluent 2 review desk: Mica behind the queue, a solid reading layer, cards for
-    content, flyouts and dialogs above. One cyan accent is spent on selection, the primary command and focus.
-    Severity carries its own color, and everything else stays neutral. This page renders the live
-    <code>style.css</code>, so it can't drift from the app.</p>
-
-  <section>
-    <h2>Surfaces and text</h2>
-    <p>Layers step up in lightness. Text uses three emphasis levels plus disabled.</p>
-    <div class="ds-grid" data-swatches="mica layer layer-2 layer-3 sunken flyout card text-1 text-2 text-3 text-off divider"></div>
-  </section>
-
-  <section>
-    <h2>Accent and status</h2>
-    <p>Each status pairs a foreground with a 12% tint. Severity uses <code>--sev</code> through <code>.sev-*</code> and <code>.sl-*</code>.</p>
-    <div class="ds-grid" data-swatches="accent accent-text accent-tint success success-tint caution caution-tint critical critical-tint add-bg del-bg"></div>
-  </section>
-
-  <section>
-    <h2>Type</h2>
-    <p>Segoe UI Variable for interface text and Cascadia Mono for code, IDs and paths.</p>
-    <div class="ds-type">
-      <div><code>display 28/36</code><span style="font: 600 28px/36px var(--font-display)">Pull requests</span></div>
-      <div><code>title 20/28</code><span style="font: 600 20px/28px var(--font-display)">Feature flags: server-side filter pills</span></div>
-      <div><code>body strong 14/20</code><span style="font-weight: 600">Copilot review</span></div>
-      <div><code>body 14/20</code><span>Moves feature-flag filtering to the server and paginates loading.</span></div>
-      <div><code>caption 12/16</code><span style="font-size: 12px; line-height: 16px; color: var(--text-3)">Mina Park · 3h ago</span></div>
-      <div><code>mono 12/16</code><span style="font: 12px/16px var(--mono)">user/mina/change-16776707</span></div>
+<a class="skip-link" href="#overview">Skip to content</a>
+<div class="ds-shell">
+  <aside class="glass-pane ds-rail" aria-label="Design system contents">
+    <div class="ds-rail-brand">
+      <span class="brand-mark" aria-hidden="true"><svg class="ic" viewBox="0 0 16 16"><circle cx="4.5" cy="3.75" r="1.5"/><circle cx="4.5" cy="12.25" r="1.5"/><circle cx="11.5" cy="12.25" r="1.5"/><path d="M4.5 5.25v5.5M11.5 10.75V7a2.5 2.5 0 0 0-2.5-2.5H6.5M8 3l-1.5 1.5L8 6"/></svg></span>
+      <b>Design system</b>
     </div>
-  </section>
-
-  <section>
-    <h2>Commands</h2>
-    <p>Standard, subtle and accent buttons; icon buttons in the title bar and command bar.</p>
-    <div class="ds-stage ds-row">
-      <button type="button" class="btn">Standard</button>
-      <button type="button" class="btn accent">Accent</button>
-      <button type="button" class="btn ghost">Subtle</button>
-      <button type="button" class="btn sm">Small</button>
-      <button type="button" class="btn" disabled>Disabled</button>
-      <button type="button" class="icon-btn" aria-label="Refresh" data-icon="sync"></button>
-      <button type="button" class="icon-btn" aria-label="Settings" data-icon="settings"></button>
-      <button type="button" class="detail-icon-btn copilot-review-btn" aria-label="Copilot" data-icon="sparkle"></button>
-    </div>
-    <div class="ds-stage">
-      <p class="ds-label">Segmented filter</p>
-      <div class="seg" role="group" aria-label="Assignment">
-        <button type="button" class="seg-btn active">Me <span class="seg-n">12</span></button>
-        <button type="button" class="seg-btn">Not me <span class="seg-n">6</span></button>
-        <button type="button" class="seg-btn">All <span class="seg-n">18</span></button>
+    <nav>
+      <div>
+        <h2>Overview</h2>
+        <ol>
+          <li><a href="#overview">The Heads-Up Console</a></li>
+          <li><a href="#composition">Composition</a></li>
+        </ol>
       </div>
-    </div>
-  </section>
-
-  <section>
-    <h2>Badges</h2>
-    <p>20px tall, 4px radius. Status, my action, reviewer tally, review state, change type and severity.</p>
-    <div class="ds-stage ds-row">
-      <span class="st-badge st-draft">Draft</span>
-      <span class="st-badge st-completed">Completed</span>
-      <span class="authored-badge" data-icon="person">Author</span>
-      <span class="my-act vote-approved" data-icon="check">You approved</span>
-      <span class="my-act vote-commented" data-icon="chat">You commented</span>
-      <span class="tally vote-approved" data-icon="check">2</span>
-      <span class="tally vote-waiting" data-icon="clock">1</span>
-      <span class="tally vote-rejected" data-icon="dismiss">1</span>
-      <span class="rev-badge done" data-icon="sparkle">Reviewed</span>
-      <span class="chg chg-add">add</span><span class="chg chg-edit">edit</span><span class="chg chg-delete">del</span>
-    </div>
-    <div class="ds-stage ds-row">
-      <span class="sev-badge sev-critical">critical</span>
-      <span class="sev-badge sev-high">high</span>
-      <span class="sev-badge sev-medium">medium</span>
-      <span class="sev-badge sev-low">low</span>
-      <span class="sev-badge sev-nit">nit</span>
-      <span class="sl-row">
-        <button type="button" class="sl-light sl-critical"><span class="sl-count">2</span><span class="sl-orb"></span></button>
-        <button type="button" class="sl-light sl-high on"><span class="sl-count">1</span><span class="sl-orb"></span></button>
-        <button type="button" class="sl-light sl-medium"><span class="sl-count">4</span><span class="sl-orb"></span></button>
-      </span>
-    </div>
-  </section>
-
-  <section>
-    <h2>Queue row</h2>
-    <p>Title, then mono ID, author, age and branch (the branch truncates first), then badges. The open row gets an accent bar.</p>
-    <div class="ds-stage ds-queue">
-      <div class="pr-card is-open">
-        <button type="button" class="pr-open" aria-current="true">
-          <span class="pr-title">Feature flags: server-side filter pills with paginated loading</span>
-          <span class="pr-meta"><span class="pr-number">#16776707</span><span class="pr-author">Mina Park</span><span class="pr-age">3h ago</span><span class="branch"><code>user/mina/change-16776707</code></span></span>
-          <span class="pr-badges"><span class="my-act vote-approved" data-icon="check">You approved</span><span class="tally vote-approved" data-icon="check">2</span><span class="rev-badge done" data-icon="sparkle">Reviewed</span></span>
-        </button>
+      <div>
+        <h2>Foundations</h2>
+        <ol>
+          <li><a href="#depth">Depth</a></li>
+          <li><a href="#color">Color</a></li>
+          <li><a href="#type">Typography</a></li>
+          <li><a href="#shape">Shape</a></li>
+          <li><a href="#motion">Motion</a></li>
+          <li><a href="#layout">Layout</a></li>
+          <li><a href="#icons">Icons</a></li>
+        </ol>
       </div>
-      <div class="pr-card">
-        <button type="button" class="pr-open">
-          <span class="pr-title">Harden HttpUtils retry policy and surface throttling errors</span>
-          <span class="pr-meta"><span class="pr-number">#17194513</span><span class="pr-author">Tomás Novak</span><span class="pr-age">1d ago</span><span class="branch"><code>user/tomas/retry</code></span></span>
-          <span class="pr-badges"><span class="st-badge st-draft">Draft</span><span class="rev-badge running"><span class="rev-pulse" aria-hidden="true"></span>Reviewing…</span></span>
-        </button>
+      <div>
+        <h2>Components</h2>
+        <ol>
+          <li><a href="#commands">Commands</a></li>
+          <li><a href="#inputs">Inputs</a></li>
+          <li><a href="#navigation">Navigation</a></li>
+          <li><a href="#badges">Badges</a></li>
+          <li><a href="#queue">Queue</a></li>
+          <li><a href="#detail">Detail head</a></li>
+          <li><a href="#review">Copilot review</a></li>
+          <li><a href="#threads">Threads and chat</a></li>
+          <li><a href="#files">Files and diffs</a></li>
+          <li><a href="#markdown">Markdown and diagrams</a></li>
+          <li><a href="#floats">Flyouts and menus</a></li>
+          <li><a href="#dialogs">Dialogs and toasts</a></li>
+          <li><a href="#empty">Empty and loading</a></li>
+        </ol>
       </div>
-    </div>
-  </section>
-
-  <section>
-    <h2>Reviewers and files</h2>
-    <p>Persona chips carry a vote presence badge. File heads lead with the file name and drop the head of long directories.</p>
-    <div class="ds-stage">
-      <div class="reviewer-strip" style="padding-top: 0">
-        <span class="my-act vote-approved" data-icon="check">You approved</span>
-        <span class="reviewer vote-approved"><span class="persona">PR<span class="presence" data-icon="check"></span></span><span class="reviewer-name">Priya Raman</span><span class="rev-req">Required</span></span>
-        <span class="reviewer vote-waiting"><span class="persona">OB<span class="presence" data-icon="clock"></span></span><span class="reviewer-name">Owen Brooks</span></span>
+      <div>
+        <h2>Pipelines</h2>
+        <ol>
+          <li><a href="#chain">Chain canvas</a></li>
+          <li><a href="#blocks">Blocks and arrows</a></li>
+          <li><a href="#catalog">Catalog and run order</a></li>
+        </ol>
       </div>
-    </div>
-    <div class="ds-stage">
-      <div class="file">
-        <button type="button" class="file-head" aria-expanded="false"><span class="file-chev" data-icon="chevron"></span><span class="file-path"><span class="file-name">useFeatureFlagKvData.ts</span><span class="file-dir"><bdi>AppConfigPortalExtension/Client/React/Views/FeatureFlags/Hooks</bdi></span></span><span class="file-cmt-dot"></span><span class="chg chg-edit">edit</span></button>
+      <div>
+        <h2>Patterns</h2>
+        <ol>
+          <li><a href="#feed">Queue model</a></li>
+          <li><a href="#keyboard">Keyboard</a></li>
+          <li><a href="#a11y">Accessibility</a></li>
+          <li><a href="#dodont">Do's and don'ts</a></li>
+        </ol>
       </div>
-    </div>
-  </section>
+    </nav>
+  </aside>
 
-  <section>
-    <h2>Icons</h2>
-    <p>16px stroked outlines on <code>currentColor</code>; <code>svg.ic</code> keeps them from being filled.</p>
-    <div class="ds-stage ds-icons" id="icons"></div>
-  </section>
+  <main class="ds-main">
+    <section class="ds-hero ds-chapter" id="overview">
+      <h1>Devis design system</h1>
+      <p class="ds-hero-sub">The Heads-Up Console</p>
+      <p class="ds-lede">Smoked glass panes hover over a lit ink field, and light marks what the machine is attending to: the open pull request, the focused control, a running pipeline. Every specimen on this page is built from the app's own stylesheet (<code>web/style.css</code>) and the markup the app renders, so it cannot drift. <code>DESIGN.md</code> is the written spec; this page is the rendered one.</p>
+      <dl class="ds-rules">
+        <div><dt>One Light</dt><dd>Only cyan glows. If two unrelated things on screen are cyan, one of them is wrong.</dd></div>
+        <div><dt>Color Is Evidence</dt><dd>Hue appears only where it carries meaning: a vote, a status, a severity or a diff line.</dd></div>
+        <div><dt>Readout</dt><dd>IDs, branches, build numbers, durations and zoom levels are set in Cascadia Mono with tabular figures.</dd></div>
+        <div><dt>Glass Budget</dt><dd>Glass belongs to panes, heads, floats, dialogs and pipeline blocks. Everything inside a pane is a tint.</dd></div>
+        <div><dt>Near-Opaque Float</dt><dd>Anything that opens over content is at least 84% opaque, so code and diagrams never ghost through.</dd></div>
+        <div><dt>Fallback</dt><dd>Under reduced transparency the glass turns solid; in forced colors, system colors take over.</dd></div>
+      </dl>
+    </section>
 
-  <section>
-    <h2>Feedback</h2>
-    <p>Toasts sit bottom-center with a status dot.</p>
-    <div class="ds-stage ds-row">
-      <div class="toast ok" style="position: static; transform: none; animation: none">Posted 3 comments to Azure DevOps</div>
-      <div class="toast err" style="position: static; transform: none; animation: none">Could not reach Azure DevOps</div>
-    </div>
-  </section>
-</main>
+    <section class="ds-topic" id="composition">
+      <h3>Composition</h3>
+      <p class="ds-text">The title bar sits on the field. Below it the queue pane and the reading pane float with an 8px gutter. The reading pane keeps a frosted head above one scrolling column.</p>
+      <div class="ds-app">
+        <header class="titlebar">
+          <div class="brand">
+            <span class="brand-mark" aria-hidden="true"><svg class="ic" viewBox="0 0 16 16"><circle cx="4.5" cy="3.75" r="1.5"/><circle cx="4.5" cy="12.25" r="1.5"/><circle cx="11.5" cy="12.25" r="1.5"/><path d="M4.5 5.25v5.5M11.5 10.75V7a2.5 2.5 0 0 0-2.5-2.5H6.5M8 3l-1.5 1.5L8 6"/></svg></span>
+            <span class="brand-name">Devis</span>
+            <nav class="feature-nav" aria-label="Features">
+              <button type="button" class="feature-tab active" aria-current="page"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><circle cx="4.5" cy="3.75" r="1.5"/><circle cx="4.5" cy="12.25" r="1.5"/><circle cx="11.5" cy="12.25" r="1.5"/><path d="M4.5 5.25v5.5M11.5 10.75V7a2.5 2.5 0 0 0-2.5-2.5H6.5M8 3l-1.5 1.5L8 6"/></svg><span>Pull requests</span></button>
+              <button type="button" class="feature-tab"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.75" y="5.75" width="4.5" height="4.5" rx="1"/><rect x="9.75" y="2.25" width="4.5" height="4.5" rx="1"/><rect x="9.75" y="9.25" width="4.5" height="4.5" rx="1"/><path d="M6.25 8h1.5V4.5h2M7.75 8v3.5h2"/></svg><span>Pipelines</span></button>
+            </nav>
+          </div>
+          <div class="titlebar-actions">
+            <button type="button" class="icon-btn inbox-btn has-unread" aria-label="Notifications, 3 unread" data-icon="bell"><span class="inbox-badge">3</span></button>
+            <button type="button" class="icon-btn" aria-label="Refresh" data-icon="sync"></button>
+            <button type="button" class="icon-btn" aria-label="Settings" data-icon="settings"></button>
+          </div>
+        </header>
+        <div class="workspace">
+          <section class="list-pane" aria-label="Pull request queue">
+            <div class="filterbar">
+              <h1 class="list-title visually-hidden">Pull requests</h1>
+              <div class="seg queue-tabs" role="group" aria-label="Queue view">
+                <button type="button" class="seg-btn active" aria-pressed="true">My feed <span class="seg-n">9</span></button>
+                <button type="button" class="seg-btn" aria-pressed="false">All <span class="seg-n">42</span></button>
+              </div>
+              <label class="queue-search" data-icon="search"><span class="visually-hidden">Search pull requests</span><input type="search" placeholder="Search pull requests"><kbd class="search-kbd">Ctrl+F</kbd></label>
+            </div>
+            <div class="view">
+              <section class="fold lane">
+                <h2 class="lane-title"><button type="button" class="fold-head lane-head" aria-expanded="true"><span class="repo-chev" data-icon="chevron"></span><span class="lane-name">Needs your review</span><span class="count">2</span><span class="lane-note">Oldest waiting 3d</span></button></h2>
+                <div class="fold-body lane-list">
+                  <div class="pr-card selectable is-open">
+                    <input type="checkbox" class="pr-sel" aria-label="Select PR 16776707">
+                    <button type="button" class="pr-open" aria-current="true"><span class="pr-title">Throttle snapshot export when a store is near quota</span><span class="pr-meta"><span class="pr-meta-main"><span class="pr-number">#16776707</span><span class="pr-repo">AppConfig-Portal</span><span class="pr-author">Mina Park</span><span class="pr-age">2h</span></span><span class="branch"><code>mpark/snapshot-throttle</code></span></span><span class="pr-badges"><span class="rev-tally"><span class="tally vote-approved" data-icon="check">1</span></span><span class="rev-badge done" data-icon="sparkle">Reviewed</span></span></button>
+                  </div>
+                  <div class="pr-card selectable">
+                    <input type="checkbox" class="pr-sel" aria-label="Select PR 16781142">
+                    <button type="button" class="pr-open"><span class="pr-title">Move key-value paging to continuation tokens</span><span class="pr-meta"><span class="pr-meta-main"><span class="pr-number">#16781142</span><span class="pr-repo">AppConfig-DataPlane</span><span class="pr-author">Tomás Novak</span><span class="pr-age">3d</span></span><span class="branch"><code>tnovak/paging-tokens</code></span></span><span class="pr-badges"><span class="rev-badge running"><span class="rev-pulse" aria-hidden="true"></span>Reviewing…</span></span></button>
+                  </div>
+                </div>
+              </section>
+              <section class="fold lane">
+                <h2 class="lane-title"><button type="button" class="fold-head lane-head" aria-expanded="true"><span class="repo-chev" data-icon="chevron"></span><span class="lane-name">You've weighed in</span><span class="count">1</span></button></h2>
+                <div class="fold-body lane-list">
+                  <div class="pr-card selectable">
+                    <input type="checkbox" class="pr-sel" aria-label="Select PR 16769980">
+                    <button type="button" class="pr-open"><span class="pr-title">Add replica health to the store overview</span><span class="pr-meta"><span class="pr-meta-main"><span class="pr-number">#16769980</span><span class="pr-repo">AppConfig-Portal</span><span class="pr-author">Priya Raman</span><span class="pr-age">5d</span></span><span class="branch"><code>praman/replica-health</code></span></span><span class="pr-badges"><span class="my-act vote-approved" data-icon="check">You approved</span></span></button>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </section>
+          <section class="reading-pane" aria-label="Pull request">
+            <div class="pane-scroll">
+              <div class="detail-view">
+                <header class="detail-head">
+                  <div class="detail-bar">
+                    <button type="button" class="pane-back" aria-label="Back to queue" data-icon="back"></button>
+                    <h2 class="detail-title">Throttle snapshot export when a store is near quota</h2>
+                    <span class="detail-sub-actions">
+                      <button type="button" class="detail-icon-btn copilot-review-btn" aria-label="Copilot review"><svg class="stroke-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6.5 12 4l4 2.5 3.5-.8 1.2 5.1-1.9 2.5v3.4L15.5 20h-7l-3.3-3.3v-3.4l-1.9-2.5 1.2-5.1z"/><circle cx="9" cy="11.5" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="11.5" r="1" fill="currentColor" stroke="none"/><path d="M8.5 16c2.2 1.3 4.8 1.3 7 0"/></svg></button>
+                      <button type="button" class="detail-icon-btn comments-btn" aria-label="Comments, 7" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4.75h16v11.5H9.2L5 19.5v-3.25H4z"/></svg><span class="detail-icon-count">7</span></button>
+                    </span>
+                  </div>
+                  <div class="detail-sub">
+                    <span class="detail-id-group"><span class="id">#16776707</span><span class="st-badge st-published">Published</span><div class="sev-lights"><div class="sl-row"><button type="button" class="sl-light sl-high" aria-expanded="false" aria-label="2 high findings"><span class="sl-count">2</span><span class="sl-orb"></span></button><button type="button" class="sl-light sl-medium" aria-expanded="false" aria-label="1 medium finding"><span class="sl-count">1</span><span class="sl-orb"></span></button></div></div></span>
+                    <span class="detail-author" title="Created by Mina Park"><span class="persona" aria-hidden="true">MP</span><span class="detail-author-name">Mina Park</span><span class="detail-author-when">opened 2h ago</span></span>
+                    <span class="detail-repo">AppConfig-Portal · Azure AppConfig</span>
+                  </div>
+                  <nav class="detail-tabs" aria-label="Pull request sections">
+                    <button type="button" class="detail-tab" aria-current="true"><span class="detail-tab-label">Review</span><span class="detail-tab-n">3</span></button>
+                    <button type="button" class="detail-tab"><span class="detail-tab-label">Description</span></button>
+                    <button type="button" class="detail-tab"><span class="detail-tab-label">Discussion</span><span class="detail-tab-n">7</span></button>
+                    <button type="button" class="detail-tab"><span class="detail-tab-label">Files</span><span class="detail-tab-n">12</span></button>
+                  </nav>
+                </header>
+                <div class="reviewer-strip" role="list" aria-label="Reviewers">
+                  <span class="reviewer vote-approved" role="listitem"><span class="persona" aria-hidden="true">OB<span class="presence" data-icon="check"></span></span><span class="reviewer-name">Owen Brooks</span><span class="rev-req">Required</span></span>
+                  <span class="reviewer vote-none" role="listitem"><span class="persona" aria-hidden="true">PR<span class="presence" data-icon="circle"></span></span><span class="reviewer-name">Priya Raman</span></span>
+                </div>
+                <section class="pane-section">
+                  <h3 class="section-title">Description</h3>
+                  <div class="pr-desc"><div class="md"><p>Large stores could export a snapshot faster than the replica could absorb it. This change paces the export when the store is within <strong>10%</strong> of its quota.</p><ul><li>Adds <code>SnapshotPacer</code> with a token bucket.</li><li>Surfaces the pacing state on the store overview.</li></ul></div></div>
+                </section>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </section>
+
+    <section class="ds-chapter" id="foundations">
+      <h2>Foundations</h2>
+      <p class="ds-text">Tokens live in <code>:root</code> at the top of <code>web/style.css</code>. Add a token before adding a raw value.</p>
+
+      <section class="ds-topic" id="depth">
+        <h3>Depth is a stack of light</h3>
+        <p class="ds-text">Each tier is more opaque than the one below it. Panes are tinted, not blurred; blur is spent only on heads and floats. The striped backdrop shows how much of the field each tier lets through.</p>
+        <div class="ds-depth">
+          <div class="ds-tier t-field"><strong>Field</strong><small>--ink + pools</small></div>
+          <div class="ds-tier t-pane"><strong>Pane</strong><small>--glass</small></div>
+          <div class="ds-tier t-raised"><strong>Raised</strong><small>--glass-2</small></div>
+          <div class="ds-tier t-head"><strong>Head</strong><small>--glass-head</small></div>
+          <div class="ds-tier t-float"><strong>Float</strong><small>--glass-float</small></div>
+          <div class="ds-tier t-dialog"><strong>Dialog</strong><small>--shadow-dialog</small></div>
+        </div>
+        <table class="ds-table" style="margin-top:16px">
+          <thead><tr><th>Shadow</th><th>Value</th><th>Used by</th></tr></thead>
+          <tbody>
+            <tr><td><code>--shadow-pane</code></td><td class="mono">0 18px 44px -14px rgba(0,0,0,.6)</td><td>Every floating pane</td></tr>
+            <tr><td><code>--shadow-flyout</code></td><td class="mono">0 16px 36px -8px rgba(0,0,0,.62), 0 2px 8px rgba(0,0,0,.3)</td><td>Flyouts, menus, toasts, zoom cluster, block action pills, a dragged block</td></tr>
+            <tr><td><code>--shadow-dialog</code></td><td class="mono">0 40px 80px -16px rgba(0,0,0,.72), 0 4px 24px rgba(0,0,0,.36)</td><td>Dialogs and the stacked reading sheet</td></tr>
+            <tr><td><code>--accent-glow</code></td><td class="mono">8–26px halo</td><td>Emitted light, not elevation: selection, focus, running and the primary command</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="ds-topic" id="color">
+        <h3>Color</h3>
+        <p class="ds-text">One emissive cyan is the only brand color. Glass, edges and text stay neutral black, gray and white; hue is evidence. Chips sit over a checkerboard so translucent tokens show their alpha.</p>
+        <div class="glass-pane ds-stage">
+          <div class="ds-block"><p class="ds-cap">Field and glass</p><div class="ds-swatches" data-swatches="ink ink-2 ink-3 pool-key pool-rim hud-line well glass glass-2 glass-3 glass-head glass-float card card-2"></div></div>
+          <div class="ds-block"><p class="ds-cap">Fills and strokes</p><div class="ds-swatches" data-swatches="fill-hover fill-press fill-selected control control-hover control-press input-active edge edge-top divider stroke-card stroke-control stroke-control-2 stroke-input"></div></div>
+          <div class="ds-block"><p class="ds-cap">Text</p><div class="ds-swatches" data-swatches="text-1 text-2 text-3 text-off"></div></div>
+          <div class="ds-block"><p class="ds-cap">Accent</p><div class="ds-swatches" data-swatches="accent accent-hover accent-press accent-text accent-tint accent-tint-2 accent-glow on-accent focus"></div></div>
+          <div class="ds-block"><p class="ds-cap">Status and diff</p><div class="ds-swatches" data-swatches="success success-tint caution caution-tint critical critical-hover critical-tint critical-bg on-critical neutral-tint add-bg del-bg"></div></div>
+          <div class="ds-block">
+            <p class="ds-cap">Severity scale, set through <code>--sev</code>. Always paired with a label or count.</p>
+            <div class="ds-row"><span class="sev-badge sev-critical">Critical</span><span class="sev-badge sev-high">High</span><span class="sev-badge sev-medium">Medium</span><span class="sev-badge sev-low">Low</span><span class="sev-badge sev-nit">Nit</span></div>
+          </div>
+          <div class="ds-block">
+            <p class="ds-cap">Votes, set through <code>--vote</code></p>
+            <div class="ds-row"><span class="my-act vote-approved" data-icon="check">You approved</span><span class="my-act vote-waiting" data-icon="clock">You're waiting</span><span class="my-act vote-rejected" data-icon="dismiss">You rejected</span><span class="my-act vote-commented" data-icon="chat">You commented</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="ds-topic" id="type">
+        <h3>Typography</h3>
+        <p class="ds-text">Segoe UI Variable Text sets the interface at 14/20 and Display sets titles. Cascadia Mono sets every readout.</p>
+        <div class="glass-pane ds-stage">
+          <dl class="ds-type">
+            <dt>Page heading<code>Display 600 · 28/36</code></dt><dd style="font:600 28px/36px var(--font-display)">Devis design system</dd>
+            <dt>Title<code>Display 600 · 20/28</code></dt><dd style="font:600 20px/28px var(--font-display)">Throttle snapshot export when a store is near quota</dd>
+            <dt>Lane head<code>Text 600 · 14/20</code></dt><dd style="font-weight:600">Needs your review</dd>
+            <dt>Body<code>Text 400 · 14/20</code></dt><dd>Large stores could export a snapshot faster than the replica could absorb it.</dd>
+            <dt>Label<code>Text 400 · 13/20</code></dt><dd style="font-size:13px">Pull requests · Pipelines · AppConfig-Portal</dd>
+            <dt>Caption<code>Text 400 · 12/16 · text-3</code></dt><dd style="color:var(--text-3);font-size:12px;line-height:16px">opened 2h ago · 3 files changed</dd>
+            <dt>Readout<code>Cascadia Mono · 12/16</code></dt><dd style="font:12px/16px var(--mono);font-variant-numeric:tabular-nums">#16776707 · mpark/snapshot-throttle · 20250114.3 · 00:42 · 90%</dd>
+          </dl>
+        </div>
+      </section>
+
+      <section class="ds-topic" id="shape">
+        <h3>Shape</h3>
+        <p class="ds-text">Three radii and a pill. Indicators are 3px light bars: the open-row bar on the left, the active tab pill underneath.</p>
+        <div class="glass-pane ds-stage">
+          <div class="ds-shapes">
+            <span class="ds-shape-label"><span class="ds-shape" style="border-radius:var(--r-control)">6px</span>--r-control</span>
+            <span class="ds-shape-label"><span class="ds-shape" style="border-radius:var(--r-surface)">10px</span>--r-surface</span>
+            <span class="ds-shape-label"><span class="ds-shape" style="border-radius:var(--r-pane)">14px</span>--r-pane</span>
+            <span class="ds-shape-label"><span class="ds-shape pill">pill</span>Badges, chips</span>
+            <span class="ds-shape-label"><span class="ds-bar"></span>Open-row bar</span>
+            <span class="ds-shape-label"><span class="ds-pillbar"></span>Tab pill 16×3</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="ds-topic" id="motion">
+        <h3>Motion</h3>
+        <p class="ds-text">One decelerate curve at four durations. Fades and short translations only; never bounce. The one authored motion is the pane resolving out of blur when a pull request opens.</p>
+        <div class="glass-pane ds-stage">
+          <div class="ds-motion">
+            <svg class="ds-curve" viewBox="-10 -10 120 120" role="img" aria-label="Easing curve for --ease"><path class="g" d="M0 100 L100 0"/><path class="c" id="ds-ease-path" d="M0 100 C0 100 0 0 100 0"/></svg>
+            <div class="ds-durs">
+              <div class="ds-dur"><code>--t-fast 83</code><i style="--ms:83"></i></div>
+              <div class="ds-dur"><code>--t-normal 167</code><i style="--ms:167"></i></div>
+              <div class="ds-dur"><code>--t-slow 250</code><i style="--ms:250"></i></div>
+              <div class="ds-dur"><code>--t-slower 333</code><i style="--ms:333"></i></div>
+              <p class="ds-cap" id="ds-ease-label">--ease</p>
+            </div>
+            <div class="ds-replay">
+              <div class="ds-replay-card" id="ds-replay-card"><b>#16776707 resolves in</b><span>pane-in · 333ms · 6px · blur 6px</span></div>
+              <button type="button" class="btn sm" id="ds-replay" data-icon="play">Replay</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="ds-topic" id="layout">
+        <h3>Layout</h3>
+        <p class="ds-text">Panes float on the field with one gutter everywhere. Below 1100px the app sets <code>body.layout-stacked</code> and the reading pane becomes a solid sheet over the queue.</p>
+        <div class="ds-cols">
+          <table class="ds-table">
+            <thead><tr><th>Token</th><th>Value</th></tr></thead>
+            <tbody>
+              <tr><td><code>--titlebar-h</code></td><td class="mono">40px</td></tr>
+              <tr><td><code>--gutter</code></td><td class="mono">8px</td></tr>
+              <tr><td><code>--list-w</code></td><td class="mono">clamp(360px, 32vw, 460px)</td></tr>
+              <tr><td><code>--pane-pad</code></td><td class="mono">24px</td></tr>
+              <tr><td>Pipeline catalog</td><td class="mono">clamp(272px, 24vw, 340px)</td></tr>
+              <tr><td>Chain inspector</td><td class="mono">304px</td></tr>
+              <tr><td>Pipeline block</td><td class="mono">248 × 88</td></tr>
+            </tbody>
+          </table>
+          <table class="ds-table">
+            <thead><tr><th>Condition</th><th>What changes</th></tr></thead>
+            <tbody>
+              <tr><td class="mono">≤ 1100px</td><td>Reading pane becomes a sheet with a back button; the chain inspector floats over the canvas while something is selected</td></tr>
+              <tr><td class="mono">≤ 760px</td><td>The pipeline catalog stacks above the chain pane</td></tr>
+              <tr><td class="mono">≤ 600px</td><td>Feature tabs drop their labels</td></tr>
+              <tr><td>Coarse pointer</td><td>40px targets</td></tr>
+              <tr><td>Reduced transparency</td><td>Glass turns opaque, blur off, plain ink field</td></tr>
+              <tr><td>Forced colors</td><td>Blur, field and pane shadows removed; system colors</td></tr>
+              <tr><td>Reduced motion</td><td>Transitions collapse; busy spinners slow but stay</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="ds-topic" id="icons">
+        <h3>Icons</h3>
+        <p class="ds-text">One 16px stroke set from <code>icon()</code> in <code>web/src/icons.ts</code>, at a 1.25 stroke. The detail command bar uses its own 24px glyphs at 1.8. Never emoji.</p>
+        <div class="glass-pane ds-stage"><div class="ds-icons" id="ds-icons"></div></div>
+      </section>
+    </section>
+
+    <section class="ds-chapter" id="components">
+      <h2>Components</h2>
+      <p class="ds-text">Specimens are the app's own markup. Components that live inside a pane are shown on a pane-tint stage; panes and dialogs sit directly on the field.</p>
+
+      <section class="ds-topic" id="commands">
+        <h3>Commands</h3>
+        <p class="ds-text">One accent command per view. Everything else is a standard or ghost button. Danger fills only appear on destructive confirms.</p>
+        <div class="glass-pane ds-stage">
+          <div class="ds-block">
+            <p class="ds-cap">Buttons: accent, standard, ghost, danger, disabled</p>
+            <div class="ds-row">
+              <button type="button" class="btn accent" data-icon="play">Run chain</button>
+              <button type="button" class="btn">Save as .md</button>
+              <button type="button" class="btn ghost">Cancel</button>
+              <button type="button" class="btn danger">Abandon</button>
+              <button type="button" class="btn" disabled>Disabled</button>
+              <button type="button" class="btn accent" disabled>Disabled primary</button>
+            </div>
+            <div class="ds-row" style="margin-top:12px">
+              <button type="button" class="btn sm accent">Review All</button>
+              <button type="button" class="btn sm">Post to ADO</button>
+              <button type="button" class="btn ghost sm">Elaborate</button>
+              <button type="button" class="btn ghost sm">Dismiss</button>
+            </div>
+          </div>
+          <div class="ds-block">
+            <p class="ds-cap">Icon buttons. Every icon-only control carries an aria-label.</p>
+            <div class="ds-row">
+              <button type="button" class="icon-btn" aria-label="Refresh" data-icon="sync"></button>
+              <button type="button" class="icon-btn inbox-btn has-unread" aria-label="Notifications, 3 unread" data-icon="bell"><span class="inbox-badge">3</span></button>
+              <button type="button" class="icon-btn" aria-label="Settings" data-icon="settings"></button>
+              <button type="button" class="icon-btn" aria-label="New chain" data-icon="add"></button>
+              <button type="button" class="icon-btn" aria-label="Delete chain" data-icon="trash"></button>
+              <button type="button" class="icon-btn" aria-label="Stop" data-icon="stop" disabled></button>
+            </div>
+          </div>
+          <div class="ds-block">
+            <p class="ds-cap">Detail command bar: vote, status, Copilot review, refresh, open in Azure DevOps, comments. The Copilot glyph pulses while a review is being prepared.</p>
+            <div class="ds-row">
+              <span class="detail-sub-actions">
+                <span class="detail-menu-wrap"><button type="button" class="detail-icon-btn pr-decision-btn" aria-label="Vote" aria-haspopup="menu" aria-expanded="false"><svg class="stroke-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="m8.4 12.3 2.5 2.5 4.8-5.1"/></svg></button></span>
+                <span class="detail-menu-wrap"><button type="button" class="detail-icon-btn pr-lifecycle-btn" aria-label="Pull request status" aria-haspopup="menu" aria-expanded="false"><svg class="stroke-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="5.5" r="2"/><circle cx="7" cy="18.5" r="2"/><circle cx="17" cy="12" r="2"/><path d="M7 7.5v9"/><path d="M7 7.5c0 3 2.5 4.5 8 4.5"/></svg></button></span>
+                <button type="button" class="detail-icon-btn copilot-review-btn" aria-label="Review this pull request with Copilot"><svg class="stroke-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6.5 12 4l4 2.5 3.5-.8 1.2 5.1-1.9 2.5v3.4L15.5 20h-7l-3.3-3.3v-3.4l-1.9-2.5 1.2-5.1z"/><circle cx="9" cy="11.5" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="11.5" r="1" fill="currentColor" stroke="none"/><path d="M8.5 16c2.2 1.3 4.8 1.3 7 0"/></svg></button>
+                <button type="button" class="detail-icon-btn pr-refresh" aria-label="Refresh this pull request"><svg class="pr-refresh-icon stroke-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7v5h-5"/><path d="M19 12a7 7 0 1 0-2 5"/></svg></button>
+                <button type="button" class="detail-icon-btn ado-icon-btn" aria-label="Open this pull request in Azure DevOps"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 6.3 6 2.8l11.2 4V4l4.3 4.2v10.4l-10.7 2.6v-3.1l-4.8-1.4v2.1l-3.5-3.4zm3.5 8 4.8 1.1V9.1L6 10.6zm6.8 1.6 4.4-1.1V9.2l-4.4 1.4z"/></svg></button>
+                <button type="button" class="detail-icon-btn comments-btn" aria-label="Comments, 7" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4.75h16v11.5H9.2L5 19.5v-3.25H4z"/></svg><span class="detail-icon-count">7</span></button>
+              </span>
+              <span class="ds-cap" style="margin:0">Busy</span>
+              <span class="detail-sub-actions">
+                <button type="button" class="detail-icon-btn copilot-review-btn" aria-label="Preparing Copilot review" aria-busy="true" disabled><svg class="stroke-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6.5 12 4l4 2.5 3.5-.8 1.2 5.1-1.9 2.5v3.4L15.5 20h-7l-3.3-3.3v-3.4l-1.9-2.5 1.2-5.1z"/><circle cx="9" cy="11.5" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="11.5" r="1" fill="currentColor" stroke="none"/><path d="M8.5 16c2.2 1.3 4.8 1.3 7 0"/></svg></button>
+              </span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="ds-topic" id="inputs">
+        <h3>Inputs</h3>
+        <p class="ds-text">Fields are tints inside the pane, never their own glass. The active field gets a cyan underline and the focus ring is always visible.</p>
+        <div class="glass-pane ds-stage">
+          <div class="ds-cols">
+            <div>
+              <p class="ds-cap">Queue search with its shortcut</p>
+              <label class="queue-search" data-icon="search"><span class="visually-hidden">Search pull requests</span><input type="search" placeholder="Search pull requests" value="repo:portal is:reviewed"><kbd class="search-kbd">Ctrl+F</kbd></label>
+              <p class="ds-cap" style="margin-top:16px">Scope picker</p>
+              <label class="filter-field"><span class="visually-hidden">Project</span><select class="filter-select"><option>All projects</option><option>Azure AppConfig</option></select></label>
+              <p class="ds-cap" style="margin-top:16px">Selection and switch</p>
+              <div class="ds-row">
+                <label class="bulk-select-label"><input type="checkbox" class="bulk-select-all" checked><span class="visually-hidden">Select all</span></label>
+                <input type="checkbox" role="switch" class="param-switch" aria-label="Skip tests" checked>
+                <input type="checkbox" role="switch" class="param-switch" aria-label="Dry run">
+              </div>
+            </div>
+            <div>
+              <p class="ds-cap">Comment field</p>
+              <div class="reply-box"><textarea rows="2" placeholder="Reply…">Agreed; the pacer should read the quota once per page.</textarea><button type="button" class="btn sm">Reply</button></div>
+              <p class="ds-cap" style="margin-top:16px">Parameter field, changed and invalid</p>
+              <div class="param is-changed"><div class="param-head"><label class="param-label" for="ds-p1">Replica count</label><button type="button" class="param-reset">Reset</button></div><input id="ds-p1" class="param-input" value="5"><div class="param-meta"><code class="param-name">replicaCount</code><span>Default: 3</span></div></div>
+              <div class="param is-invalid" style="margin-top:12px"><div class="param-head"><label class="param-label" for="ds-p2">Ring</label></div><input id="ds-p2" class="param-input" value="ring 9" aria-invalid="true"><p class="param-error">Use a number from 0 to 4.</p></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="ds-topic" id="navigation">
+        <h3>Navigation</h3>
+        <p class="ds-text">Feature tabs and section tabs carry a 16×3 cyan pill under the active tab. The queue tabs are a segmented control with live counts.</p>
+        <div class="glass-pane ds-stage">
+          <div class="ds-block">
+            <p class="ds-cap">Feature tabs (title bar)</p>
+            <nav class="feature-nav" aria-label="Features (specimen)">
+              <button type="button" class="feature-tab active" aria-current="page"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><circle cx="4.5" cy="3.75" r="1.5"/><circle cx="4.5" cy="12.25" r="1.5"/><circle cx="11.5" cy="12.25" r="1.5"/><path d="M4.5 5.25v5.5M11.5 10.75V7a2.5 2.5 0 0 0-2.5-2.5H6.5M8 3l-1.5 1.5L8 6"/></svg><span>Pull requests</span></button>
+              <button type="button" class="feature-tab"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.75" y="5.75" width="4.5" height="4.5" rx="1"/><rect x="9.75" y="2.25" width="4.5" height="4.5" rx="1"/><rect x="9.75" y="9.25" width="4.5" height="4.5" rx="1"/><path d="M6.25 8h1.5V4.5h2M7.75 8v3.5h2"/></svg><span>Pipelines</span></button>
+            </nav>
+          </div>
+          <div class="ds-block">
+            <p class="ds-cap">Queue tabs</p>
+            <div class="seg queue-tabs" role="group" aria-label="Queue view (specimen)">
+              <button type="button" class="seg-btn active" aria-pressed="true">My feed <span class="seg-n">9</span></button>
+              <button type="button" class="seg-btn" aria-pressed="false">All <span class="seg-n">42</span></button>
+            </div>
+          </div>
+          <div class="ds-block">
+            <p class="ds-cap">Section tabs (follow the scroll)</p>
+            <nav class="detail-tabs" aria-label="Pull request sections (specimen)">
+              <button type="button" class="detail-tab" aria-current="true"><span class="detail-tab-label">Review</span><span class="detail-tab-n">3</span></button>
+              <button type="button" class="detail-tab"><span class="detail-tab-label">Description</span></button>
+              <button type="button" class="detail-tab"><span class="detail-tab-label">Discussion</span><span class="detail-tab-n">7</span></button>
+              <button type="button" class="detail-tab"><span class="detail-tab-label">Files</span><span class="detail-tab-n">12</span></button>
+            </nav>
+          </div>
+        </div>
+      </section>
+
+      <section class="ds-topic" id="badges">
+        <h3>Badges</h3>
+        <p class="ds-text">Badges are tints, never glass. Published is the default state, so the queue only calls out exceptions.</p>
+        <div class="glass-pane ds-stage">
+          <div class="ds-block"><p class="ds-cap">Status</p><div class="ds-row"><span class="st-badge st-draft">Draft</span><span class="st-badge st-published">Published</span><span class="st-badge st-completed">Completed</span><span class="st-badge st-abandoned">Abandoned</span><span class="authored-badge" data-icon="person">Author</span></div></div>
+          <div class="ds-block"><p class="ds-cap">Copilot review</p><div class="ds-row"><span class="rev-badge queued" data-icon="clock">Queued</span><span class="rev-badge running"><span class="rev-pulse" aria-hidden="true"></span>Reviewing…</span><span class="rev-badge done" data-icon="sparkle">Reviewed</span><span class="rev-badge error" data-icon="warning">Review failed</span></div></div>
+          <div class="ds-block"><p class="ds-cap">Reviewer tally and change type</p><div class="ds-row"><span class="rev-tally"><span class="tally vote-approved" data-icon="check">2<span class="visually-hidden"> approved</span></span><span class="tally vote-rejected" data-icon="dismiss">1<span class="visually-hidden"> rejected</span></span><span class="tally vote-waiting" data-icon="clock">1<span class="visually-hidden"> waiting for author</span></span></span><span class="chg chg-add">add</span><span class="chg chg-edit">edit</span><span class="chg chg-delete">del</span></div></div>
+          <div class="ds-block"><p class="ds-cap">Severity lights (detail head), one lit</p><div class="sev-lights"><div class="sl-row"><button type="button" class="sl-light sl-critical" aria-expanded="false" aria-label="1 critical finding"><span class="sl-count">1</span><span class="sl-orb"></span></button><button type="button" class="sl-light sl-high on" aria-expanded="true" aria-label="2 high findings"><span class="sl-count">2</span><span class="sl-orb"></span></button><button type="button" class="sl-light sl-medium" aria-expanded="false" aria-label="3 medium findings"><span class="sl-count">3</span><span class="sl-orb"></span></button><button type="button" class="sl-light sl-low" aria-expanded="false" aria-label="1 low finding"><span class="sl-count">1</span><span class="sl-orb"></span></button><button type="button" class="sl-light sl-nit" aria-expanded="false" aria-label="4 nit findings"><span class="sl-count">4</span><span class="sl-orb"></span></button></div></div></div>
+        </div>
+      </section>
+
+      <section class="ds-topic" id="queue">
+        <h3>Queue</h3>
+        <p class="ds-text">My feed sorts every PR into exactly one lane. All groups by repository, folded by default. Rows keep their meta on one line: the branch drops first, then the repository truncates, then the author.</p>
+        <div class="ds-pair">
+          <section class="list-pane ds-list" aria-label="My feed (specimen)">
+            <div class="filterbar">
+              <div class="seg queue-tabs" role="group" aria-label="Queue view"><button type="button" class="seg-btn active" aria-pressed="true">My feed <span class="seg-n">9</span></button><button type="button" class="seg-btn" aria-pressed="false">All <span class="seg-n">42</span></button></div>
+              <label class="queue-search" data-icon="search"><span class="visually-hidden">Search pull requests</span><input type="search" placeholder="Search pull requests"><kbd class="search-kbd">Ctrl+F</kbd></label>
+              <div class="bulk-review-host"><div class="bulk-review-bar" role="region" aria-label="Bulk actions"><label class="bulk-select-label"><input type="checkbox" class="bulk-select-all" checked><span class="visually-hidden">Select all</span></label><span class="bulk-count" role="status">2 selected</span><button type="button" class="btn ghost sm bulk-clear" aria-label="Clear selection" data-icon="dismiss"></button><button type="button" class="btn ghost sm feed-hide">Hide</button><button type="button" class="btn sm bulk-review">Review All</button></div></div>
+            </div>
+            <div class="view">
+              <section class="fold lane">
+                <h2 class="lane-title"><button type="button" class="fold-head lane-head" aria-expanded="true"><span class="repo-chev" data-icon="chevron"></span><span class="lane-name">Needs your review</span><span class="count">2</span><span class="lane-note">Oldest waiting 3d</span></button></h2>
+                <div class="fold-body lane-list">
+                  <div class="pr-card selectable selected"><input type="checkbox" class="pr-sel" aria-label="Select PR 16781142" checked><button type="button" class="pr-open"><span class="pr-title">Move key-value paging to continuation tokens</span><span class="pr-meta"><span class="pr-meta-main"><span class="pr-number">#16781142</span><span class="pr-repo">AppConfig-DataPlane</span><span class="pr-author">Tomás Novak</span><span class="pr-age">3d</span></span><span class="branch"><code>tnovak/paging-tokens</code></span></span><span class="pr-badges"><span class="rev-tally"><span class="tally vote-waiting" data-icon="clock">1</span></span></span></button></div>
+                  <div class="pr-card selectable selected"><input type="checkbox" class="pr-sel" aria-label="Select PR 16784410" checked><button type="button" class="pr-open"><span class="pr-title">Retry replica sync on transient 503s</span><span class="pr-meta"><span class="pr-meta-main"><span class="pr-number">#16784410</span><span class="pr-repo">AppConfig-DataPlane</span><span class="pr-author">Owen Brooks</span><span class="pr-age">1d</span></span><span class="branch"><code>obrooks/sync-retry</code></span></span><span class="pr-badges"></span></button></div>
+                </div>
+              </section>
+              <section class="fold lane">
+                <h2 class="lane-title"><button type="button" class="fold-head lane-head" aria-expanded="true"><span class="repo-chev" data-icon="chevron"></span><span class="lane-name">Copilot reviewed</span><span class="count">2</span><span class="lane-note">1 in progress</span></button></h2>
+                <div class="fold-body lane-list">
+                  <div class="pr-card selectable is-open"><input type="checkbox" class="pr-sel" aria-label="PR 16776707 is already queued or being reviewed" disabled><button type="button" class="pr-open" aria-current="true"><span class="pr-title">Throttle snapshot export when a store is near quota</span><span class="pr-meta"><span class="pr-meta-main"><span class="pr-number">#16776707</span><span class="pr-repo">AppConfig-Portal</span><span class="pr-author">Mina Park</span><span class="pr-age">2h</span></span><span class="branch"><code>mpark/snapshot-throttle</code></span></span><span class="pr-badges"><span class="rev-badge running"><span class="rev-pulse" aria-hidden="true"></span>Reviewing…</span></span></button></div>
+                  <div class="pr-card selectable"><input type="checkbox" class="pr-sel" aria-label="Select PR 16770321"><button type="button" class="pr-open"><span class="pr-title">Split feature-flag filters into their own module</span><span class="pr-meta"><span class="pr-meta-main"><span class="pr-number">#16770321</span><span class="pr-repo">AppConfig-SDK</span><span class="pr-author">Priya Raman</span><span class="pr-age">4d</span></span><span class="branch"><code>praman/ff-filters</code></span></span><span class="pr-badges"><span class="my-act vote-commented" data-icon="chat">You commented</span><span class="rev-badge done" data-icon="sparkle">Reviewed</span></span></button></div>
+                </div>
+              </section>
+              <section class="fold lane">
+                <h2 class="lane-title"><button type="button" class="fold-head lane-head" aria-expanded="true"><span class="repo-chev" data-icon="chevron"></span><span class="lane-name">Your pull requests</span><span class="count">3</span><span class="lane-note">1 waiting on you</span></button></h2>
+                <div class="fold-body lane-list">
+                  <div class="pr-card selectable"><input type="checkbox" class="pr-sel" aria-label="Select PR 16772208"><button type="button" class="pr-open"><span class="pr-title">Document the snapshot retention policy</span><span class="pr-meta"><span class="pr-meta-main"><span class="pr-number">#16772208</span><span class="pr-repo">AppConfig-Docs</span><span class="pr-age">6d</span></span><span class="branch"><code>docs/retention</code></span></span><span class="pr-badges"><span class="rev-tally"><span class="tally vote-rejected" data-icon="dismiss">1</span></span></span></button></div>
+                  <section class="fold lane-drafts collapsed"><button type="button" class="fold-head drafts-head" aria-expanded="false"><span class="repo-chev" data-icon="chevron"></span><span class="drafts-name">2 drafts</span></button><div class="fold-body drafts-list"></div></section>
+                </div>
+              </section>
+              <div class="feed-foot"><span>3 pull requests hidden from your feed</span><button type="button" class="btn ghost sm">Show</button></div>
+            </div>
+          </section>
+          <section class="list-pane ds-list" aria-label="All pull requests (specimen)">
+            <div class="filterbar">
+              <div class="seg queue-tabs" role="group" aria-label="Queue view"><button type="button" class="seg-btn" aria-pressed="false">My feed <span class="seg-n">9</span></button><button type="button" class="seg-btn active" aria-pressed="true">All <span class="seg-n">42</span></button></div>
+              <label class="queue-search" data-icon="search"><span class="visually-hidden">Search pull requests</span><input type="search" placeholder="Search pull requests"><kbd class="search-kbd">Ctrl+F</kbd></label>
+            </div>
+            <div class="view">
+              <div class="all-head"><span class="all-sum">42 pull requests in 5 repositories</span><button type="button" class="btn ghost sm all-fold">Collapse all</button></div>
+              <section class="fold repo-group"><button type="button" class="fold-head repo-head" aria-expanded="true"><span class="repo-chev" data-icon="chevron"></span><span class="repo-name">AppConfig-DataPlane</span><span class="count">14</span><span class="proj">Azure AppConfig</span></button>
+                <div class="fold-body repo-list">
+                  <div class="pr-card selectable"><input type="checkbox" class="pr-sel" aria-label="Select PR 16781142"><button type="button" class="pr-open"><span class="pr-title">Move key-value paging to continuation tokens</span><span class="pr-meta"><span class="pr-meta-main"><span class="pr-number">#16781142</span><span class="pr-author">Tomás Novak</span><span class="pr-age">3d</span></span><span class="branch"><code>tnovak/paging-tokens</code></span></span><span class="pr-badges"></span></button></div>
+                  <div class="pr-card selectable"><input type="checkbox" class="pr-sel" aria-label="Select PR 16766014"><button type="button" class="pr-open"><span class="pr-title">Bump the storage client to 12.24</span><span class="pr-meta"><span class="pr-meta-main"><span class="pr-number">#16766014</span><span class="pr-author">Lena Ortiz</span><span class="pr-age">8d</span></span><span class="branch"><code>deps/storage-12.24</code></span></span><span class="pr-badges"><span class="st-badge st-draft">Draft</span></span></button></div>
+                </div>
+              </section>
+              <section class="fold repo-group collapsed"><button type="button" class="fold-head repo-head" aria-expanded="false"><span class="repo-chev" data-icon="chevron"></span><span class="repo-name">AppConfig-Docs</span><span class="count">6</span><span class="proj">Azure AppConfig</span></button><div class="fold-body repo-list"></div></section>
+              <section class="fold repo-group collapsed"><button type="button" class="fold-head repo-head" aria-expanded="false"><span class="repo-chev" data-icon="chevron"></span><span class="repo-name">AppConfig-Portal</span><span class="count">17</span><span class="proj">Azure AppConfig</span></button><div class="fold-body repo-list"></div></section>
+              <section class="fold repo-group collapsed"><button type="button" class="fold-head repo-head" aria-expanded="false"><span class="repo-chev" data-icon="chevron"></span><span class="repo-name">AppConfig-SDK</span><span class="count">5</span><span class="proj">Azure AppConfig</span></button><div class="fold-body repo-list"></div></section>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section class="ds-topic" id="detail">
+        <h3>Detail head</h3>
+        <p class="ds-text">The one frosted head in the reading pane. Title and command bar, then identity (ID, status, severity lights), author, repository and branch, then the section tabs. Reviewers follow, with your own action first.</p>
+        <section class="reading-pane ds-reading" aria-label="Pull request (specimen)">
+          <div class="pane-scroll">
+            <div class="detail-view">
+              <header class="detail-head">
+                <div class="detail-bar">
+                  <button type="button" class="pane-back" aria-label="Back to queue" data-icon="back"></button>
+                  <h2 class="detail-title">Throttle snapshot export when a store is near quota</h2>
+                  <span class="detail-sub-actions">
+                    <span class="detail-menu-wrap"><button type="button" class="detail-icon-btn pr-decision-btn" aria-label="Vote" aria-haspopup="menu" aria-expanded="false"><svg class="stroke-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="m8.4 12.3 2.5 2.5 4.8-5.1"/></svg></button></span>
+                    <span class="detail-menu-wrap"><button type="button" class="detail-icon-btn pr-lifecycle-btn" aria-label="Pull request status" aria-haspopup="menu" aria-expanded="false"><svg class="stroke-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="5.5" r="2"/><circle cx="7" cy="18.5" r="2"/><circle cx="17" cy="12" r="2"/><path d="M7 7.5v9"/><path d="M7 7.5c0 3 2.5 4.5 8 4.5"/></svg></button></span>
+                    <button type="button" class="detail-icon-btn copilot-review-btn" aria-label="Review this pull request with Copilot"><svg class="stroke-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6.5 12 4l4 2.5 3.5-.8 1.2 5.1-1.9 2.5v3.4L15.5 20h-7l-3.3-3.3v-3.4l-1.9-2.5 1.2-5.1z"/><circle cx="9" cy="11.5" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="11.5" r="1" fill="currentColor" stroke="none"/><path d="M8.5 16c2.2 1.3 4.8 1.3 7 0"/></svg></button>
+                    <button type="button" class="detail-icon-btn pr-refresh" aria-label="Refresh this pull request"><svg class="pr-refresh-icon stroke-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7v5h-5"/><path d="M19 12a7 7 0 1 0-2 5"/></svg></button>
+                    <button type="button" class="detail-icon-btn ado-icon-btn" aria-label="Open this pull request in Azure DevOps"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 6.3 6 2.8l11.2 4V4l4.3 4.2v10.4l-10.7 2.6v-3.1l-4.8-1.4v2.1l-3.5-3.4zm3.5 8 4.8 1.1V9.1L6 10.6zm6.8 1.6 4.4-1.1V9.2l-4.4 1.4z"/></svg></button>
+                    <button type="button" class="detail-icon-btn comments-btn" aria-label="Comments, 7" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4.75h16v11.5H9.2L5 19.5v-3.25H4z"/></svg><span class="detail-icon-count">7</span></button>
+                  </span>
+                </div>
+                <div class="detail-sub">
+                  <span class="detail-id-group"><span class="id">#16776707</span><span class="st-badge st-published">Published</span><div class="sev-lights"><div class="sl-row"><button type="button" class="sl-light sl-high" aria-expanded="false" aria-label="2 high findings"><span class="sl-count">2</span><span class="sl-orb"></span></button><button type="button" class="sl-light sl-medium" aria-expanded="false" aria-label="1 medium finding"><span class="sl-count">1</span><span class="sl-orb"></span></button></div></div></span>
+                  <span class="detail-author" title="Created by Mina Park"><span class="persona" aria-hidden="true">MP</span><span class="detail-author-name">Mina Park</span><span class="detail-author-when">opened 2h ago</span></span>
+                  <span class="detail-repo">AppConfig-Portal · Azure AppConfig</span>
+                  <span class="detail-branch"><code>mpark/snapshot-throttle</code><span class="branch-arrow" aria-label="into">→</span><code>main</code></span>
+                </div>
+                <nav class="detail-tabs" aria-label="Pull request sections (specimen)">
+                  <button type="button" class="detail-tab"><span class="detail-tab-label">Review</span><span class="detail-tab-n">3</span></button>
+                  <button type="button" class="detail-tab" aria-current="true"><span class="detail-tab-label">Description</span></button>
+                  <button type="button" class="detail-tab"><span class="detail-tab-label">Discussion</span><span class="detail-tab-n">7</span></button>
+                  <button type="button" class="detail-tab"><span class="detail-tab-label">Files</span><span class="detail-tab-n">12</span></button>
+                </nav>
+              </header>
+              <div class="reviewer-strip" role="list" aria-label="Reviewers">
+                <span class="my-act vote-commented" role="listitem" data-icon="chat">You commented</span>
+                <span class="reviewer vote-approved" role="listitem"><span class="persona" aria-hidden="true">OB<span class="presence" data-icon="check"></span></span><span class="reviewer-name">Owen Brooks</span><span class="visually-hidden">, Approved</span><span class="rev-req">Required</span></span>
+                <span class="reviewer vote-waiting" role="listitem"><span class="persona" aria-hidden="true">TN<span class="presence" data-icon="clock"></span></span><span class="reviewer-name">Tomás Novak</span><span class="visually-hidden">, Waiting for author</span></span>
+                <span class="reviewer vote-rejected" role="listitem"><span class="persona" aria-hidden="true">LO<span class="presence" data-icon="dismiss"></span></span><span class="reviewer-name">Lena Ortiz</span><span class="visually-hidden">, Rejected</span></span>
+                <span class="reviewer vote-none" role="listitem"><span class="persona" aria-hidden="true">PR<span class="presence" data-icon="circle"></span></span><span class="reviewer-name">Priya Raman</span><span class="visually-hidden">, No vote</span></span>
+              </div>
+              <section class="pane-section">
+                <h3 class="section-title">Description</h3>
+                <div class="pr-desc"><div class="md"><p>Large stores could export a snapshot faster than the replica could absorb it. This change paces the export when the store is within <strong>10%</strong> of its quota.</p></div></div>
+              </section>
+            </div>
+          </div>
+        </section>
+        <div class="glass-pane ds-stage">
+          <p class="ds-cap">Stale banner: the PR changed since it was loaded</p>
+          <div class="stale-banner" role="alert" data-icon="warning"><span>This pull request was updated 4 minutes ago.</span><button type="button" class="btn ghost sm">Reload</button></div>
+        </div>
+      </section>
+
+      <section class="ds-topic" id="review">
+        <h3>Copilot review</h3>
+        <p class="ds-text">The review card leads the reading column. Semantic findings live in the card; inline findings are staged in the diff, each with its own Post button. Nothing reaches Azure DevOps until a person posts it.</p>
+        <div class="glass-pane ds-stage">
+          <section class="rev-panel done">
+            <div class="rev-head done"><button type="button" class="rev-toggle" aria-expanded="true"><span class="rev-chev" aria-hidden="true" data-icon="chevron"></span><span class="rev-title" data-icon="sparkle">Copilot review</span></button><span class="rev-summary">2 high, 1 medium · pacing is sound, quota read is racy</span><span class="rev-when">12m</span><button type="button" class="rev-session" title="Reviewed in Copilot session 7f3c91ab" data-icon="copy">7f3c91ab</button></div>
+            <div class="rev-body">
+              <div class="rev-actions"><button type="button" class="btn sm rev-save">Save as .md</button><button type="button" class="btn sm ghost rev-terminal">Open in terminal</button><span class="rev-save-status ok">Saved</span></div>
+              <div class="rev-sub">Semantic story</div>
+              <div class="md"><p>The export now asks a <code>SnapshotPacer</code> for each page. The pacer reads the store quota once at start, so a quota change mid-export is not seen.</p></div>
+              <div class="rev-sub">High-level semantic findings</div>
+              <div class="semantic-findings">
+                <article class="semantic-finding sev-high">
+                  <div class="semantic-finding-head"><span class="semantic-category">Correctness</span><span class="semantic-severity">high</span><strong>Quota is read once per export</strong></div>
+                  <div class="semantic-comment md"><p>A long export can outlive a quota change. Re-read the quota every <em>n</em> pages or subscribe to the change feed.</p></div>
+                  <div class="semantic-files"><span>SnapshotPacer.cs</span><span>ExportService.cs</span></div>
+                  <div class="semantic-actions"><button type="button" class="btn sm semantic-post">Post to ADO</button></div>
+                </article>
+              </div>
+              <div class="rev-staged-hint" data-icon="sparkle">3 inline review comments staged in the diff below. Expand a changed file to review and post them.</div>
+            </div>
+          </section>
+        </div>
+        <div class="ds-cols" style="margin-top:var(--gutter)">
+          <div class="glass-pane ds-stage"><p class="ds-cap">Queued</p><div class="rev-panel queued"><div class="rev-head" data-icon="clock">Review queued</div><div class="rev-note">Waiting for an independent reviewer session to become available.</div></div></div>
+          <div class="glass-pane ds-stage"><p class="ds-cap">Running</p><div class="rev-panel running"><div class="rev-head"><span class="spinner"></span> Copilot is reviewing this PR in the background…</div><div class="rev-note">Results will appear here automatically when the review completes.</div></div></div>
+          <div class="glass-pane ds-stage"><p class="ds-cap">Failed</p><div class="rev-panel error"><div class="rev-head" data-icon="warning">Background review failed</div><div class="rev-note">The reviewer session exited before writing results.</div></div></div>
+        </div>
+      </section>
+
+      <section class="ds-topic" id="threads">
+        <h3>Threads and reviewer chat</h3>
+        <p class="ds-text">Human threads and staged AI findings share one shape. The reviewer chat resumes the session that wrote the review, and can stage more findings.</p>
+        <div class="glass-pane ds-stage">
+          <div class="ds-cols">
+            <div>
+              <p class="ds-cap">Thread</p>
+              <div class="thread">
+                <button type="button" class="thread-loc" aria-expanded="true"><span class="thread-chev" aria-hidden="true" data-icon="chevron"></span><span class="thread-where">SnapshotPacer.cs:42</span><span class="thread-count">2</span><span class="st">Active</span></button>
+                <div class="thread-body">
+                  <div class="cmt-list">
+                    <div class="comment"><div class="cmt-head"><span class="cmt-author">Owen Brooks</span><span class="cmt-time">1h</span></div><div class="cmt-body"><p>Could the bucket size come from config instead of a constant?</p></div></div>
+                    <div class="comment reply"><div class="cmt-head"><span class="cmt-author">Mina Park</span><span class="cmt-time">40m</span></div><div class="cmt-body"><p>Yes, moved it to <code>Export:PacerBurst</code>.</p></div></div>
+                  </div>
+                  <div class="reply-box"><textarea rows="1" placeholder="Reply…"></textarea><button type="button" class="btn sm">Reply</button><button type="button" class="btn ghost sm thread-status-toggle">Resolve</button></div>
+                </div>
+              </div>
+              <p class="ds-cap" style="margin-top:16px">Staged AI finding</p>
+              <div class="thread staged">
+                <div class="thread-loc staged-loc"><span class="sev-badge sev-medium">medium</span><span class="thread-where">ExportService.cs:88–91</span><span class="staged-tag">AI · staged</span></div>
+                <div class="thread-body">
+                  <div class="comment ai"><div class="cmt-head"><span class="cmt-author">Copilot review</span></div><div class="cmt-title">Cancellation is not passed to the pacer</div><div class="cmt-body">PaceAsync ignores the export's token, so a cancelled export keeps waiting for the next window.</div></div>
+                  <div class="staged-actions"><button type="button" class="btn sm post">Post to ADO</button><button type="button" class="btn ghost sm elaborate">Elaborate</button><button type="button" class="btn ghost sm dismiss">Dismiss</button></div>
+                </div>
+              </div>
+            </div>
+            <div>
+              <p class="ds-cap">Reviewer chat</p>
+              <details class="rev-chat" open>
+                <summary><span class="rev-chat-title">Ask the reviewer</span><span class="rev-chat-hint">Resumes session 7f3c91ab</span></summary>
+                <div class="rev-chat-log" role="log" aria-label="Reviewer chat">
+                  <div class="rev-chat-msg user">Is the quota race worth blocking on?</div>
+                  <div class="rev-chat-msg assistant md"><p>Not blocking. A stale quota only makes the export slower than it needs to be, never faster than the replica allows.</p></div>
+                  <div class="rev-chat-task">Staged 1 finding on ExportService.cs</div>
+                  <div class="rev-chat-msg assistant thinking"><span class="spinner"></span> Thinking…</div>
+                </div>
+                <div class="rev-chat-status">Connected</div>
+                <form class="rev-chat-form" onsubmit="return false"><textarea class="rev-chat-input" rows="2" placeholder="Ask about this review" aria-label="Message the reviewer"></textarea><button type="submit" class="btn sm rev-chat-send">Send</button></form>
+              </details>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="ds-topic" id="files">
+        <h3>Files and diffs</h3>
+        <p class="ds-text">File heads lead with the name in mono; the directory loses its head first. Diff bodies are recessed into the well. Select code to ask Copilot or comment.</p>
+        <div class="glass-pane ds-stage">
+          <div class="file open">
+            <button type="button" class="file-head" aria-expanded="true"><span class="file-chev" aria-hidden="true" data-icon="chevron"></span><span class="file-path" title="src/AppConfig.Portal/Services/Export/ExportService.cs"><span class="file-name">ExportService.cs</span><span class="file-dir"><bdi>src/AppConfig.Portal/Services/Export</bdi></span></span><span class="file-ai-dot" title="1 staged AI comment" data-icon="sparkle">1</span><span class="file-cmt-dot" title="1 comment"></span><span class="chg chg-edit">edit</span></button>
+            <div class="file-body"><div class="diff-wrap"><table class="diff"><tbody>
+              <tr class="gap"><td colspan="5">⋯</td></tr>
+              <tr><td class="gutter"></td><td class="ln">84</td><td class="ln">84</td><td class="sign"></td><td class="code"><span class="t-k">public async</span> Task ExportAsync(Snapshot snapshot, CancellationToken ct)</td></tr>
+              <tr><td class="gutter"></td><td class="ln">85</td><td class="ln">85</td><td class="sign"></td><td class="code">{</td></tr>
+              <tr class="del"><td class="gutter"></td><td class="ln">86</td><td class="ln"></td><td class="sign">-</td><td class="code">    <span class="t-k">foreach</span> (<span class="t-k">var</span> page <span class="t-k">in</span> snapshot.Pages)</td></tr>
+              <tr class="add"><td class="gutter"><button type="button" class="cmt-bubble" tabindex="-1" aria-label="Toggle comments" data-icon="chat"><span class="n">1</span></button></td><td class="ln"></td><td class="ln">86</td><td class="sign">+</td><td class="code">    <span class="t-k">await foreach</span> (<span class="t-k">var</span> page <span class="t-k">in</span> _pacer.PaceAsync(snapshot.Pages))</td></tr>
+              <tr class="thread-row"><td colspan="5"><div class="thread"><button type="button" class="thread-loc" aria-expanded="true"><span class="thread-chev" aria-hidden="true" data-icon="chevron"></span><span class="thread-where">ExportService.cs:86</span><span class="thread-count">1</span><span class="st resolved">Resolved</span></button><div class="thread-body"><div class="cmt-list"><div class="comment"><div class="cmt-head"><span class="cmt-author">Owen Brooks</span><span class="cmt-time">2h</span></div><div class="cmt-body"><p>Nice, this reads much better.</p></div></div></div></div></div></td></tr>
+              <tr class="add sel"><td class="gutter"></td><td class="ln"></td><td class="ln">87</td><td class="sign">+</td><td class="code">        <span class="t-c">// Back off when the store is within 10% of quota.</span></td></tr>
+              <tr class="add sel"><td class="gutter"></td><td class="ln"></td><td class="ln">88</td><td class="sign">+</td><td class="code">        <span class="t-k">await</span> _pacer.WaitAsync(<span class="t-n">0.9</span>, <span class="t-s">"export"</span>);</td></tr>
+              <tr><td class="gutter"></td><td class="ln">87</td><td class="ln">89</td><td class="sign"></td><td class="code">        <span class="t-k">await</span> _writer.WriteAsync(page, ct);</td></tr>
+              <tr class="staged-row"><td colspan="5"><div class="thread staged"><div class="thread-loc staged-loc"><span class="sev-badge sev-medium">medium</span><span class="thread-where">ExportService.cs:88</span><span class="staged-tag">AI · staged</span></div><div class="thread-body"><div class="comment ai"><div class="cmt-head"><span class="cmt-author">Copilot review</span></div><div class="cmt-title">Cancellation is not passed to the pacer</div><div class="cmt-body">WaitAsync has no token, so a cancelled export keeps waiting.</div></div><div class="staged-actions"><button type="button" class="btn sm post">Post to ADO</button><button type="button" class="btn ghost sm elaborate">Elaborate</button><button type="button" class="btn ghost sm dismiss">Dismiss</button></div></div></div></td></tr>
+              <tr class="gap"><td colspan="5">⋯</td></tr>
+            </tbody></table></div></div>
+          </div>
+          <div class="file">
+            <button type="button" class="file-head" aria-expanded="false"><span class="file-chev" aria-hidden="true" data-icon="chevron"></span><span class="file-path"><span class="file-name">SnapshotPacer.cs</span><span class="file-dir"><bdi>src/AppConfig.Portal/Services/Export</bdi></span></span><span class="chg chg-add">add</span></button>
+          </div>
+          <div class="file">
+            <button type="button" class="file-head" aria-expanded="false"><span class="file-chev" aria-hidden="true" data-icon="chevron"></span><span class="file-path"><span class="file-name">LegacyExporter.cs</span><span class="file-dir"><bdi>src/AppConfig.Portal/Services</bdi></span></span><span class="chg chg-delete">del</span></button>
+          </div>
+          <div class="ds-row" style="margin-top:16px"><span class="ds-cap" style="margin:0">Selection toolbar</span><div class="sel-toolbar ds-float"><button type="button" class="sel-btn sel-ask" aria-label="Ask Copilot about the selection" data-icon="sparkle"></button><button type="button" class="sel-btn sel-comment" aria-label="Comment on the selection" data-icon="chat"></button></div></div>
+        </div>
+      </section>
+
+      <section class="ds-topic" id="markdown">
+        <h3>Markdown and diagrams</h3>
+        <p class="ds-text">Descriptions, comments and reviews render Markdown; raw HTML and Markdown never show. Mermaid diagrams get a pan and zoom frame in the well.</p>
+        <div class="glass-pane ds-stage">
+          <div class="ds-cols">
+            <div class="md">
+              <h2>Snapshot pacing</h2>
+              <p>Exports now pace themselves when a store is within <strong>10%</strong> of quota. See <a href="#markdown">the runbook</a> and <code>Export:PacerBurst</code>.</p>
+              <ul class="contains-task-list"><li class="md-task"><input type="checkbox" class="md-check" disabled checked> Pacer behind a flag</li><li class="md-task"><input type="checkbox" class="md-check" disabled> Dashboards for pacing state</li></ul>
+              <blockquote><p>Exports should never outrun the replica.</p></blockquote>
+              <div class="md-table"><table><thead><tr><th>Store size</th><th>Burst</th></tr></thead><tbody><tr><td>&lt; 1 GB</td><td>64 pages</td></tr><tr><td>&lt; 10 GB</td><td>16 pages</td></tr></tbody></table></div>
+              <pre class="md-pre"><code>services.AddSingleton&lt;SnapshotPacer&gt;();</code></pre>
+            </div>
+            <div class="mermaid adjustable">
+              <div class="mmd-toolbar"><span class="mmd-hint">Drag to pan · Ctrl+scroll to zoom</span><button type="button" class="mmd-control">Fit</button><button type="button" class="mmd-control" aria-label="Zoom out">−</button><button type="button" class="mmd-control mmd-scale">100%</button><button type="button" class="mmd-control" aria-label="Zoom in">+</button></div>
+              <div class="mmd-viewport" tabindex="0" role="group" aria-label="Diagram"><div class="mmd-stage">
+                <svg viewBox="0 0 320 200" width="320" height="200" role="img" aria-label="Export flow: Export, Pacer, Writer, Replica" style="font:12px var(--font)">
+                  <g fill="none" stroke="#8ab4d8" stroke-width="1.2"><path d="M70 50h56M194 50h56M160 70v48"/><path d="m120 46 6 4-6 4M244 46 250 50l-6 4M156 112l4 6 4-6"/></g>
+                  <g fill="#1d2b40" stroke="#5f86ad"><rect x="10" y="30" width="60" height="40" rx="6"/><rect x="126" y="30" width="68" height="40" rx="6"/><rect x="250" y="30" width="60" height="40" rx="6"/><rect x="120" y="118" width="80" height="40" rx="6"/></g>
+                  <g fill="#e6eefb" text-anchor="middle"><text x="40" y="54">Export</text><text x="160" y="54">Pacer</text><text x="280" y="54">Writer</text><text x="160" y="142">Quota</text></g>
+                </svg>
+              </div></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="ds-topic" id="floats">
+        <h3>Flyouts and menus</h3>
+        <p class="ds-text">Floats are near-opaque glass with the strong blur and the flyout shadow. They are shown here at rest; in the app they open over content.</p>
+        <div class="ds-floats">
+          <div class="detail-menu ds-float" role="menu" aria-label="Vote (specimen)">
+            <button type="button" class="detail-menu-item" role="menuitemradio" aria-checked="true"><span class="detail-menu-check" aria-hidden="true" data-icon="check"></span><span class="detail-menu-text"><span class="detail-menu-label">Approve</span></span></button>
+            <button type="button" class="detail-menu-item" role="menuitemradio" aria-checked="false"><span class="detail-menu-check" aria-hidden="true"></span><span class="detail-menu-text"><span class="detail-menu-label">Approve with suggestions</span></span></button>
+            <button type="button" class="detail-menu-item" role="menuitemradio" aria-checked="false"><span class="detail-menu-check" aria-hidden="true"></span><span class="detail-menu-text"><span class="detail-menu-label">Wait for author</span><span class="detail-menu-hint">The author has changes to make</span></span></button>
+            <button type="button" class="detail-menu-item danger" role="menuitemradio" aria-checked="false"><span class="detail-menu-check" aria-hidden="true"></span><span class="detail-menu-text"><span class="detail-menu-label">Reject</span></span></button>
+          </div>
+          <div class="inbox-flyout show ds-float" role="dialog" aria-label="Notifications (specimen)">
+            <div class="inbox-head"><span>Notifications</span><button type="button" class="inbox-markall">Mark all read</button></div>
+            <div class="inbox-list">
+              <button type="button" class="inbox-row unread"><span class="inbox-row-ico" data-icon="sparkle"></span><span class="inbox-row-main"><span class="inbox-row-top"><span class="inbox-actor">Copilot review</span><span class="inbox-time">12m</span></span><span class="inbox-row-title">#16776707 Throttle snapshot export</span><span class="inbox-row-snip">2 high, 1 medium · pacing is sound</span></span><span class="inbox-dot" aria-hidden="true"></span></button>
+              <button type="button" class="inbox-row unread"><span class="inbox-row-ico" data-icon="reply"></span><span class="inbox-row-main"><span class="inbox-row-top"><span class="inbox-actor">Owen Brooks</span><span class="inbox-time">1h</span></span><span class="inbox-row-title">#16781142 Move key-value paging</span><span class="inbox-row-snip">Could the page size stay configurable?</span></span><span class="inbox-dot" aria-hidden="true"></span></button>
+              <button type="button" class="inbox-row"><span class="inbox-row-ico" data-icon="check"></span><span class="inbox-row-main"><span class="inbox-row-top"><span class="inbox-actor">Priya Raman</span><span class="inbox-time">3h</span></span><span class="inbox-row-title">#16772208 Document retention</span><span class="inbox-row-snip">Approved</span></span></button>
+            </div>
+          </div>
+          <div class="pr-comments-pop open ds-float" role="dialog" aria-label="Comments (specimen)">
+            <div class="pr-comments-head"><span>Comments</span><span class="pr-comments-total">7</span></div>
+            <div class="pr-comments-list">
+              <section class="pr-comments-thread">
+                <div class="pr-comments-thread-head"><button type="button" class="pr-comments-loc"><span>SnapshotPacer.cs:42</span><span class="pr-comments-status">Active</span></button><button type="button" class="btn ghost sm pr-comments-toggle">Resolve</button></div>
+                <div class="pr-comments-thread-body"><article><div class="pr-comments-meta"><span class="pr-comments-author">Owen Brooks</span><span>1h</span></div><div class="pr-comments-body md"><p>Could the bucket size come from config?</p></div></article></div>
+              </section>
+              <section class="pr-comments-thread">
+                <div class="pr-comments-thread-head"><button type="button" class="pr-comments-loc"><span>General</span><span class="pr-comments-status resolved">Resolved</span></button><button type="button" class="btn ghost sm pr-comments-toggle">Reactivate</button></div>
+              </section>
+            </div>
+          </div>
+          <div class="sl-pop sl-high open ds-float">
+            <span class="sl-caret"></span>
+            <div class="sl-drawer"><div class="sl-head">High · 2 findings</div><div class="sl-list">
+              <button type="button" class="sl-item"><span class="sl-item-title">Quota is read once per export</span><span class="sl-item-loc">Correctness · PR-level</span></button>
+              <button type="button" class="sl-item"><span class="sl-item-title">Pacer ignores cancellation</span><span class="sl-item-loc">ExportService.cs:88</span></button>
+            </div></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="ds-topic" id="dialogs">
+        <h3>Dialogs and toasts</h3>
+        <p class="ds-text">Dialogs sit over a 50% ink smoke with a light blur and carry the deep dialog shadow. Toasts confirm a finished action at the bottom center.</p>
+        <div class="ds-dialog-stage">
+          <div class="ds-ghost" aria-hidden="true"><p>Throttle snapshot export when a store is near quota</p><p>Large stores could export a snapshot faster than the replica could absorb it. This change paces the export when the store is within 10% of its quota.</p></div>
+          <div class="ask-overlay">
+            <div class="ask-dialog pa-dialog" role="dialog" aria-modal="false" aria-label="Complete pull request (specimen)">
+              <div class="ask-head"><span class="ask-title">Complete pull request</span><span class="ask-loc">#16776707 · mpark/snapshot-throttle → main</span><button type="button" class="ask-close" aria-label="Close" data-icon="dismiss"></button></div>
+              <div class="pa-body">
+                <fieldset class="pa-fieldset"><legend class="rp-label">Merge type</legend>
+                  <label class="pa-radio"><input type="radio" name="ds-merge" checked><span><span class="pa-radio-label">Squash commit</span><span class="pa-radio-hint">Combine all commits into one on the target</span></span></label>
+                  <label class="pa-radio"><input type="radio" name="ds-merge"><span><span class="pa-radio-label">Merge (no fast-forward)</span><span class="pa-radio-hint">Keep every commit and add a merge commit</span></span></label>
+                </fieldset>
+                <div class="pa-message"><label class="rp-label" for="ds-msg">Commit message</label><textarea id="ds-msg" class="ask-q" rows="2">Throttle snapshot export when a store is near quota</textarea></div>
+                <label class="pa-check"><input type="checkbox" checked><span>Delete mpark/snapshot-throttle after merging</span></label>
+              </div>
+              <div class="ask-actions"><button type="button" class="btn ghost sm pa-cancel">Cancel</button><button type="button" class="btn sm pa-confirm">Complete</button></div>
+            </div>
+          </div>
+        </div>
+        <div class="ds-row" style="margin-top:16px">
+          <div class="toast ds-float">Copilot review queued for #16776707</div>
+          <div class="toast ok ds-float">PR refreshed</div>
+          <div class="toast err ds-float">Refresh failed: the server returned 503</div>
+        </div>
+      </section>
+
+      <section class="ds-topic" id="empty">
+        <h3>Empty and loading</h3>
+        <p class="ds-text">Empty states name what happened and offer the next step. With nothing open, the reading pane shows the scanning reticle; its arc sweeps twice, then rests.</p>
+        <div class="ds-pair">
+          <section class="reading-pane ds-empty-frame" aria-label="Empty reading pane (specimen)">
+            <div class="reading-empty"><span class="reading-empty-mark" data-icon="pullRequest"></span><p class="reading-empty-title">Nothing open</p><p class="reading-empty-body">Pick a pull request from the queue to read it here.</p></div>
+          </section>
+          <div class="glass-pane ds-stage">
+            <p class="ds-cap">Queue empty</p>
+            <div class="empty"><p class="empty-title">No pull requests match</p><p class="hint">Nothing in My feed matches “repo:docs is:draft”.</p><button type="button" class="btn sm">Clear search</button></div>
+            <p class="ds-cap" style="margin-top:24px">Loading</p>
+            <div class="loading"><span class="spinner"></span> Loading pull requests…</div>
+          </div>
+        </div>
+      </section>
+    </section>
+
+    <section class="ds-chapter" id="pipelines">
+      <h2>Pipelines</h2>
+      <p class="ds-text">The second feature: chain Azure DevOps pipelines on a canvas and run them in order. Blocks are the one glass element inside a pane, because they float over the grid like the panes float over the field. Every specimen below is the markup <code>pipelines.ts</code> and <code>chainCanvas.ts</code> render, frozen mid-run.</p>
+
+      <section class="ds-topic" id="chain">
+        <h3>Chain canvas</h3>
+        <p class="ds-text">A running chain at 85%: two builds feed a canary release, which is selected and shows its Stop pill and inspector. Arrows flow cyan into running blocks, turn green behind passed ones, and dash out to skipped ones. The toolbar keeps the document on the left and the run on the right.</p>
+        <div class="ds-pipes">
+          <div class="pipelines-view has-selection">
+            <section class="chain-pane" aria-label="Chain editor (specimen)">
+              <div class="chain-toolbar">
+                <div class="chain-toolbar-doc">
+                  <select class="filter-select chain-picker" aria-label="Chain"><option selected>Portal release train</option><option>Docs nightly</option></select>
+                  <button type="button" class="icon-btn chain-new" title="New chain" aria-label="New chain" data-icon="add"></button>
+                  <span class="chain-sep" aria-hidden="true"></span>
+                  <input class="chain-name" maxlength="120" placeholder="Untitled chain" aria-label="Chain name" spellcheck="false" autocomplete="off" value="Portal release train">
+                  <span class="chain-save is-saved">Saved</span>
+                </div>
+                <div class="chain-toolbar-run">
+                  <span class="chain-run-chip tone-run" role="status" title="This chain is running"><span class="spinner"></span><span>Running · 5/7 · 12m 48s</span></span>
+                  <button type="button" class="btn chain-run is-stop" title="Stop this run" data-icon="stop">Stop</button>
+                  <button type="button" class="icon-btn chain-delete" title="Stop the run before deleting this chain" aria-label="Delete chain" disabled data-icon="trash"></button>
+                </div>
+              </div>
+              <div class="chain-body">
+                <div class="chain-stage">
+                  <div class="chain-canvas" tabindex="0" aria-label="Chain canvas" aria-describedby="chainCanvasHelp" style="--grid:13.6px;--grid-x:32px;--grid-y:112px;--inv-zoom:1.1765">
+                    <div class="chain-world" style="transform:translate(32px, 112px) scale(0.85)">
+                      <svg class="chain-edges" aria-hidden="true" viewBox="-400 -400 1704 1160" width="1704" height="1160" style="left:-400px;top:-400px"><g>
+                        <g class="chain-edge is-flowing"><path class="chain-edge-hit" d="M 248 44 C 296 44 280 112 328 112"></path><path class="chain-edge-line" d="M 248 44 C 296 44 280 112 328 112"></path><path class="chain-edge-head" d="M 319 107 L 328 112 L 319 117 Z"></path></g>
+                        <g class="chain-edge is-flowing"><path class="chain-edge-hit" d="M 248 180 C 296 180 280 112 328 112"></path><path class="chain-edge-line" d="M 248 180 C 296 180 280 112 328 112"></path><path class="chain-edge-head" d="M 319 107 L 328 112 L 319 117 Z"></path></g>
+                        <g class="chain-edge"><path class="chain-edge-hit" d="M 576 112 C 624 112 608 112 656 112"></path><path class="chain-edge-line" d="M 576 112 C 624 112 608 112 656 112"></path><path class="chain-edge-head" d="M 647 107 L 656 112 L 647 117 Z"></path></g>
+                        <g class="chain-edge is-done"><path class="chain-edge-hit" d="M 248 316 C 296 316 280 316 328 316"></path><path class="chain-edge-line" d="M 248 316 C 296 316 280 316 328 316"></path><path class="chain-edge-head" d="M 319 311 L 328 316 L 319 321 Z"></path></g>
+                        <g class="chain-edge is-off"><path class="chain-edge-hit" d="M 576 316 C 624 316 608 316 656 316"></path><path class="chain-edge-line" d="M 576 316 C 624 316 608 316 656 316"></path><path class="chain-edge-head" d="M 647 311 L 656 316 L 647 321 Z"></path></g>
+                      </g><path class="chain-draft" d=""></path></svg>
+                      <div class="chain-nodes">
+                        <div class="chain-node tone-ok" role="button" tabindex="0" aria-pressed="false" aria-label="Build · Portal, Azure AppConfig, Succeeded, main" style="left:0px;top:0px">
+                          <span class="chain-node-bar" aria-hidden="true"></span>
+                          <span class="chain-node-head"><span class="chain-node-icon" data-icon="pipeline"></span><span class="chain-node-name" title="Build · Portal">Build · Portal</span></span>
+                          <span class="chain-node-meta">Azure AppConfig · Portal</span>
+                          <span class="chain-node-foot"><span class="chain-node-branch" data-icon="branch"><span>main</span></span><span class="chain-node-status"><span class="chain-dot"></span>Succeeded · 4m 05s</span></span>
+                          <span class="chain-port" data-port="out" aria-hidden="true"></span>
+                        </div>
+                        <div class="chain-node tone-warn" role="button" tabindex="0" aria-pressed="false" aria-label="Build · Data plane, Azure AppConfig, Partially succeeded, main" style="left:0px;top:136px">
+                          <span class="chain-node-bar" aria-hidden="true"></span>
+                          <span class="chain-node-head"><span class="chain-node-icon" data-icon="pipeline"></span><span class="chain-node-name" title="Build · Data plane">Build · Data plane</span></span>
+                          <span class="chain-node-meta">Azure AppConfig · DataPlane</span>
+                          <span class="chain-node-foot"><span class="chain-node-branch" data-icon="branch"><span>main</span></span><span class="chain-node-status"><span class="chain-dot"></span>Partially succeeded · 7m 31s</span></span>
+                          <span class="chain-port" data-port="out" aria-hidden="true"></span>
+                        </div>
+                        <div class="chain-node tone-run selected" role="button" tabindex="0" aria-pressed="true" aria-label="Release · Portal canary, Azure AppConfig, Running, main, 1 parameter set" style="left:328px;top:68px">
+                          <span class="chain-node-bar" aria-hidden="true"></span>
+                          <span class="chain-node-head"><span class="chain-node-icon" data-icon="pipeline"></span><span class="chain-node-name" title="Release · Portal canary">Release · Portal canary</span></span>
+                          <span class="chain-node-meta">Azure AppConfig · Portal\Release</span>
+                          <span class="chain-node-foot"><span class="chain-node-branch" data-icon="branch"><span>main</span></span><span class="chain-node-params" title="1 parameter set" data-icon="settings">1</span><span class="chain-node-status"><span class="spinner"></span>Running · 6m 12s</span></span>
+                          <span class="chain-port" data-port="out" aria-hidden="true"></span>
+                        </div>
+                        <div class="chain-node tone-idle" role="button" tabindex="0" aria-pressed="false" aria-label="Smoke tests, Azure AppConfig, Waiting, main" style="left:656px;top:68px">
+                          <span class="chain-node-bar" aria-hidden="true"></span>
+                          <span class="chain-node-head"><span class="chain-node-icon" data-icon="pipeline"></span><span class="chain-node-name" title="Smoke tests">Smoke tests</span></span>
+                          <span class="chain-node-meta">Azure AppConfig · Tests</span>
+                          <span class="chain-node-foot"><span class="chain-node-branch" data-icon="branch"><span>main</span></span><span class="chain-node-status"><span class="chain-dot"></span>Waiting</span></span>
+                          <span class="chain-port" data-port="out" aria-hidden="true"></span>
+                        </div>
+                        <div class="chain-node tone-ok" role="button" tabindex="0" aria-pressed="false" aria-label="Lint docs, Azure AppConfig, Succeeded, main" style="left:0px;top:272px">
+                          <span class="chain-node-bar" aria-hidden="true"></span>
+                          <span class="chain-node-head"><span class="chain-node-icon" data-icon="pipeline"></span><span class="chain-node-name" title="Lint docs">Lint docs</span></span>
+                          <span class="chain-node-meta">Azure AppConfig · Docs</span>
+                          <span class="chain-node-foot"><span class="chain-node-branch" data-icon="branch"><span>main</span></span><span class="chain-node-status"><span class="chain-dot"></span>Succeeded · 1m 12s</span></span>
+                          <span class="chain-port" data-port="out" aria-hidden="true"></span>
+                        </div>
+                        <div class="chain-node tone-bad" role="button" tabindex="0" aria-pressed="false" aria-label="Publish docs, Azure AppConfig, Failed, main" style="left:328px;top:272px">
+                          <span class="chain-node-bar" aria-hidden="true"></span>
+                          <span class="chain-node-head"><span class="chain-node-icon" data-icon="pipeline"></span><span class="chain-node-name" title="Publish docs">Publish docs</span></span>
+                          <span class="chain-node-meta">Azure AppConfig · Docs</span>
+                          <span class="chain-node-foot"><span class="chain-node-branch" data-icon="branch"><span>main</span></span><span class="chain-node-status"><span class="chain-dot"></span>Failed · 2m 40s</span></span>
+                          <span class="chain-port" data-port="out" aria-hidden="true"></span>
+                        </div>
+                        <div class="chain-node tone-off" role="button" tabindex="0" aria-pressed="false" aria-label="Notify, Azure AppConfig, Skipped, main" style="left:656px;top:272px">
+                          <span class="chain-node-bar" aria-hidden="true"></span>
+                          <span class="chain-node-head"><span class="chain-node-icon" data-icon="pipeline"></span><span class="chain-node-name" title="Notify">Notify</span></span>
+                          <span class="chain-node-meta">Azure AppConfig · Ops</span>
+                          <span class="chain-node-foot"><span class="chain-node-branch" data-icon="branch"><span>main</span></span><span class="chain-node-status"><span class="chain-dot"></span>Skipped</span></span>
+                          <span class="chain-port" data-port="out" aria-hidden="true"></span>
+                        </div>
+                      </div>
+                      <button type="button" class="chain-edge-remove" aria-label="Remove arrow" title="Remove arrow (Delete)" hidden data-icon="dismiss"></button>
+                      <button type="button" class="chain-block-action is-stop" data-kind="stop" title="Cancel this pipeline's build" aria-label="Stop: Release · Portal canary" aria-disabled="false" style="left:576px;top:68px" data-icon="stop"><span>Stop</span></button>
+                    </div>
+                    <p id="chainCanvasHelp" class="visually-hidden">Drag the background or scroll to pan. Hold Ctrl and scroll, or press Ctrl plus or minus, to zoom. Tab to a block and press Enter to select it, arrow keys to move it, and Delete to remove it.</p>
+                  </div>
+                  <div class="chain-empty" hidden>
+                    <span class="chain-empty-icon" data-icon="flow"></span>
+                    <p class="chain-empty-title">Drag pipelines here</p>
+                    <p class="chain-empty-text">Then drag from a block's right edge onto another block to run it next.</p>
+                  </div>
+                  <div class="chain-zoom" role="group" aria-label="View">
+                    <button type="button" class="icon-btn" data-zoom="-1" title="Zoom out (Ctrl+−)" aria-label="Zoom out" data-icon="minus"></button>
+                    <button type="button" class="chain-zoom-level" title="Reset to 100% (Ctrl+0)" aria-label="Reset zoom">85%</button>
+                    <button type="button" class="icon-btn" data-zoom="1" title="Zoom in (Ctrl+=)" aria-label="Zoom in" data-icon="add"></button>
+                    <span class="chain-sep" aria-hidden="true"></span>
+                    <button type="button" class="icon-btn" data-act="fit" title="Fit to view" aria-label="Fit to view" data-icon="fit"></button>
+                    <button type="button" class="icon-btn" data-act="tidy" title="Tidy layout" aria-label="Tidy layout" data-icon="tidy"></button>
+                  </div>
+                </div>
+                <aside class="chain-inspector" aria-label="Chain details">
+                  <div class="insp-head">
+                    <span class="insp-head-icon" data-icon="pipeline"></span>
+                    <div class="insp-head-text"><h2 class="insp-name">Release · Portal canary</h2><span class="insp-sub">Azure AppConfig</span></div>
+                    <button type="button" class="icon-btn insp-close" title="Close details (Esc)" aria-label="Close details" data-icon="dismiss"></button>
+                  </div>
+                  <a class="insp-link" href="#chain" data-icon-end="external">Open in Azure DevOps</a>
+                  <div class="insp-actions">
+                    <button type="button" class="btn insp-action is-stop" data-block-action="stop" data-icon="stop">Stop pipeline</button>
+                    <span class="insp-hint">Cancels its build. Blocks that wait for it are skipped.</span>
+                  </div>
+                  <div class="insp-section insp-run">
+                    <h3 class="insp-label">This run</h3>
+                    <div class="insp-run-status"><span class="spinner" aria-hidden="true"></span><span>Running</span><span class="insp-run-time">6m 12s</span></div>
+                    <a class="insp-link" href="#chain" data-icon-end="external">Build 20240611.3</a>
+                    <ul class="insp-pins">
+                      <li data-icon="flow"><span><code>portal</code> uses build 20240611.7 from Build · Portal</span></li>
+                      <li data-icon="flow"><span><code>dataplane</code> uses build 20240611.5 from Build · Data plane</span></li>
+                    </ul>
+                    <p class="insp-muted">Queued with 1 changed parameter.</p>
+                  </div>
+                  <p class="insp-note" data-icon="clock"><span>Already queued in this run. Branch and parameter changes apply the next time it runs.</span></p>
+                  <label class="insp-field">
+                    <span class="insp-label">Branch</span>
+                    <span class="insp-input" data-icon="branch"><input class="insp-branch" value="main" placeholder="Default branch" spellcheck="false" autocomplete="off"></span>
+                    <span class="insp-hint">Leave empty to build the pipeline's default branch.</span>
+                  </label>
+                  <details class="insp-section insp-params" open>
+                    <summary class="insp-params-summary" data-icon-end="chevron"><span class="insp-label">Parameters</span><span class="insp-params-count tone-accent">1 of 4 changed</span></summary>
+                    <div class="insp-params-body">
+                      <div class="param-list">
+                        <div class="param is-changed">
+                          <div class="param-head"><label class="param-label" for="ds-param-0">Target ring</label><button type="button" class="param-reset" aria-label="Reset Target ring to its default">Reset</button></div>
+                          <select class="filter-select param-select" id="ds-param-0" aria-invalid="false" aria-describedby="ds-param-0-error"><option>canary</option><option selected>ring0</option><option>ring1</option><option>prod</option></select>
+                          <div class="param-meta"><code class="param-name">targetRing</code><span>Default: canary</span></div>
+                          <p class="param-error" id="ds-param-0-error" hidden></p>
+                        </div>
+                        <div class="param">
+                          <div class="param-head"><label class="param-label" for="ds-param-1">Region</label><button type="button" class="param-reset" aria-label="Reset Region to its default" hidden>Reset</button></div>
+                          <input type="text" class="param-input" id="ds-param-1" spellcheck="false" autocomplete="off" aria-invalid="false" aria-describedby="ds-param-1-error" value="westus2">
+                          <div class="param-meta"><code class="param-name">region</code></div>
+                          <p class="param-error" id="ds-param-1-error" hidden></p>
+                        </div>
+                        <div class="param">
+                          <div class="param-head"><label class="param-label" for="ds-param-2">Skip smoke tests</label><button type="button" class="param-reset" aria-label="Reset Skip smoke tests to its default" hidden>Reset</button><input type="checkbox" role="switch" class="param-switch" id="ds-param-2" aria-invalid="false" aria-describedby="ds-param-2-error"></div>
+                          <div class="param-meta"><code class="param-name">skipSmoke</code></div>
+                          <p class="param-error" id="ds-param-2-error" hidden></p>
+                        </div>
+                        <div class="param">
+                          <div class="param-head"><label class="param-label" for="ds-param-3">Settings overrides</label><button type="button" class="param-reset" aria-label="Reset Settings overrides to its default" hidden>Reset</button></div>
+                          <textarea class="param-code" id="ds-param-3" rows="3" spellcheck="false" autocomplete="off" aria-invalid="false" aria-describedby="ds-param-3-error">featureFlags:
+  previewUi: true</textarea>
+                          <div class="param-meta"><code class="param-name">overrides</code></div>
+                          <p class="param-error" id="ds-param-3-error" hidden></p>
+                        </div>
+                      </div>
+                      <div class="insp-params-foot">
+                        <span class="insp-hint">From the YAML on main. Only changed values are sent; the rest use their defaults.</span>
+                        <button type="button" class="btn sm insp-params-btn" title="Read the YAML again" data-icon="sync">Reload</button>
+                      </div>
+                    </div>
+                  </details>
+                  <div class="insp-section insp-consumes">
+                    <h3 class="insp-label">Consumes</h3>
+                    <ul class="consume-list">
+                      <li class="consume is-linked"><div class="consume-head" data-icon="flow"><code class="consume-alias">portal</code><span class="consume-name">Build · Portal</span></div><p class="consume-text">Uses the build from <button type="button" class="insp-inline">Build · Portal</button> when it passes earlier in the same run. Otherwise it uses Build · Portal's last build from this app, <a class="insp-inline" href="#chain">20240610.2</a> (2d ago).</p></li>
+                      <li class="consume is-linked"><div class="consume-head" data-icon="flow"><code class="consume-alias">dataplane</code><span class="consume-name">Build · Data plane</span></div><p class="consume-text">Uses the build from <button type="button" class="insp-inline">Build · Data plane</button> when it passes earlier in the same run. Otherwise it uses Build · Data plane's last build from this app, <a class="insp-inline" href="#chain">20240609.4</a> (3d ago).</p></li>
+                      <li class="consume"><div class="consume-head" data-icon="pipeline"><code class="consume-alias">sdk</code><span class="consume-name">Build · SDK</span></div><p class="consume-text">Not built by this chain. Azure DevOps uses its default build.</p></li>
+                    </ul>
+                  </div>
+                  <div class="insp-section">
+                    <h3 class="insp-label">Runs after</h3>
+                    <div class="insp-chips">
+                      <span class="insp-chip"><button type="button" class="insp-chip-name">Build · Portal</button><button type="button" class="chip-x" aria-label="Remove the arrow between Build · Portal and Release · Portal canary" data-icon="dismiss"></button></span>
+                      <span class="insp-chip"><button type="button" class="insp-chip-name">Build · Data plane</button><button type="button" class="chip-x" aria-label="Remove the arrow between Build · Data plane and Release · Portal canary" data-icon="dismiss"></button></span>
+                    </div>
+                    <select class="filter-select insp-add-up" aria-label="Add a pipeline this one waits for"><option value="">Wait for another pipeline…</option><option>Lint docs</option><option>Publish docs</option></select>
+                  </div>
+                  <div class="insp-section">
+                    <h3 class="insp-label">Then triggers</h3>
+                    <div class="insp-chips"><span class="insp-chip"><button type="button" class="insp-chip-name">Smoke tests</button><button type="button" class="chip-x" aria-label="Remove the arrow between Release · Portal canary and Smoke tests" data-icon="dismiss"></button></span></div>
+                  </div>
+                  <dl class="insp-facts">
+                    <div><dt>Stage</dt><dd>2 of 3</dd></div>
+                    <div><dt>Organization</dt><dd>msazure</dd></div>
+                    <div><dt>Folder</dt><dd>Portal\Release</dd></div>
+                    <div><dt>Definition</dt><dd>1482</dd></div>
+                  </dl>
+                  <button type="button" class="btn insp-remove" disabled title="Stop it before removing it" data-icon="trash">Remove from chain</button>
+                  <span class="insp-hint insp-remove-hint">Stop it before removing it. It's building in Azure DevOps.</span>
+                </aside>
+              </div>
+              <div class="visually-hidden chain-live"></div>
+            </section>
+          </div>
+        </div>
+        <div class="ds-cols" style="margin-top:var(--gutter)">
+          <div class="glass-pane ds-stage">
+            <p class="ds-cap">Save state, beside the chain name</p>
+            <div class="ds-row" style="gap:16px 24px">
+              <span class="chain-save is-saving">Saving…</span>
+              <span class="chain-save is-saved">Saved</span>
+              <span class="chain-save is-error" data-icon="warning"><span>Couldn't save</span><button type="button" class="btn ghost sm chain-save-retry">Retry</button></span>
+            </div>
+          </div>
+          <div class="glass-pane ds-stage">
+            <p class="ds-cap">Run command and run chip, idle and after a run</p>
+            <div class="ds-row">
+              <button type="button" class="btn accent chain-run" title="Queue the pipelines in order" data-icon="play">Run chain</button>
+              <span class="chain-run-chip tone-ok" role="status"><span class="chain-dot tone-ok"></span><span>Succeeded · 2h ago</span></span>
+              <span class="chain-run-chip tone-bad" role="status"><span class="chain-dot tone-bad"></span><span>Failed · 5m ago</span></span>
+              <span class="chain-run-chip tone-off" role="status"><span class="chain-dot tone-off"></span><span>Stopped · just now</span></span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="ds-topic" id="blocks">
+        <h3>Blocks and arrows</h3>
+        <p class="ds-text">A block is 248 × 88 on an 8px grid. Its border carries the tone, a 2px bar sweeps along its bottom edge while it runs, and the status is always written out beside the dot. The out port on the right edge appears on hover, focus and selection; dragging from it draws an arrow.</p>
+        <div class="ds-blockgrid">
+          <figure>
+            <div class="chain-node" role="button" tabindex="0" aria-pressed="false" aria-label="Build · Portal, Azure AppConfig, main">
+              <span class="chain-node-bar" aria-hidden="true"></span>
+              <span class="chain-node-head"><span class="chain-node-icon" data-icon="pipeline"></span><span class="chain-node-name">Build · Portal</span></span>
+              <span class="chain-node-meta">Azure AppConfig · Portal</span>
+              <span class="chain-node-foot"><span class="chain-node-branch" data-icon="branch"><span>main</span></span></span>
+              <span class="chain-port" data-port="out" aria-hidden="true"></span>
+            </div>
+            <figcaption>Idle: not in a run, so no status</figcaption>
+          </figure>
+          <figure>
+            <div class="chain-node tone-idle" role="button" tabindex="0" aria-pressed="false" aria-label="Smoke tests, Azure AppConfig, Waiting, main">
+              <span class="chain-node-bar" aria-hidden="true"></span>
+              <span class="chain-node-head"><span class="chain-node-icon" data-icon="pipeline"></span><span class="chain-node-name">Smoke tests</span></span>
+              <span class="chain-node-meta">Azure AppConfig · Tests</span>
+              <span class="chain-node-foot"><span class="chain-node-branch" data-icon="branch"><span>main</span></span><span class="chain-node-status"><span class="chain-dot"></span>Waiting</span></span>
+              <span class="chain-port" data-port="out" aria-hidden="true"></span>
+            </div>
+            <figcaption><code>tone-idle</code>: waiting for the blocks before it</figcaption>
+          </figure>
+          <figure>
+            <div class="chain-node tone-run" role="button" tabindex="0" aria-pressed="false" aria-label="Release · Portal canary, Azure AppConfig, Running, main, 1 parameter set">
+              <span class="chain-node-bar" aria-hidden="true"></span>
+              <span class="chain-node-head"><span class="chain-node-icon" data-icon="pipeline"></span><span class="chain-node-name">Release · Portal canary</span></span>
+              <span class="chain-node-meta">Azure AppConfig · Portal\Release</span>
+              <span class="chain-node-foot"><span class="chain-node-branch" data-icon="branch"><span>main</span></span><span class="chain-node-params" title="1 parameter set" data-icon="settings">1</span><span class="chain-node-status"><span class="spinner"></span>Running · 6m 12s</span></span>
+              <span class="chain-port" data-port="out" aria-hidden="true"></span>
+            </div>
+            <figcaption><code>tone-run</code>: queued or running; the bar sweeps</figcaption>
+          </figure>
+          <figure>
+            <div class="chain-node tone-ok" role="button" tabindex="0" aria-pressed="false" aria-label="Build · Portal, Azure AppConfig, Succeeded, main">
+              <span class="chain-node-bar" aria-hidden="true"></span>
+              <span class="chain-node-head"><span class="chain-node-icon" data-icon="pipeline"></span><span class="chain-node-name">Build · Portal</span></span>
+              <span class="chain-node-meta">Azure AppConfig · Portal</span>
+              <span class="chain-node-foot"><span class="chain-node-branch" data-icon="branch"><span>main</span></span><span class="chain-node-status"><span class="chain-dot"></span>Succeeded · 4m 05s</span></span>
+              <span class="chain-port" data-port="out" aria-hidden="true"></span>
+            </div>
+            <figcaption><code>tone-ok</code>: succeeded</figcaption>
+          </figure>
+          <figure>
+            <div class="chain-node tone-warn" role="button" tabindex="0" aria-pressed="false" aria-label="Build · Data plane, Azure AppConfig, Partially succeeded, main">
+              <span class="chain-node-bar" aria-hidden="true"></span>
+              <span class="chain-node-head"><span class="chain-node-icon" data-icon="pipeline"></span><span class="chain-node-name">Build · Data plane</span></span>
+              <span class="chain-node-meta">Azure AppConfig · DataPlane</span>
+              <span class="chain-node-foot"><span class="chain-node-branch" data-icon="branch"><span>main</span></span><span class="chain-node-status"><span class="chain-dot"></span>Partially succeeded · 7m 31s</span></span>
+              <span class="chain-port" data-port="out" aria-hidden="true"></span>
+            </div>
+            <figcaption><code>tone-warn</code>: partially succeeded, counts as passed</figcaption>
+          </figure>
+          <figure>
+            <div class="chain-node tone-bad" role="button" tabindex="0" aria-pressed="false" aria-label="Publish docs, Azure AppConfig, Failed, main">
+              <span class="chain-node-bar" aria-hidden="true"></span>
+              <span class="chain-node-head"><span class="chain-node-icon" data-icon="pipeline"></span><span class="chain-node-name">Publish docs</span></span>
+              <span class="chain-node-meta">Azure AppConfig · Docs</span>
+              <span class="chain-node-foot"><span class="chain-node-branch" data-icon="branch"><span>main</span></span><span class="chain-node-status"><span class="chain-dot"></span>Failed · 2m 40s</span></span>
+              <span class="chain-port" data-port="out" aria-hidden="true"></span>
+            </div>
+            <figcaption><code>tone-bad</code>: failed or errored</figcaption>
+          </figure>
+          <figure>
+            <div class="chain-node tone-off" role="button" tabindex="0" aria-pressed="false" aria-label="Notify, Azure AppConfig, Skipped, main">
+              <span class="chain-node-bar" aria-hidden="true"></span>
+              <span class="chain-node-head"><span class="chain-node-icon" data-icon="pipeline"></span><span class="chain-node-name">Notify</span></span>
+              <span class="chain-node-meta">Azure AppConfig · Ops</span>
+              <span class="chain-node-foot"><span class="chain-node-branch" data-icon="branch"><span>main</span></span><span class="chain-node-status"><span class="chain-dot"></span>Skipped</span></span>
+              <span class="chain-port" data-port="out" aria-hidden="true"></span>
+            </div>
+            <figcaption><code>tone-off</code>: skipped or canceled</figcaption>
+          </figure>
+          <figure>
+            <div class="chain-node tone-ok selected" role="button" tabindex="0" aria-pressed="true" aria-label="Lint docs, Azure AppConfig, Succeeded, main">
+              <span class="chain-node-bar" aria-hidden="true"></span>
+              <span class="chain-node-head"><span class="chain-node-icon" data-icon="pipeline"></span><span class="chain-node-name">Lint docs</span></span>
+              <span class="chain-node-meta">Azure AppConfig · Docs</span>
+              <span class="chain-node-foot"><span class="chain-node-branch" data-icon="branch"><span>main</span></span><span class="chain-node-status"><span class="chain-dot"></span>Succeeded · 1m 12s</span></span>
+              <span class="chain-port" data-port="out" aria-hidden="true"></span>
+            </div>
+            <figcaption><code>selected</code>: cyan edge and glow, port shown</figcaption>
+          </figure>
+          <figure>
+            <div class="chain-node tone-ok is-out" role="button" tabindex="0" aria-pressed="false" aria-label="Lint docs, Azure AppConfig, Succeeded, not part of this run, main">
+              <span class="chain-node-bar" aria-hidden="true"></span>
+              <span class="chain-node-head"><span class="chain-node-icon" data-icon="pipeline"></span><span class="chain-node-name">Lint docs</span></span>
+              <span class="chain-node-meta">Azure AppConfig · Docs</span>
+              <span class="chain-node-foot"><span class="chain-node-branch" data-icon="branch"><span>main</span></span><span class="chain-node-status"><span class="chain-dot"></span>Succeeded · 1m 12s</span></span>
+              <span class="chain-port" data-port="out" aria-hidden="true"></span>
+            </div>
+            <figcaption><code>is-out</code>: not part of the live run; keeps its own last result</figcaption>
+          </figure>
+          <figure>
+            <div class="chain-node connect-source" role="button" tabindex="0" aria-pressed="false" aria-label="Build · Portal, Azure AppConfig, main">
+              <span class="chain-node-bar" aria-hidden="true"></span>
+              <span class="chain-node-head"><span class="chain-node-icon" data-icon="pipeline"></span><span class="chain-node-name">Build · Portal</span></span>
+              <span class="chain-node-meta">Azure AppConfig · Portal</span>
+              <span class="chain-node-foot"><span class="chain-node-branch" data-icon="branch"><span>main</span></span></span>
+              <span class="chain-port" data-port="out" aria-hidden="true"></span>
+            </div>
+            <figcaption><code>connect-source</code>: an arrow is being drawn from it</figcaption>
+          </figure>
+          <figure>
+            <div class="chain-node drop-ok" role="button" tabindex="0" aria-pressed="false" aria-label="Smoke tests, Azure AppConfig, main">
+              <span class="chain-node-bar" aria-hidden="true"></span>
+              <span class="chain-node-head"><span class="chain-node-icon" data-icon="pipeline"></span><span class="chain-node-name">Smoke tests</span></span>
+              <span class="chain-node-meta">Azure AppConfig · Tests</span>
+              <span class="chain-node-foot"><span class="chain-node-branch" data-icon="branch"><span>main</span></span></span>
+              <span class="chain-port" data-port="out" aria-hidden="true"></span>
+            </div>
+            <figcaption><code>drop-ok</code>: dropping the arrow here is allowed</figcaption>
+          </figure>
+          <figure>
+            <div class="chain-node drop-bad" role="button" tabindex="0" aria-pressed="false" aria-label="Build · Portal, Azure AppConfig, main">
+              <span class="chain-node-bar" aria-hidden="true"></span>
+              <span class="chain-node-head"><span class="chain-node-icon" data-icon="pipeline"></span><span class="chain-node-name">Build · Portal</span></span>
+              <span class="chain-node-meta">Azure AppConfig · Portal</span>
+              <span class="chain-node-foot"><span class="chain-node-branch" data-icon="branch"><span>main</span></span></span>
+              <span class="chain-port" data-port="out" aria-hidden="true"></span>
+            </div>
+            <figcaption><code>drop-bad</code>: the arrow would make a loop</figcaption>
+          </figure>
+          <figure>
+            <div class="chain-node dragging" role="button" tabindex="0" aria-pressed="false" aria-label="Notify, Azure AppConfig, main">
+              <span class="chain-node-bar" aria-hidden="true"></span>
+              <span class="chain-node-head"><span class="chain-node-icon" data-icon="pipeline"></span><span class="chain-node-name">Notify</span></span>
+              <span class="chain-node-meta">Azure AppConfig · Ops</span>
+              <span class="chain-node-foot"><span class="chain-node-branch" data-icon="branch"><span>main</span></span></span>
+              <span class="chain-port" data-port="out" aria-hidden="true"></span>
+            </div>
+            <figcaption><code>dragging</code>: lifted with a flyout shadow</figcaption>
+          </figure>
+        </div>
+        <p class="ds-cap" style="margin-top:24px">Arrows take their tone from the blocks they join. Flowing and off arrows are dashed; reduced motion stops the flow.</p>
+        <div class="ds-arrows">
+          <figure><svg viewBox="0 0 176 40" aria-hidden="true"><g class="chain-edge"><path class="chain-edge-line" d="M 8 30 C 88 30 88 10 168 10"></path><path class="chain-edge-head" d="M 159 5 L 168 10 L 159 15 Z"></path></g></svg><figcaption>Default: nothing has passed yet</figcaption></figure>
+          <figure><svg viewBox="0 0 176 40" aria-hidden="true"><g class="chain-edge is-flowing"><path class="chain-edge-line" d="M 8 30 C 88 30 88 10 168 10"></path><path class="chain-edge-head" d="M 159 5 L 168 10 L 159 15 Z"></path></g></svg><figcaption><code>is-flowing</code>: passed into a running block</figcaption></figure>
+          <figure><svg viewBox="0 0 176 40" aria-hidden="true"><g class="chain-edge is-done"><path class="chain-edge-line" d="M 8 30 C 88 30 88 10 168 10"></path><path class="chain-edge-head" d="M 159 5 L 168 10 L 159 15 Z"></path></g></svg><figcaption><code>is-done</code>: the block before passed</figcaption></figure>
+          <figure><svg viewBox="0 0 176 40" aria-hidden="true"><g class="chain-edge is-off"><path class="chain-edge-line" d="M 8 30 C 88 30 88 10 168 10"></path><path class="chain-edge-head" d="M 159 5 L 168 10 L 159 15 Z"></path></g></svg><figcaption><code>is-off</code>: the next block was skipped</figcaption></figure>
+          <figure><svg viewBox="0 0 176 40" aria-hidden="true"><g class="chain-edge selected"><path class="chain-edge-line" d="M 8 30 C 88 30 88 10 168 10"></path><path class="chain-edge-head" d="M 159 5 L 168 10 L 159 15 Z"></path></g></svg><figcaption><code>selected</code>: Delete removes it</figcaption></figure>
+        </div>
+      </section>
+
+      <section class="ds-topic" id="catalog">
+        <h3>Catalog and run order</h3>
+        <p class="ds-text">The catalog lists every pipeline in the projects picked in Settings, grouped by project. Its dot is the last build's tone and its label says the result. With nothing selected, the inspector shows the run order and the last run.</p>
+        <div class="ds-pipes-row">
+          <aside class="glass-pane pipeline-catalog" aria-label="Pipeline catalog (specimen)">
+            <div class="catalog-head">
+              <h2 class="list-title">Pipelines</h2>
+              <span class="count catalog-count">128</span>
+            </div>
+            <div class="catalog-tools">
+              <label class="catalog-search" data-icon="search"><input type="search" placeholder="Search pipelines" aria-label="Search pipelines" title="Search pipelines (Ctrl+F)" spellcheck="false" autocomplete="off"></label>
+              <select class="filter-select catalog-scope" aria-label="Project"><option value="" selected>All projects</option><option>Azure AppConfig · msazure</option><option>AppConfig Tools · msazure</option></select>
+            </div>
+            <div class="catalog-notes">
+              <div class="catalog-note" data-icon="folder"><span>Pick projects for <b>devdiv</b> in Settings to list its pipelines. <button type="button" class="catalog-link">Open Settings</button></span></div>
+            </div>
+            <div class="catalog-list">
+              <section class="catalog-group" aria-label="Azure AppConfig">
+                <div class="catalog-group-head"><span class="catalog-group-name">Azure AppConfig</span><span class="catalog-group-org">msazure</span></div>
+                <ul class="catalog-rows">
+                  <li class="catalog-row in-chain" draggable="true"><span class="catalog-dot tone-ok" role="img" aria-label="Last build succeeded (20240611.7)" title="Last build succeeded (20240611.7)"></span><span class="catalog-text"><span class="catalog-name">Build · Portal</span><span class="catalog-meta"><span class="catalog-path">Portal</span><span class="catalog-tag is-in">In chain</span></span></span><button type="button" class="icon-btn catalog-add" aria-label="Add Build · Portal to the chain" title="Add to chain" data-icon="add"></button></li>
+                  <li class="catalog-row in-chain" draggable="true"><span class="catalog-dot tone-warn" role="img" aria-label="Last build partially succeeded (20240611.5)" title="Last build partially succeeded (20240611.5)"></span><span class="catalog-text"><span class="catalog-name">Build · Data plane</span><span class="catalog-meta"><span class="catalog-path">DataPlane</span><span class="catalog-tag is-in">In chain ×2</span></span></span><button type="button" class="icon-btn catalog-add" aria-label="Add Build · Data plane to the chain" title="Add to chain" data-icon="add"></button></li>
+                  <li class="catalog-row" draggable="true"><span class="catalog-dot tone-run" role="img" aria-label="Building now (20240611.9)" title="Building now (20240611.9)"></span><span class="catalog-text"><span class="catalog-name">Build · SDK</span><span class="catalog-meta"><span class="catalog-path">SDK</span></span></span><button type="button" class="icon-btn catalog-add" aria-label="Add Build · SDK to the chain" title="Add to chain" data-icon="add"></button></li>
+                  <li class="catalog-row" draggable="true"><span class="catalog-dot tone-bad" role="img" aria-label="Last build failed (20240610.1)" title="Last build failed (20240610.1)"></span><span class="catalog-text"><span class="catalog-name">Publish docs</span><span class="catalog-meta"><span class="catalog-path">Docs</span></span></span><button type="button" class="icon-btn catalog-add" aria-label="Add Publish docs to the chain" title="Add to chain" data-icon="add"></button></li>
+                  <li class="catalog-row" draggable="true"><span class="catalog-dot tone-idle" role="img" aria-label="No builds yet" title="No builds yet"></span><span class="catalog-text"><span class="catalog-name">Release · Data plane canary</span><span class="catalog-meta"><span class="catalog-path">DataPlane\Release</span><span class="catalog-tag">Paused</span></span></span><button type="button" class="icon-btn catalog-add" aria-label="Add Release · Data plane canary to the chain" title="Add to chain" data-icon="add"></button></li>
+                </ul>
+              </section>
+              <section class="catalog-group" aria-label="AppConfig Tools">
+                <div class="catalog-group-head"><span class="catalog-group-name">AppConfig Tools</span><span class="catalog-group-org">msazure</span></div>
+                <ul class="catalog-rows">
+                  <li class="catalog-row" draggable="true"><span class="catalog-dot tone-off" role="img" aria-label="Last build canceled (20240602.3)" title="Last build canceled (20240602.3)"></span><span class="catalog-text"><span class="catalog-name">Nightly cleanup</span><span class="catalog-meta"><span class="catalog-tag">Disabled</span></span></span><button type="button" class="icon-btn catalog-add" aria-label="Add Nightly cleanup to the chain" title="Add to chain" data-icon="add"></button></li>
+                  <li class="catalog-row" draggable="true"><span class="catalog-dot tone-ok" role="img" aria-label="Last build succeeded (20240611.2)" title="Last build succeeded (20240611.2)"></span><span class="catalog-text"><span class="catalog-name">Lint docs</span></span><button type="button" class="icon-btn catalog-add" aria-label="Add Lint docs to the chain" title="Add to chain" data-icon="add"></button></li>
+                </ul>
+              </section>
+            </div>
+          </aside>
+          <div class="glass-pane ds-solo">
+            <aside class="chain-inspector" aria-label="Chain details (specimen)">
+              <div class="insp-section">
+                <h2 class="insp-title">Run order</h2>
+                <p class="insp-muted">7 pipelines in 3 stages. Pipelines in the same stage run in parallel.</p>
+                <ol class="insp-stages">
+                  <li class="insp-stage"><span class="insp-stage-n" aria-hidden="true">1</span><div class="insp-stage-blocks"><span class="visually-hidden">Stage 1:</span><button type="button" class="insp-block"><span class="chain-dot tone-ok" aria-hidden="true"></span><span>Build · Portal</span></button><button type="button" class="insp-block"><span class="chain-dot tone-warn" aria-hidden="true"></span><span>Build · Data plane</span></button><button type="button" class="insp-block"><span class="chain-dot tone-ok" aria-hidden="true"></span><span>Lint docs</span></button></div></li>
+                  <li class="insp-stage"><span class="insp-stage-n" aria-hidden="true">2</span><div class="insp-stage-blocks"><span class="visually-hidden">Stage 2:</span><button type="button" class="insp-block"><span class="spinner" aria-hidden="true"></span><span>Release · Portal canary</span></button><button type="button" class="insp-block"><span class="chain-dot tone-bad" aria-hidden="true"></span><span>Publish docs</span></button></div></li>
+                  <li class="insp-stage"><span class="insp-stage-n" aria-hidden="true">3</span><div class="insp-stage-blocks"><span class="visually-hidden">Stage 3:</span><button type="button" class="insp-block"><span class="chain-dot tone-idle" aria-hidden="true"></span><span>Smoke tests</span></button><button type="button" class="insp-block"><span class="chain-dot tone-off" aria-hidden="true"></span><span>Notify</span></button></div></li>
+                </ol>
+              </div>
+              <div class="insp-section insp-lastrun">
+                <h3 class="insp-label">This run</h3>
+                <div class="insp-run-status"><span class="spinner" aria-hidden="true"></span><span>Running</span><span class="insp-run-time">12m 48s</span></div>
+                <p class="insp-muted">Started 13m ago</p>
+                <div class="insp-counts"><span class="insp-count tone-ok">3 passed</span><span class="insp-count tone-bad">1 failed</span><span class="insp-count tone-off">1 skipped</span><span class="insp-count tone-run">1 running</span><span class="insp-count tone-idle">1 waiting</span></div>
+              </div>
+            </aside>
+          </div>
+        </div>
+        <div class="ds-pair" style="margin-top:var(--gutter)">
+          <section class="chain-pane ds-empty-frame" aria-label="Empty chain (specimen)">
+            <div class="chain-stage">
+              <div class="chain-empty">
+                <span class="chain-empty-icon" data-icon="flow"></span>
+                <p class="chain-empty-title">Drag pipelines here</p>
+                <p class="chain-empty-text">Then drag from a block's right edge onto another block to run it next.</p>
+              </div>
+            </div>
+          </section>
+          <div class="glass-pane ds-solo">
+            <aside class="chain-inspector" aria-label="Empty chain details (specimen)">
+              <div class="insp-section">
+                <h2 class="insp-title">Build a chain</h2>
+                <ol class="insp-steps">
+                  <li><b>Add pipelines</b><span>Drag them from the list, or press + on a row.</span></li>
+                  <li><b>Connect them</b><span>Drag from a block's right edge onto the block that should run next.</span></li>
+                  <li><b>Run the chain</b><span>Each pipeline starts once every pipeline before it passes.</span></li>
+                </ol>
+              </div>
+            </aside>
+          </div>
+        </div>
+        <div class="ds-pair" style="margin-top:var(--gutter)">
+          <div class="glass-pane ds-solo">
+            <aside class="chain-inspector" aria-label="Arrow details (specimen)">
+              <div class="insp-head">
+                <span class="insp-head-icon" data-icon="flow"></span>
+                <div class="insp-head-text"><h2 class="insp-name">Arrow</h2><span class="insp-sub">Release · Portal canary → Smoke tests</span></div>
+                <button type="button" class="icon-btn insp-close" title="Close details (Esc)" aria-label="Close details" data-icon="dismiss"></button>
+              </div>
+              <div class="insp-section">
+                <p class="insp-text"><b>Smoke tests</b> starts after <b>Release · Portal canary</b> passes. Partially succeeded counts as passed.</p>
+                <p class="insp-text">If it fails or is canceled, Smoke tests and everything after it are skipped.</p>
+              </div>
+              <button type="button" class="btn insp-remove" data-icon="trash">Remove arrow</button>
+            </aside>
+          </div>
+          <div class="glass-pane ds-solo">
+            <aside class="chain-inspector" aria-label="Consumed pipelines (specimen)">
+              <div class="insp-section insp-consumes">
+                <h3 class="insp-label">Consumes: linked, tied and not in the chain</h3>
+                <ul class="consume-list">
+                  <li class="consume is-linked"><div class="consume-head" data-icon="flow"><code class="consume-alias">portal</code><span class="consume-name">Build · Portal</span></div><p class="consume-text">Uses the build from <button type="button" class="insp-inline">Build · Portal</button> when it passes earlier in the same run. Otherwise Azure DevOps uses its default build, because this app hasn't built Build · Portal on its current branch yet.</p></li>
+                  <li class="consume is-tied"><div class="consume-head" data-icon="warning"><code class="consume-alias">dataplane</code><span class="consume-name">Build · Data plane</span></div><p class="consume-text">Two Build · Data plane blocks run before it, equally close. This block fails when it can't tell which build to use. Remove one of the arrows.</p></li>
+                  <li class="consume"><div class="consume-head" data-icon="pipeline"><code class="consume-alias">sdk</code><span class="consume-name">Build · SDK</span></div><p class="consume-text">Not built by this chain. Azure DevOps uses its default build.</p></li>
+                </ul>
+              </div>
+              <div class="insp-section">
+                <p class="insp-warn" data-icon="warning"><span>Line 14: the parameter "ring" lists a default that isn't one of its values.</span></p>
+                <div class="param-list">
+                  <div class="param is-changed is-invalid">
+                    <div class="param-head"><label class="param-label" for="ds-param-9">Instance count</label><button type="button" class="param-reset" aria-label="Reset Instance count to its default">Reset</button></div>
+                    <input type="text" class="param-input" inputmode="decimal" id="ds-param-9" spellcheck="false" autocomplete="off" aria-invalid="true" aria-describedby="ds-param-9-error" value="three">
+                    <div class="param-meta"><code class="param-name">instanceCount</code><span>Default: 3</span></div>
+                    <p class="param-error" id="ds-param-9-error">Enter a number.</p>
+                  </div>
+                </div>
+              </div>
+            </aside>
+          </div>
+        </div>
+        <div class="ds-dialog-stage" style="margin-top:var(--gutter)">
+          <div class="ds-ghost" aria-hidden="true"><p>Portal release train</p><p>Build · Portal and Build · Data plane feed the canary release, then smoke tests. Docs lint and publish run beside them.</p></div>
+          <div class="ask-overlay">
+            <div class="ask-dialog pa-dialog" role="dialog" aria-modal="false" aria-label="Run chain (specimen)">
+              <div class="ask-head"><span class="ask-title">Run chain</span><span class="ask-loc">Portal release train</span><button type="button" class="ask-close" title="Close (Esc)" aria-label="Close" data-icon="dismiss"></button></div>
+              <div class="pa-body">
+                <p class="pa-note">Queues 7 pipelines in 3 stages. Each stage starts once every pipeline before it passes; a failure skips everything after it.</p>
+                <ol class="run-confirm">
+                  <li><span class="run-confirm-stage">Stage 1</span><ul>
+                    <li><span class="run-confirm-name">Build · Portal</span><span class="run-confirm-branch" data-icon="branch">main</span></li>
+                    <li><span class="run-confirm-name">Build · Data plane</span><span class="run-confirm-branch" data-icon="branch">main</span></li>
+                    <li><span class="run-confirm-name">Lint docs</span><span class="run-confirm-branch" data-icon="branch">main</span></li>
+                  </ul></li>
+                  <li><span class="run-confirm-stage">Stage 2</span><ul>
+                    <li><span class="run-confirm-name">Release · Portal canary</span><span class="run-confirm-branch" data-icon="branch">main</span><span class="run-confirm-meta" data-icon="settings">1 parameter</span></li>
+                    <li><span class="run-confirm-name">Publish docs</span><span class="run-confirm-branch" data-icon="branch">main</span></li>
+                  </ul></li>
+                  <li><span class="run-confirm-stage">Stage 3</span><ul>
+                    <li><span class="run-confirm-name">Smoke tests</span><span class="run-confirm-branch" data-icon="branch">main</span><span class="run-confirm-meta" data-icon="settings">2 parameters</span></li>
+                    <li><span class="run-confirm-name">Notify</span><span class="run-confirm-branch" data-icon="branch">main</span></li>
+                  </ul></li>
+                </ol>
+                <ul class="run-confirm-notes"><li><b>Smoke tests</b> has a parameter to fix. It fails when its turn comes unless you fix it first.</li></ul>
+                <p class="pa-note">Keep Devis open until the chain finishes. The app queues each next pipeline.</p>
+              </div>
+              <div class="ask-answer err-ans pa-error" role="alert" hidden></div>
+              <div class="ask-actions"><button type="button" class="btn ghost sm pa-cancel">Cancel</button><button type="button" class="btn sm pa-confirm">Run chain</button></div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </section>
+
+    <section class="ds-chapter" id="patterns">
+      <h2>Patterns</h2>
+      <p class="ds-text">How the pieces behave together. DESIGN.md is the source; this chapter is the quick read.</p>
+
+      <section class="ds-topic" id="feed">
+        <h3>Queue model</h3>
+        <p class="ds-text">Two tabs, remembered across launches. My feed puts each pull request that concerns you in exactly one lane. All lists every pull request in scope, grouped by repository and folded by default.</p>
+        <div class="ds-cols">
+          <div class="glass-pane ds-stage">
+            <p class="ds-cap">Lane assignment, checked in this order</p>
+            <ol class="ds-lanes">
+              <li><span><b>Your pull requests.</b> You authored it. Pull requests where a reviewer is waiting on you or rejected float to the top; drafts fold into a closed "N drafts" group.</span></li>
+              <li><span><b>You've weighed in.</b> You voted or commented.</span></li>
+              <li><span><b>Needs your review.</b> It is assigned to you.</span></li>
+              <li><span><b>Copilot reviewed.</b> A Copilot review is queued, running, done or failed. Reviews in progress lead.</span></li>
+            </ol>
+            <p class="ds-text" style="margin-top:16px">Lanes display as Needs your review, Copilot reviewed, You've weighed in, Your pull requests. Inside a lane, drafts sink below published and the newest leads.</p>
+            <p class="ds-text">Hide moves selected rows out of My feed; they stay in All. A footer counts them and opens a "Hidden from your feed" lane with Restore. Queuing a Copilot review restores a pull request automatically.</p>
+          </div>
+          <div class="glass-pane ds-stage">
+            <p class="ds-cap">Search (Ctrl+F) filters both tabs. Terms are ANDed and case-insensitive.</p>
+            <table class="ds-table">
+              <thead><tr><th scope="col">Term</th><th scope="col">Matches</th></tr></thead>
+              <tbody>
+                <tr><td class="mono">free text</td><td>Title, #ID, author, repository, project and branches</td></tr>
+                <tr><td class="mono">is:draft</td><td>Drafts</td></tr>
+                <tr><td class="mono">is:published</td><td>Published pull requests</td></tr>
+                <tr><td class="mono">is:reviewed</td><td>A Copilot review is done</td></tr>
+                <tr><td class="mono">is:yours</td><td>You authored it</td></tr>
+                <tr><td class="mono">is:assigned</td><td>Assigned to you, not authored by you</td></tr>
+                <tr><td class="mono">repo:name</td><td>The repository contains name</td></tr>
+                <tr><td class="mono">author:name</td><td>The author contains name</td></tr>
+                <tr><td class="mono">branch:name</td><td>The source or target branch contains name</td></tr>
+                <tr><td class="mono">-term</td><td>Negates any term</td></tr>
+              </tbody>
+            </table>
+            <p class="ds-text" style="margin-top:12px">While searching, every group is open. Esc clears the field, then leaves it.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="ds-topic" id="keyboard">
+        <h3>Keyboard</h3>
+        <p class="ds-text">Every action has a keyboard path. Shortcuts follow Windows conventions and appear in tooltips.</p>
+        <div class="glass-pane ds-stage">
+          <div class="ds-kbd">
+            <div>
+              <p class="ds-cap">Queue</p>
+              <dl>
+                <dt><kbd>↑</kbd><kbd>↓</kbd></dt><dd>Move between rows and group heads</dd>
+                <dt><kbd>Home</kbd><kbd>End</kbd></dt><dd>Jump to the first or last row</dd>
+                <dt><kbd>→</kbd></dt><dd>Open a group</dd>
+                <dt><kbd>←</kbd></dt><dd>Close a group, or move to its head</dd>
+                <dt><kbd>Ctrl</kbd><kbd>F</kbd></dt><dd>Search pull requests</dd>
+                <dt><kbd>Esc</kbd></dt><dd>Clear the search, then leave it</dd>
+              </dl>
+            </div>
+            <div>
+              <p class="ds-cap">Reading pane and diagrams</p>
+              <dl>
+                <dt><kbd>Ctrl</kbd><kbd>=</kbd></dt><dd>Zoom the main pane in (up to 200%)</dd>
+                <dt><kbd>Ctrl</kbd><kbd>−</kbd></dt><dd>Zoom the main pane out (down to 50%)</dd>
+                <dt><kbd>Ctrl</kbd><kbd>0</kbd></dt><dd>Reset the pane to 100%</dd>
+                <dt><kbd>+</kbd><kbd>−</kbd><kbd>0</kbd></dt><dd>Zoom a focused Mermaid diagram</dd>
+                <dt><kbd>Ctrl</kbd> + scroll</dt><dd>Zoom a diagram under the pointer</dd>
+              </dl>
+            </div>
+            <div>
+              <p class="ds-cap">Chain canvas</p>
+              <dl>
+                <dt><kbd>Enter</kbd></dt><dd>Select the focused block</dd>
+                <dt><kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd></dt><dd>Nudge the block; on empty canvas, pan</dd>
+                <dt><kbd>Shift</kbd> + arrows</dt><dd>Nudge in 4× steps</dd>
+                <dt><kbd>Delete</kbd></dt><dd>Remove the selected block or arrow</dd>
+                <dt><kbd>Esc</kbd></dt><dd>Clear the selection</dd>
+                <dt><kbd>Ctrl</kbd><kbd>=</kbd> <kbd>−</kbd> <kbd>0</kbd></dt><dd>Zoom the canvas</dd>
+              </dl>
+            </div>
+            <div>
+              <p class="ds-cap">Pipelines</p>
+              <dl>
+                <dt><kbd>Ctrl</kbd><kbd>F</kbd></dt><dd>Search the catalog</dd>
+                <dt><kbd>Ctrl</kbd><kbd>S</kbd></dt><dd>Save the chain now</dd>
+                <dt><kbd>Ctrl</kbd><kbd>Z</kbd></dt><dd>Undo</dd>
+                <dt><kbd>Ctrl</kbd><kbd>Y</kbd></dt><dd>Redo</dd>
+              </dl>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="ds-topic" id="a11y">
+        <h3>Accessibility</h3>
+        <p class="ds-text">Glass is decoration; nothing depends on it. Every rule below holds with blur off, transparency reduced and forced colors on.</p>
+        <div class="glass-pane ds-stage">
+          <table class="ds-table">
+            <thead><tr><th scope="col">Rule</th><th scope="col">How</th></tr></thead>
+            <tbody>
+              <tr><td>Focus is always visible</td><td>A 2px <code>--focus</code> (pale cyan) outline at a 1px offset, inset on full-width rows and tabs. Never removed.</td></tr>
+              <tr><td>Icon-only controls are named</td><td>Every icon button carries an <code>aria-label</code>; its tooltip adds the shortcut.</td></tr>
+              <tr><td>Navigation states are exposed</td><td>Section tabs are buttons in a labelled <code>nav</code> with <code>aria-current</code>; folds use <code>aria-expanded</code>, toggles use <code>aria-pressed</code>.</td></tr>
+              <tr><td>Status is written out</td><td>Blocks, run chips, badges and the inspector always say the status. Tone alone never carries meaning.</td></tr>
+              <tr><td>Progress is announced</td><td>A visually hidden live region announces chain run progress.</td></tr>
+              <tr><td>Forced colors</td><td>Blur, field effects and pane shadows drop; selection bars, tab underlines and the selected block use <code>Highlight</code>; status dots keep their colors.</td></tr>
+              <tr><td>Reduced transparency</td><td>Every glass tier turns opaque and blur is off.</td></tr>
+              <tr><td>Reduced motion</td><td>Flowing arrows freeze and the running bar becomes a static full-width line.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="ds-topic" id="dodont">
+        <h3>Do's and don'ts</h3>
+        <p class="ds-text">Verbatim from DESIGN.md.</p>
+        <div class="glass-pane ds-stage">
+          <div class="ds-dodont">
+            <div class="ds-do">
+              <h4>Do</h4>
+              <ul>
+                <li data-icon="check"><span>Do use the tokens; add a token before adding a raw value.</span></li>
+                <li data-icon="check"><span>Do keep glass to panes, heads, floats, dialogs and pipeline blocks, and keep everything inside a pane as tints.</span></li>
+                <li data-icon="check"><span>Do keep one emissive cyan per view, and let severity and diff colors carry meaning.</span></li>
+                <li data-icon="check"><span>Do set IDs, branches, build numbers and other readouts in Cascadia Mono.</span></li>
+                <li data-icon="check"><span>Do check new components in <code>web/design-system.html</code>, at 1440px and below 1100px, and with reduced transparency on.</span></li>
+              </ul>
+            </div>
+            <div class="ds-dont">
+              <h4>Don't</h4>
+              <ul>
+                <li data-icon="dismiss"><span>Don't make rows, cards, badges or fields their own glass; nested blur muddies the content and costs frames.</span></li>
+                <li data-icon="dismiss"><span>Don't let anything other than cyan glow, and don't glow decoratively: glow means selection, focus, running or the primary command.</span></li>
+                <li data-icon="dismiss"><span>Don't drop a float, head or dialog below 84% opacity; code and diagrams must never ghost through.</span></li>
+                <li data-icon="dismiss"><span>Don't add light-theme surfaces; the shell forces dark so the glass always reads as smoked.</span></li>
+                <li data-icon="dismiss"><span>Don't use colored side stripes on blocks, rows or cards.</span></li>
+                <li data-icon="dismiss"><span>Don't use emoji as icons; use <code>icon()</code> from <code>web/src/icons.ts</code>.</span></li>
+                <li data-icon="dismiss"><span>Don't put a <code>&lt;button&gt;</code> on the page without a base class.</span></li>
+                <li data-icon="dismiss"><span>Don't show raw HTML or Markdown in previews.</span></li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+    </section>
+
+    <footer class="ds-foot">
+      <p>Every specimen on this page is styled by the app's own <code>style.css</code> and icons, so it can't drift from the app. Change DESIGN.md first, then the CSS, then check the change here at 1440px and below 1100px.</p>
+    </footer>
+  </main>
+</div>
+
 <script type="module">
   import { icon } from "./icons.js";
-  const css = getComputedStyle(document.documentElement);
-  for (const grid of document.querySelectorAll("[data-swatches]")) {
-    for (const name of grid.dataset.swatches.split(" ")) {
-      const value = css.getPropertyValue("--" + name).trim();
-      grid.insertAdjacentHTML("beforeend",
-        `<div class="ds-swatch"><div class="ds-chip" style="background: var(--${name})"></div><div>--${name}<small>${value}</small></div></div>`);
-    }
+
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
+  for (const el of document.querySelectorAll("[data-icon]")) el.insertAdjacentHTML("afterbegin", icon(el.dataset.icon));
+  for (const el of document.querySelectorAll("[data-icon-end]")) el.insertAdjacentHTML("beforeend", icon(el.dataset.iconEnd));
+
+  const ICONS = ["check", "dismiss", "clock", "chat", "person", "sync", "warning", "reply", "circle", "sparkle", "tray", "copy", "folder", "chevron", "back", "add", "terminal", "bell", "settings", "pullRequest", "flow", "pipeline", "play", "stop", "trash", "search", "minus", "fit", "tidy", "branch", "external"];
+  const iconHost = document.getElementById("ds-icons");
+  if (iconHost) iconHost.innerHTML = ICONS.map((n) => `<figure>${icon(n)}<figcaption>${n}</figcaption></figure>`).join("");
+
+  const tokens = getComputedStyle(document.documentElement);
+  for (const host of document.querySelectorAll("[data-swatches]")) {
+    host.innerHTML = host.dataset.swatches
+      .trim()
+      .split(/\s+/)
+      .map((name) => {
+        const value = tokens.getPropertyValue(`--${name}`).trim();
+        return `<div class="ds-swatch"><span class="ds-chip" style="--c:var(--${name})"></span><span><code>--${name}</code><small title="${esc(value)}">${esc(value)}</small></span></div>`;
+      })
+      .join("");
   }
-  for (const node of document.querySelectorAll("[data-icon]")) node.insertAdjacentHTML("afterbegin", icon(node.dataset.icon));
-  const names = ["check", "dismiss", "clock", "chat", "person", "sync", "warning", "reply", "circle", "sparkle", "tray",
-    "copy", "folder", "chevron", "back", "add", "terminal", "bell", "settings", "pullRequest"];
-  document.getElementById("icons").innerHTML = names.map((n) => `<span>${icon(n)}${n}</span>`).join("");
+
+  const easePath = document.getElementById("ds-ease-path");
+  const easeLabel = document.getElementById("ds-ease-label");
+  const ease = tokens.getPropertyValue("--ease").trim();
+  const bez = /cubic-bezier\(\s*([-\d.]+)\s*,\s*([-\d.]+)\s*,\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\)/.exec(ease);
+  if (easePath && bez) {
+    const [a, b, c, d] = bez.slice(1).map(Number);
+    easePath.setAttribute("d", `M0 100 C${a * 100} ${(1 - b) * 100} ${c * 100} ${(1 - d) * 100} 100 0`);
+  }
+  if (easeLabel && ease) easeLabel.textContent = `--ease: ${ease}`;
+
+  const replayCard = document.getElementById("ds-replay-card");
+  document.getElementById("ds-replay")?.addEventListener("click", () => {
+    if (!replayCard) return;
+    replayCard.classList.remove("play");
+    void replayCard.offsetWidth;
+    replayCard.classList.add("play");
+  });
+
+  const links = [...document.querySelectorAll('.ds-rail a[href^="#"]')];
+  const order = links.map((a) => a.getAttribute("href").slice(1));
+  const visible = new Set();
+  const mark = (id) => {
+    for (const a of links) {
+      if (a.getAttribute("href") === `#${id}`) a.setAttribute("aria-current", "true");
+      else a.removeAttribute("aria-current");
+    }
+  };
+  const io = new IntersectionObserver(
+    (entries) => {
+      for (const e of entries) {
+        if (e.isIntersecting) visible.add(e.target.id);
+        else visible.delete(e.target.id);
+      }
+      const current = order.filter((id) => visible.has(id)).pop();
+      if (current) mark(current);
+    },
+    { rootMargin: "0px 0px -65% 0px" }
+  );
+  for (const id of order) {
+    const section = document.getElementById(id);
+    if (section) io.observe(section);
+  }
 </script>
 </body>
 </html>

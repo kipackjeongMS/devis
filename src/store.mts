@@ -62,7 +62,7 @@ export interface ReviewRow {
     run_id: string | null;
     /** Copilot session that produced this review; follow-up subtasks resume into it. */
     reviewer_session_id: string | null;
-    // Legacy mirror of the My Plate preference. Kept for stored-review compatibility.
+    // Legacy mirror of the My feed hide preference. Kept for stored-review compatibility.
     // A fresh review clears both this field and the dedicated preference row.
     // fresh review starts, so a re-review re-surfaces it.
     dismissed: number;
@@ -257,7 +257,7 @@ async function initializeDb(): Promise<DatabaseSync> {
             ON reviews(org, project, repo_id, pr_id);
         `);
 
-        // My Plate can also contain activity-only PRs, so its preference key uses
+        // My feed can also contain activity-only PRs, so its preference key uses
         // the same scoped identity. Legacy bare-number choices remain readable.
         connection.exec(`
             CREATE TABLE IF NOT EXISTS plate_preferences (
@@ -431,6 +431,55 @@ async function initializeDb(): Promise<DatabaseSync> {
         connection.exec(
             "UPDATE review_jobs SET task_prompt = NULL WHERE status IN ('done','error')",
         );
+        connection.exec(`
+            CREATE TABLE IF NOT EXISTS pipeline_chains (
+                id          TEXT PRIMARY KEY,
+                name        TEXT NOT NULL,
+                graph_json  TEXT NOT NULL,
+                created_at  TEXT NOT NULL,
+                updated_at  TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS pipeline_runs (
+                run_id            TEXT PRIMARY KEY,
+                chain_id          TEXT NOT NULL,
+                status            TEXT NOT NULL,
+                graph_json        TEXT NOT NULL,
+                state_json        TEXT NOT NULL,
+                cancel_requested  INTEGER NOT NULL DEFAULT 0,
+                error             TEXT,
+                created_at        TEXT NOT NULL,
+                updated_at        TEXT NOT NULL,
+                finished_at       TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_pipeline_runs_chain
+            ON pipeline_runs(chain_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_pipeline_runs_status
+            ON pipeline_runs(status);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_pipeline_runs_one_active
+            ON pipeline_runs(chain_id) WHERE status = 'running';
+            CREATE TABLE IF NOT EXISTS pipeline_run_commands (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id      TEXT NOT NULL,
+                kind        TEXT NOT NULL,
+                node_id     TEXT NOT NULL,
+                status      TEXT NOT NULL DEFAULT 'pending',
+                error       TEXT,
+                created_at  TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_pipeline_run_commands_run
+            ON pipeline_run_commands(run_id, status);
+        `);
+        // Chain edits made during a run travel to the runner as a "graph" command.
+        const commandCols = connection.prepare("PRAGMA table_info(pipeline_run_commands)").all() as Array<{ name: string }>;
+        if (!commandCols.some((c) => c.name === "payload")) {
+            connection.exec("ALTER TABLE pipeline_run_commands ADD COLUMN payload TEXT");
+        }
+        // A Jarvis task's validation chain: temporary, and removed with its task.
+        const chainCols = connection.prepare("PRAGMA table_info(pipeline_chains)").all() as Array<{ name: string }>;
+        if (!chainCols.some((c) => c.name === "owner_task_id")) {
+            connection.exec("ALTER TABLE pipeline_chains ADD COLUMN owner_task_id TEXT");
+        }
+        connection.exec("CREATE INDEX IF NOT EXISTS idx_pipeline_chains_owner ON pipeline_chains(owner_task_id)");
         connection.exec("COMMIT");
         db = connection;
         return connection;
@@ -1006,7 +1055,7 @@ export function expireStaleReviews(maxAgeMs = 2 * 60 * 60 * 1000): number {
     return Number(info.changes ?? 0);
 }
 
-/** Keep the review-row mirror of a scoped My Plate preference in sync. */
+/** Keep the review-row mirror of a scoped My feed hide preference in sync. */
 export function setDismissed(identities: ReviewIdentity[], dismissed: boolean): number {
     if (!identities.length) return 0;
     const update = requireDb().prepare(
@@ -1022,7 +1071,7 @@ export function setDismissed(identities: ReviewIdentity[], dismissed: boolean): 
     return changed;
 }
 
-/** Every PR currently hidden from My Plate, including activity-only PRs. */
+/** Every PR currently hidden from My feed, including activity-only PRs. */
 export function listPlateDismissals(): Set<string> {
     const rows = requireDb()
         .prepare("SELECT plate_key FROM plate_preferences WHERE dismissed = 1")
@@ -1030,7 +1079,7 @@ export function listPlateDismissals(): Set<string> {
     return new Set(rows.map((row) => row.plate_key));
 }
 
-/** Persist a My Plate removal even when the PR has no background-review row. */
+/** Persist a My feed hide even when the PR has no background-review row. */
 export function setPlateDismissed(identities: ReviewIdentity[], dismissed: boolean): number {
     if (!identities.length) return 0;
     const stmt = requireDb().prepare(
@@ -1055,10 +1104,24 @@ export function setPlateDismissed(identities: ReviewIdentity[], dismissed: boole
         );
         changed += Number(info.changes ?? 0);
     }
+    for (const listener of plateListeners) {
+        try {
+            listener(identities, dismissed);
+        } catch (e) {
+            console.error(`[store] plate listener failed: ${(e as Error).message}`);
+        }
+    }
     return changed;
 }
 
-// Merge-then-replace so a partial write (e.g. the canvas marking status='running')
+type PlateListener = (identities: ReviewIdentity[], dismissed: boolean) => void;
+const plateListeners = new Set<PlateListener>();
+
+/** Hear every My feed hide or restore, including a review un-hiding its PR. */
+export function onPlateDismissed(listener: PlateListener): () => void {
+    plateListeners.add(listener);
+    return () => plateListeners.delete(listener);
+}
 // never clobbers fields a later write (the agent's story/findings) has yet to add,
 // and vice-versa. Only keys present & non-null in `r` overwrite existing values.
 type MergeKey = "org" | "project" | "repo" | "title" | "summary" | "story" | "error";
@@ -1176,7 +1239,7 @@ export function upsertReview(r: ReviewInput): ReviewRow {
                   ? null
                   : (ex.reviewer_session_id ?? null),
         // A fresh review (status flips to "running") re-surfaces a previously
-        // dismissed PR in My Plate; otherwise the user's choice is preserved.
+        // dismissed PR in My feed; otherwise the user's choice is preserved.
         dismissed: r.status === "queued" || r.status === "running" ? 0 : (ex.dismissed ?? 0),
         created_at: ex.created_at != null ? ex.created_at : now,
         updated_at: now,
@@ -1242,6 +1305,120 @@ export function publishReviewJobRun(r: ReviewInput & { runId: string }): ReviewR
             );
         connection.exec("COMMIT");
         return row;
+    } catch (e) {
+        connection.exec("ROLLBACK");
+        throw e;
+    }
+}
+
+/** The review a reviewer session produced, while that session is still its reviewer. */
+export function getReviewByReviewerSession(reviewerSessionId: string): ReviewRow | null {
+    return (
+        (requireDb()
+            .prepare("SELECT * FROM reviews WHERE reviewer_session_id = ? ORDER BY updated_at DESC LIMIT 1")
+            .get(reviewerSessionId) as ReviewRow | undefined) || null
+    );
+}
+
+function parseStoredList<T>(json: string | null): T[] {
+    if (!json) return [];
+    try {
+        const parsed = JSON.parse(json);
+        return Array.isArray(parsed) ? (parsed as T[]) : [];
+    } catch {
+        return [];
+    }
+}
+
+function nextFindingId(prefix: string, used: Set<string>): string {
+    let n = used.size;
+    while (used.has(prefix + n)) n++;
+    used.add(prefix + n);
+    return prefix + n;
+}
+
+const findingKey = (f: Finding) =>
+    [canonicalReviewFilePath(f.file), f.line ?? "", f.side ?? "", f.comment.trim()].join("|");
+const semanticFindingKey = (f: SemanticFinding) =>
+    [f.title.trim().toLowerCase(), f.comment.trim()].join("|");
+
+export interface AppendedFindings {
+    review: ReviewRow;
+    findings: Finding[];
+    semanticFindings: SemanticFinding[];
+    duplicates: number;
+}
+
+/**
+ * Stage more findings on the finished review a reviewer session produced (the
+ * reviewer chat's follow-ups). Existing findings, their posted state and the
+ * review status are untouched; exact repeats are skipped.
+ */
+export function appendReviewFindings(
+    reviewerSessionId: string,
+    findings: Finding[],
+    semanticFindings: SemanticFinding[],
+): AppendedFindings {
+    const connection = requireDb();
+    connection.exec("BEGIN IMMEDIATE");
+    try {
+        const row = getReviewByReviewerSession(reviewerSessionId);
+        if (!row) {
+            throw new Error("This session is no longer the reviewer of record for its PR, so its findings cannot be added.");
+        }
+        if (row.status !== "done") {
+            throw new Error(`The review is ${row.status}; findings can only be added to a finished review.`);
+        }
+        const existing = parseStoredList<Finding>(row.findings_json);
+        const existingSemantic = parseStoredList<SemanticFinding>(row.semantic_findings_json);
+        const seen = new Set(existing.map(findingKey));
+        const seenSemantic = new Set(existingSemantic.map(semanticFindingKey));
+        const usedIds = new Set(existing.map((f) => String(f.id)));
+        const usedSemanticIds = new Set(existingSemantic.map((f) => String(f.id)));
+
+        let duplicates = 0;
+        const fresh = <T,>(list: T[], keyOf: (item: T) => string, seenKeys: Set<string>) =>
+            list.filter((item) => {
+                const key = keyOf(item);
+                if (seenKeys.has(key)) {
+                    duplicates++;
+                    return false;
+                }
+                seenKeys.add(key);
+                return true;
+            });
+        // New ids never reuse an existing one, and ids/posted/rewrites from the
+        // input are discarded: every added finding starts staged and unposted.
+        const added = fresh(normalizeFindings(findings), findingKey, seen).map((f) => ({
+            ...f,
+            id: nextFindingId("f", usedIds),
+            posted: false,
+            humanizedComment: null,
+        }));
+        const addedSemantic = fresh(
+            normalizeSemanticFindings(semanticFindings),
+            semanticFindingKey,
+            seenSemantic,
+        ).map((f) => ({ ...f, id: nextFindingId("s", usedSemanticIds), posted: false, humanizedComment: null }));
+
+        let review = row;
+        if (added.length || addedSemantic.length) {
+            review = {
+                ...row,
+                findings_json: added.length ? JSON.stringify([...existing, ...added]) : row.findings_json,
+                semantic_findings_json: addedSemantic.length
+                    ? JSON.stringify([...existingSemantic, ...addedSemantic])
+                    : row.semantic_findings_json,
+                updated_at: new Date().toISOString(),
+            };
+            connection
+                .prepare(
+                    "UPDATE reviews SET findings_json = ?, semantic_findings_json = ?, updated_at = ? WHERE review_key = ?",
+                )
+                .run(review.findings_json, review.semantic_findings_json, review.updated_at, row.review_key);
+        }
+        connection.exec("COMMIT");
+        return { review, findings: added, semanticFindings: addedSemantic, duplicates };
     } catch (e) {
         connection.exec("ROLLBACK");
         throw e;
@@ -1500,6 +1677,50 @@ export function pruneCommentActivity(olderThanMs: number): number {
     const info = requireDb()
         .prepare("DELETE FROM pr_comment_activity WHERE checked_at < ?")
         .run(olderThanMs);
+    return Number(info.changes ?? 0);
+}
+
+/** Inbox events older than the cutoff; the inbox shows the latest 50. */
+export function pruneNotifications(olderThanMs: number): number {
+    const info = requireDb()
+        .prepare("DELETE FROM notifications WHERE created_at < ?")
+        .run(new Date(olderThanMs).toISOString());
+    return Number(info.changes ?? 0);
+}
+
+/**
+ * One org's watches with no sign of life since the cutoff. Discovery refreshes
+ * every watch on an active PR each poll, and the poll touches a watch whose
+ * thread gets a new comment, so these are quiet PRs that left the user's lists;
+ * polling them forever would make every poll slower. The caller picks a cutoff
+ * from the org's poll progress, so a closed app or a failing org never loses a
+ * watch it hasn't polled yet.
+ */
+export function pruneInboxWatches(org: string, olderThanMs: number): number {
+    const info = requireDb()
+        .prepare("DELETE FROM inbox_watches WHERE org = ? AND updated_at < ?")
+        .run(org, new Date(olderThanMs).toISOString());
+    return Number(info.changes ?? 0);
+}
+
+export function listInboxWatchOrgs(): string[] {
+    return (requireDb().prepare("SELECT DISTINCT org FROM inbox_watches").all() as unknown as { org: string }[]).map((r) => r.org);
+}
+
+/** Marks a watch as still active without changing anything else about it. */
+export function touchInboxWatch(watchKey: string, at = new Date().toISOString()): void {
+    requireDb().prepare("UPDATE inbox_watches SET updated_at = ? WHERE watch_key = ? AND updated_at < ?").run(at, watchKey, at);
+}
+
+export function deleteInboxWatch(watchKey: string): void {
+    requireDb().prepare("DELETE FROM inbox_watches WHERE watch_key = ?").run(watchKey);
+}
+
+/** Finished review jobs older than the cutoff. Their review results stay in `reviews`. */
+export function pruneReviewJobs(olderThanMs: number): number {
+    const info = requireDb()
+        .prepare("DELETE FROM review_jobs WHERE status IN ('done','error') AND updated_at < ?")
+        .run(new Date(olderThanMs).toISOString());
     return Number(info.changes ?? 0);
 }
 

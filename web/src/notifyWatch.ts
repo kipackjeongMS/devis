@@ -6,13 +6,18 @@
 // watches it, so there are no cross-session duplicate pings.
 import { state, loadReviews } from "./state.js";
 import { toast } from "./toast.js";
-import { diffReviews, getTriggered, unmarkTriggered, triggeredCount } from "./notify.js";
+import { diffReviews, expireTriggered, getTriggered, unmarkTriggered, triggeredCount } from "./notify.js";
 import type { Review } from "./types.js";
 import type { PendingNote } from "./notify.js";
 
 const POLL_MS = 7000;
 let watchTimer: ReturnType<typeof setInterval> | null = null;
+/** A tick still waiting on the store; the next one is skipped rather than stacked. */
+let ticking = false;
 let prev: Record<string, Review> = {};
+// What the queue was last told to render. A tick re-renders the whole queue,
+// so it only asks when the loaded reviews or active jobs actually changed.
+let lastSig: string | null = null;
 
 // Ask for OS-notification permission. Must be called from a user gesture (the
 // "Review PR with Copilot" click) or the host may ignore it. Best-effort: a
@@ -30,6 +35,7 @@ export function requestNotifyPermission(): void {
 export function startNotifyWatch(): void {
   if (watchTimer) return;
   prev = { ...state.reviews };
+  lastSig = null;
   watchTimer = setInterval(() => void tick(), POLL_MS);
 }
 
@@ -41,16 +47,28 @@ export function stopNotifyWatch(): void {
 }
 
 async function tick(): Promise<void> {
-  const before = prev;
-  await loadReviews(); // refreshes state.reviews from the shared store
-  const after = state.reviews;
-  window.dispatchEvent(new CustomEvent("ado-pr-updated"));
-  for (const note of diffReviews(before, after, getTriggered())) {
-    fireNote(note);
-    unmarkTriggered(note.key);
+  if (ticking) return;
+  ticking = true;
+  try {
+    const before = prev;
+    await loadReviews(); // refreshes state.reviews from the shared store
+    const after = state.reviews;
+    const sig = JSON.stringify([after, state.activeReviewJobs]);
+    if (sig !== lastSig) {
+      lastSig = sig;
+      window.dispatchEvent(new CustomEvent("ado-pr-updated"));
+    }
+    for (const note of diffReviews(before, after, getTriggered())) {
+      fireNote(note);
+      unmarkTriggered(note.key);
+    }
+    prev = { ...after };
+  } catch {
+    /* the next tick tries again */
+  } finally {
+    ticking = false;
   }
-  prev = { ...after };
-  if (triggeredCount() === 0) stopNotifyWatch();
+  if (expireTriggered() === 0 && triggeredCount() === 0) stopNotifyWatch();
 }
 
 function fireNote(n: PendingNote): void {

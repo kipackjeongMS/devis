@@ -4,7 +4,7 @@ import { el } from "./dom.js";
 import { esc } from "./util.js";
 import { getJSON } from "./api.js";
 import { state } from "./state.js";
-import { highlightCode } from "./highlight.js";
+import { diffTable, diffRowKey } from "./diffTable.js";
 import { renderThread, buildComposerRow, renderStagedFinding } from "./threads.js";
 import { installSelectionToolbar } from "./selection.js";
 import { openAskModal } from "./ask.js";
@@ -12,7 +12,12 @@ import { reviewStateKey } from "./reviewKey.js";
 import { canonicalReviewFilePath } from "./reviewPath.js";
 import { icon } from "./icons.js";
 import type { RevealableFile } from "./reveal.js";
-import type { PR, Detail, FileChange, Diff, DiffLine, Thread, Finding } from "./types.js";
+import type { PR, Detail, FileChange, Diff, Thread, Finding } from "./types.js";
+
+/** A rendered diff that can place findings staged after it was painted. */
+interface StagedHost extends HTMLElement {
+  _insertStaged?: (finding: Finding) => void;
+}
 
 /** Unposted, line-anchored findings for one file (staged inline comments). */
 function stagedForFile(pr: PR, filePath: string): Finding[] {
@@ -51,6 +56,21 @@ export function renderFile(pr: PR, detail: Detail, file: FileChange, threads: Th
      </button>`
   );
   const body = el(`<div class="file-body"></div>`);
+  // Staged findings already shown (or dismissed) in this loaded diff, so a
+  // refresh adds only findings that arrived later, e.g. from the reviewer chat.
+  const renderedStaged = new Set<string>();
+  let diffWrap: StagedHost | null = null;
+
+  function syncAiDot(count: number): void {
+    const dot = head.querySelector(".file-ai-dot");
+    if (!count) {
+      dot?.remove();
+      return;
+    }
+    const next = el(`<span class="file-ai-dot" title="${count} staged AI comment(s)">${icon("sparkle")}${count}</span>`);
+    if (dot) dot.replaceWith(next);
+    else head.querySelector(".file-path")!.after(next);
+  }
 
   async function loadDiff(): Promise<void> {
     body.innerHTML = '<div class="diff-note"><span class="spinner"></span> Loading diff…</div>';
@@ -64,11 +84,8 @@ export function renderFile(pr: PR, detail: Detail, file: FileChange, threads: Th
       body.innerHTML = "";
       file._diff = diff; // cache for bridge
       const staged = stagedForFile(pr, file.path);
-      if (staged.length && !head.querySelector(".file-ai-dot")) {
-        head.querySelector(".file-path")!.after(
-          el(`<span class="file-ai-dot" title="${staged.length} staged AI comment(s)">${icon("sparkle")}${staged.length}</span>`)
-        );
-      }
+      if (staged.length && !head.querySelector(".file-ai-dot")) syncAiDot(staged.length);
+      for (const f of staged) renderedStaged.add(String(f.id));
       // File-level threads (no line) render above the diff; line threads render inline.
       const fileLevel = threads.filter((t) => t.line == null);
       const lineThreads = threads.filter((t) => t.line != null);
@@ -76,7 +93,8 @@ export function renderFile(pr: PR, detail: Detail, file: FileChange, threads: Th
       const stagedLine = staged.filter((f) => f.line != null);
       for (const t of fileLevel) body.appendChild(renderThread(pr, t));
       for (const f of stagedFile) body.appendChild(renderStagedFinding(pr, file, f));
-      body.appendChild(renderDiff(pr, detail, file, diff, lineThreads, stagedLine));
+      diffWrap = renderDiff(pr, detail, file, diff, lineThreads, stagedLine);
+      body.appendChild(diffWrap);
     } catch (e: any) {
       body.innerHTML = '<div class="diff-note">Could not load diff: ' + esc(e.message) + "</div>";
     }
@@ -99,6 +117,19 @@ export function renderFile(pr: PR, detail: Detail, file: FileChange, threads: Th
     await ensureLoaded();
   };
 
+  // Add findings staged after this diff loaded. Unloaded files pick them up on load.
+  box._refreshStaged = () => {
+    if (!diffWrap?.isConnected) return;
+    const staged = stagedForFile(pr, file.path);
+    const added = staged.filter((f) => !renderedStaged.has(String(f.id)));
+    for (const f of added) {
+      renderedStaged.add(String(f.id));
+      if (f.line == null || !diffWrap._insertStaged) diffWrap.before(renderStagedFinding(pr, file, f));
+      else diffWrap._insertStaged(f);
+    }
+    if (added.length) syncAiDot(staged.length);
+  };
+
   box.appendChild(head);
   box.appendChild(body);
   return box;
@@ -111,7 +142,7 @@ export function renderDiff(
   diff: Diff,
   lineThreads?: Thread[],
   stagedLine?: Finding[]
-): HTMLElement {
+): StagedHost {
   lineThreads = lineThreads || [];
   stagedLine = stagedLine || [];
   if (diff.tooLarge) {
@@ -120,43 +151,14 @@ export function renderDiff(
     );
   }
   const hunks = diff.hunks || [];
-  const wrap = el(`<div class="diff-wrap"></div>`);
+  const wrap = el<StagedHost>(`<div class="diff-wrap"></div>`);
   if (!hunks.length && !lineThreads.length && !stagedLine.length) {
     wrap.appendChild(el(`<div class="diff-note">No textual changes.</div>`));
     return wrap;
   }
 
-  const table = el(`<table class="diff"></table>`);
-  const tbody = document.createElement("tbody");
-  const rowByKey = new Map<string, HTMLTableRowElement>(); // "side:line" -> <tr>
-  const keyOf = (side: string, line: number | string) => `${side}:${line}`;
-
-  hunks.forEach((hunk: DiffLine[], hi: number) => {
-    if (hi > 0) tbody.appendChild(el(`<tr class="gap"><td colspan="5">⋯</td></tr>`));
-    for (const ln of hunk) {
-      const cls = ln.t === "add" ? "add" : ln.t === "del" ? "del" : "";
-      const sign = ln.t === "add" ? "+" : ln.t === "del" ? "-" : "";
-      const tr = document.createElement("tr");
-      if (cls) tr.className = cls;
-      // Anchor: prefer the right (new) side; deleted lines anchor to the left (old) side.
-      const cside = ln.nn != null ? "right" : "left";
-      const cline = ln.nn != null ? ln.nn : ln.o;
-      const canComment = cline != null;
-      if (canComment) {
-        tr.dataset.line = String(cline);
-        tr.dataset.side = cside;
-        rowByKey.set(keyOf(cside, cline!), tr);
-      }
-      tr.innerHTML =
-        `<td class="gutter"></td>` +
-        `<td class="ln">${ln.o || ""}</td>` +
-        `<td class="ln">${ln.nn || ""}</td>` +
-        `<td class="sign">${sign}</td>` +
-        `<td class="code">${highlightCode(ln.text)}</td>`;
-      tbody.appendChild(tr);
-    }
-  });
-  table.appendChild(tbody);
+  const { table, tbody, rowByKey } = diffTable(hunks);
+  const keyOf = diffRowKey;
   wrap.appendChild(table);
 
   const orphans = el(`<div class="diff-orphans"></div>`);
@@ -293,6 +295,7 @@ export function renderDiff(
   // existing ADO threads (which stack below and behind a bubble toggle).
   for (const f of stagedLine) insertStaged(f);
   for (const t of lineThreads) insertThread(t);
+  wrap._insertStaged = insertStaged;
 
   return wrap;
 }

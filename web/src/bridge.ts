@@ -37,6 +37,7 @@ async function enqueueTargets(
     const chunk = prs.slice(offset, offset + QUEUE_BATCH_SIZE);
     let res: any;
     try {
+      // Queueing fetches every changed file of up to 50 PRs before it answers.
       res = await postJSON("/api/review/queue-targets", {
         reviewModel: state.config.reviewModel || "",
         targets: chunk.map((pr) => ({
@@ -45,7 +46,7 @@ async function enqueueTargets(
           repoId: pr.repoId,
           prId: String(pr.id),
         })),
-      });
+      }, { timeoutMs: 30 * 60_000 });
     } catch (e) {
       const error = (e as Error).message;
       failed.push(...chunk.map((pr) => ({ prId: String(pr.id), error })));

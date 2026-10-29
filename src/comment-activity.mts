@@ -113,7 +113,7 @@ export function createCommentActivity(deps: CommentActivityDeps): CommentActivit
                     if (!pr.project || !pr.repoId) continue;
                     const row = rows.get(rowKey(pr.project, pr.repoId, String(pr.id)));
                     pr.iCommented = !!row?.commented;
-                    // A non-zero vote already puts the PR on My Plate.
+                    // A non-zero vote already puts the PR in My feed.
                     if (pr.myVote !== 0 || row?.commented) continue;
                     if (force || !row || at - row.checkedAt >= COMMENT_ACTIVITY_RECHECK_MS) {
                         startCheck(pr, meId);

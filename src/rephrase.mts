@@ -11,15 +11,33 @@ export interface RephraseInput {
     comment: string;
     title?: string;
     model?: string;
+    /** What the user asked to change this time ("shorter", "softer", "mention the rollout"). */
+    instructions?: string;
+    /** The user's writing voice (their in-my-language skill), when they have it. */
+    voice?: string | null;
 }
+
+export const REPHRASE_INSTRUCTIONS_MAX = 1000;
 
 export function buildRephrasePrompt(input: RephraseInput): string {
     const original = (input.title ? `Title: ${input.title}\n` : "") + input.comment;
+    const asked = (input.instructions || "").trim().slice(0, REPHRASE_INSTRUCTIONS_MAX);
     return [
         "Rewrite the following code-review comment so it reads like a natural, concise note a human reviewer would leave on a pull request.",
-        "Use plain, direct English. Keep the technical substance and any suggested fix, but strip robotic phrasing, hedging, filler, and AI tells so it does not sound AI-generated at all.",
+        input.voice
+            ? "The user posts it under their own name, so write it in their own language: follow their in-my-language skill below. Keep the technical substance and any suggested fix."
+            : "Use plain, direct English. Keep the technical substance and any suggested fix, but strip robotic phrasing, hedging, filler, and AI tells so it does not sound AI-generated at all.",
         "Keep it short — one to three sentences. No greetings, no sign-offs.",
+        ...(asked
+            ? [
+                  "",
+                  "The user asked for this change:",
+                  asked,
+                  "Follow it. It takes priority over the length and tone rules above, but keep the technical facts accurate and don't add claims the comment doesn't support.",
+              ]
+            : []),
         "Output ONLY the rewritten comment text: no preamble, no surrounding quotes, no markdown headers.",
+        ...(input.voice ? ["", input.voice] : []),
         "",
         "Comment to rewrite:",
         original,

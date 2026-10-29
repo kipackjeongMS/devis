@@ -14,6 +14,7 @@ import type { PR, Review, SemanticFinding } from "./types.js";
 import { reviewStateKey } from "./reviewKey.js";
 import { refreshSeverityLights } from "./severityLights.js";
 import { icon } from "./icons.js";
+import type { RevealableFile } from "./reveal.js";
 
 const SEMANTIC_SEVERITY_RANK: Record<string, number> = {
   critical: 0,
@@ -89,6 +90,14 @@ function semanticFindingCard(pr: PR, finding: SemanticFinding): HTMLElement {
   return card;
 }
 
+// Poll again only while the panel is still on the page; a closed or replaced
+// pane leaves nothing to update.
+function schedulePanelPoll(pr: PR, panel: HTMLElement, onUpdate?: () => void): void {
+  scheduleReviewPoll(() => {
+    if (panel.isConnected) void refreshReviewPanel(pr, panel, onUpdate);
+  }, 4000);
+}
+
 // Populate (and, while running, poll) the background-review panel for one PR.
 // Renders the semantic story + findings as markdown once a result exists.
 // `onUpdate` fires after every refresh (including polls), so dependent UI such
@@ -125,20 +134,26 @@ export async function refreshReviewPanel(
   panel.hidden = false;
 
   if (review.status === "queued") {
-    panel.className = "rev-panel queued";
-    panel.innerHTML =
-      '<div class="rev-head">' + icon("clock") + 'Review queued</div>' +
-      '<div class="rev-note">Waiting for an independent reviewer session to become available.</div>';
-    scheduleReviewPoll(() => refreshReviewPanel(pr, panel, onUpdate), 4000);
+    // Polls land here every few seconds; rewrite only on a change so focus and the DOM stay put.
+    if (panel.className !== "rev-panel queued") {
+      panel.className = "rev-panel queued";
+      panel.innerHTML =
+        '<div class="rev-head">' + icon("clock") + 'Review queued</div>' +
+        '<div class="rev-note">Waiting for an independent reviewer session to become available.</div>';
+    }
+    schedulePanelPoll(pr, panel, onUpdate);
     return;
   }
 
   if (review.status === "running") {
-    panel.className = "rev-panel running";
-    panel.innerHTML =
-      '<div class="rev-head"><span class="spinner"></span> Copilot is reviewing this PR in the background…</div>' +
-      '<div class="rev-note">Results will appear here automatically when the review completes.</div>';
-    scheduleReviewPoll(() => refreshReviewPanel(pr, panel, onUpdate), 4000);
+    // Rewriting on every poll would restart the spinner mid-turn.
+    if (panel.className !== "rev-panel running") {
+      panel.className = "rev-panel running";
+      panel.innerHTML =
+        '<div class="rev-head"><span class="spinner"></span> Copilot is reviewing this PR in the background…</div>' +
+        '<div class="rev-note">Results will appear here automatically when the review completes.</div>';
+    }
+    schedulePanelPoll(pr, panel, onUpdate);
     return;
   }
 
@@ -151,10 +166,27 @@ export async function refreshReviewPanel(
   }
 
   // status === "done"
-  panel.className = "rev-panel done";
+  // A refresh of an already-shown review (e.g. the reviewer chat staged more
+  // findings) keeps the open chat element and the collapsed state.
+  const keepCollapsed = panel.classList.contains("done") && panel.classList.contains("collapsed");
+  const liveChat = panel.querySelector<HTMLElement>(".rev-chat");
+  const chat =
+    liveChat && review.reviewer_session_id && liveChat.dataset.session === review.reviewer_session_id
+      ? liveChat
+      : null;
+  // Re-attaching the chat drops its log scroll and input focus; restore both.
+  const chatLog = chat?.querySelector<HTMLElement>(".rev-chat-log") ?? null;
+  const chatScroll = chatLog?.scrollTop ?? 0;
+  const chatFocus =
+    chat && document.activeElement instanceof HTMLElement && chat.contains(document.activeElement)
+      ? document.activeElement
+      : null;
+  const chatCaret =
+    chatFocus instanceof HTMLTextAreaElement ? [chatFocus.selectionStart, chatFocus.selectionEnd] : null;
+  panel.className = "rev-panel done" + (keepCollapsed ? " collapsed" : "");
   panel.innerHTML = "";
   const header = el(
-    '<div class="rev-head done"><button type="button" class="rev-toggle" aria-expanded="true">' +
+    '<div class="rev-head done"><button type="button" class="rev-toggle" aria-expanded="' + String(!keepCollapsed) + '">' +
       '<span class="rev-chev" aria-hidden="true">' + icon("chevron") + "</span>" +
       '<span class="rev-title">' + icon("sparkle") + "Copilot review</span></button>" +
       (review.summary ? '<span class="rev-summary">' + esc(review.summary) + "</span>" : "") +
@@ -286,8 +318,22 @@ export async function refreshReviewPanel(
       )
     );
   }
-  if (review.reviewer_session_id) body.appendChild(reviewerChatSection(pr));
+  if (review.reviewer_session_id) {
+    body.appendChild(
+      chat ||
+        reviewerChatSection(pr, review.reviewer_session_id, () => refreshReviewPanel(pr, panel, onUpdate))
+    );
+  }
   panel.appendChild(header);
   panel.appendChild(body);
+  if (chatLog) chatLog.scrollTop = chatScroll;
+  if (chatFocus) {
+    chatFocus.focus({ preventScroll: true });
+    if (chatCaret && chatFocus instanceof HTMLTextAreaElement) chatFocus.setSelectionRange(chatCaret[0], chatCaret[1]);
+  }
   renderMermaid(body, true);
+  // Loaded diffs show findings staged since they rendered.
+  panel.parentElement
+    ?.querySelectorAll<RevealableFile>(".file[data-path]")
+    .forEach((file) => file._refreshStaged?.());
 }
