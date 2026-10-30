@@ -20,6 +20,7 @@
     <meta name="color-scheme" content="dark" />
     <title>Devis</title>
     <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="responsive.css" />
   </head>
   <body data-page="queue" data-feature="prs">
     <a id="skipLink" class="skip-link" href="#view">Skip to pull requests</a>
@@ -104,6 +105,13 @@
               title="Search pull requests (Ctrl+F). Try is:draft, -is:draft, is:reviewed, repo:, author:, branch:">
             <kbd class="search-kbd" aria-hidden="true">Ctrl+F</kbd>
           </label>
+          <!-- Narrow windows (responsive.css): the org and project pickers fold behind this toggle. -->
+          <button type="button" id="scopeToggle" class="icon-btn filter-toggle" title="Organization and project"
+            aria-label="Organization and project" aria-expanded="false" aria-controls="scopeFields" hidden>
+            <svg class="ic" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+              <path d="M2.5 4h11M4.5 8h7M6.5 12h3"></path>
+            </svg>
+          </button>
           <div id="scopeFields" class="filterbar-fields">
             <label class="filter-field">
               <span class="visually-hidden">Organization</span>
@@ -130,6 +138,43 @@
     <section id="pipelinesView" class="pipelines-view" aria-label="Pipelines" tabindex="-1"></section>
 
     <section id="jarvisView" class="jarvis-view" aria-label="Workspace" tabindex="-1"></section>
+
+    <!-- Phone-width windows only (responsive.css): replaces the title bar's feature tabs.
+         Each button forwards to its .feature-tab or #btnSettings (app.ts initTabbar). -->
+    <nav class="tabbar" aria-label="Sections">
+      <button type="button" class="tabbar-btn" data-feature="jarvis">
+        <svg class="ic" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+          <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.5"></rect>
+          <path d="M6 2.75v10.5M10 2.75v10.5"></path>
+        </svg>
+        <span>Workspace</span>
+      </button>
+      <button type="button" class="tabbar-btn" data-feature="prs">
+        <svg class="ic" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+          <circle cx="4.5" cy="3.75" r="1.5"></circle>
+          <circle cx="4.5" cy="12.25" r="1.5"></circle>
+          <circle cx="11.5" cy="12.25" r="1.5"></circle>
+          <path d="M4.5 5.25v5.5M11.5 10.75V7a2.5 2.5 0 0 0-2.5-2.5H6.5M8 3l-1.5 1.5L8 6"></path>
+        </svg>
+        <span>Pull requests</span>
+      </button>
+      <button type="button" class="tabbar-btn" data-feature="pipelines">
+        <svg class="ic" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+          <rect x="1.75" y="5.75" width="4.5" height="4.5" rx="1"></rect>
+          <rect x="9.75" y="2.25" width="4.5" height="4.5" rx="1"></rect>
+          <rect x="9.75" y="9.25" width="4.5" height="4.5" rx="1"></rect>
+          <path d="M6.25 8h1.5V4.5h2M7.75 8v3.5h2"></path>
+        </svg>
+        <span>Pipelines</span>
+      </button>
+      <button type="button" class="tabbar-btn" data-action="settings">
+        <svg class="ic" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+          <circle cx="8" cy="8" r="2"></circle>
+          <path d="M8 1.75l1.1 1.6 1.9-.4.4 1.9 1.6 1.1-1 1.65 1 1.65-1.6 1.1-.4 1.9-1.9-.4          L8 14.25l-1.1-1.6-1.9.4-.4-1.9-1.6-1.1 1-1.65-1-1.65 1.6-1.1.4-1.9 1.9.4z"></path>
+        </svg>
+        <span>Settings</span>
+      </button>
+    </nav>
 
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 

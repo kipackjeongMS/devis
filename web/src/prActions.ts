@@ -20,6 +20,7 @@ interface MenuEntry {
   checked?: boolean;
   disabled?: boolean;
   danger?: boolean;
+  sepBefore?: boolean;
   run: () => void;
 }
 
@@ -30,6 +31,11 @@ const LIFECYCLE_ICON = `<svg class="stroke-icon" viewBox="0 0 24 24" fill="none"
   stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
   <circle cx="7" cy="5.5" r="2"></circle><circle cx="7" cy="18.5" r="2"></circle><circle cx="17" cy="12" r="2"></circle>
   <path d="M7 7.5v9"></path><path d="M7 7.5c0 3 2.5 4.5 8 4.5"></path></svg>`;
+const MORE_ICON = `<svg class="stroke-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+  stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <circle cx="5.5" cy="12" r="1.3" fill="currentColor" stroke="none"></circle>
+  <circle cx="12" cy="12" r="1.3" fill="currentColor" stroke="none"></circle>
+  <circle cx="18.5" cy="12" r="1.3" fill="currentColor" stroke="none"></circle></svg>`;
 
 const LIFECYCLE_DONE: Record<LifecycleAction, string> = {
   complete: "Pull request completed",
@@ -69,7 +75,7 @@ function menuButton(className: string, label: string, icon: string, entries: () 
     for (const entry of entries()) {
       const role = entry.checked === undefined ? "menuitem" : "menuitemradio";
       const item = el<HTMLButtonElement>(
-        `<button type="button" class="detail-menu-item${entry.danger ? " danger" : ""}" role="${role}">
+        `<button type="button" class="detail-menu-item${entry.danger ? " danger" : ""}${entry.sepBefore ? " sep-before" : ""}" role="${role}">
            <span class="detail-menu-check" aria-hidden="true">${entry.checked ? lineIcon("check") : ""}</span>
            <span class="detail-menu-text">
              <span class="detail-menu-label">${esc(entry.label)}</span>
@@ -156,56 +162,94 @@ function target(pr: PR): Record<string, unknown> {
   return { org: pr.org, project: pr.project, repoId: pr.repoId, prId: pr.id };
 }
 
-export function mountDecisionMenu(pr: PR, detail: Detail, onChanged: () => void): HTMLElement {
-  return menuButton("pr-decision-btn", "Decision", DECISION_ICON, () =>
-    decisionMenuItems(detail).map((item) => ({
+async function castVote(pr: PR, vote: number, label: string, onChanged: () => void): Promise<void> {
+  try {
+    await postJSON("/api/pr-vote", { ...target(pr), vote, title: pr.title });
+    toast(vote === 0 ? "Feedback reset" : `Voted: ${label}`, "ok");
+    onChanged();
+  } catch (e: any) {
+    toast("Vote failed: " + e.message, "err");
+  }
+}
+
+function decisionEntries(pr: PR, detail: Detail, onChanged: () => void, skipApprove = false): MenuEntry[] {
+  return decisionMenuItems(detail)
+    .filter((item) => !(skipApprove && item.vote === 10))
+    .map((item) => ({
       label: item.label,
       checked: item.vote === 0 ? undefined : item.checked,
       disabled: item.disabled,
-      run: async () => {
-        if (item.checked) return;
-        try {
-          await postJSON("/api/pr-vote", { ...target(pr), vote: item.vote, title: pr.title });
-          toast(item.vote === 0 ? "Feedback reset" : `Voted: ${item.label}`, "ok");
-          onChanged();
-        } catch (e: any) {
-          toast("Vote failed: " + e.message, "err");
-        }
+      run: () => {
+        if (!item.checked) void castVote(pr, item.vote, item.label, onChanged);
       },
-    }))
-  );
+    }));
 }
 
-export function mountLifecycleMenu(pr: PR, detail: Detail, onChanged: () => void): HTMLElement {
+function lifecycleEntries(pr: PR, detail: Detail, onChanged: () => void): MenuEntry[] {
   const run = async (action: LifecycleAction, options?: Record<string, unknown>): Promise<void> => {
     await postJSON("/api/pr-lifecycle", { ...target(pr), action, options });
     toast(LIFECYCLE_DONE[action], "ok");
     onChanged();
   };
+  return lifecycleMenuItems(detail).map((item) => ({
+    label: item.label,
+    hint: item.hint,
+    disabled: item.disabled,
+    danger: item.danger,
+    run: () => {
+      if (item.action === "complete" || item.action === "autoComplete") {
+        openCompletionDialog(pr, detail, item.action, (options) => run(item.action, options));
+      } else if (item.action === "abandon") {
+        openActionDialog({
+          title: "Abandon pull request",
+          loc: `#${pr.id}`,
+          body: `<p class="pa-note">PR #${pr.id} will be abandoned. You can reactivate it later.</p>`,
+          confirmLabel: "Abandon",
+          danger: true,
+          onConfirm: () => run("abandon"),
+        });
+      } else {
+        run(item.action).catch((e: any) => toast("Action failed: " + e.message, "err"));
+      }
+    },
+  }));
+}
+
+export function mountDecisionMenu(pr: PR, detail: Detail, onChanged: () => void): HTMLElement {
+  return menuButton("pr-decision-btn", "Decision", DECISION_ICON, () => decisionEntries(pr, detail, onChanged));
+}
+
+export function mountLifecycleMenu(pr: PR, detail: Detail, onChanged: () => void): HTMLElement {
   return menuButton("pr-lifecycle-btn", "Complete, draft, or abandon", LIFECYCLE_ICON, () =>
-    lifecycleMenuItems(detail).map((item) => ({
-      label: item.label,
-      hint: item.hint,
-      disabled: item.disabled,
-      danger: item.danger,
-      run: () => {
-        if (item.action === "complete" || item.action === "autoComplete") {
-          openCompletionDialog(pr, detail, item.action, (options) => run(item.action, options));
-        } else if (item.action === "abandon") {
-          openActionDialog({
-            title: "Abandon pull request",
-            loc: `#${pr.id}`,
-            body: `<p class="pa-note">PR #${pr.id} will be abandoned. You can reactivate it later.</p>`,
-            confirmLabel: "Abandon",
-            danger: true,
-            onConfirm: () => run("abandon"),
-          });
-        } else {
-          run(item.action).catch((e: any) => toast("Action failed: " + e.message, "err"));
-        }
-      },
-    }))
+    lifecycleEntries(pr, detail, onChanged)
   );
+}
+
+// Narrow windows (responsive.css): Approve moves to a bottom bar and the other votes
+// plus lifecycle actions collapse into one ⋯ menu. Wide windows hide both.
+export function mountApproveButton(pr: PR, detail: Detail, onChanged: () => void): HTMLElement {
+  const approve = decisionMenuItems(detail).find((item) => item.vote === 10)!;
+  const button = el<HTMLButtonElement>(
+    `<button type="button" class="btn accent pr-approve-btn" aria-pressed="${approve.checked}">` +
+      `${lineIcon("check")}<span>${approve.checked ? "Approved" : "Approve"}</span></button>`
+  );
+  button.disabled = approve.disabled || approve.checked;
+  button.addEventListener("click", async () => {
+    if (button.disabled) return;
+    button.disabled = true;
+    await castVote(pr, approve.vote, approve.label, onChanged);
+    if (button.isConnected) button.disabled = false;
+  });
+  return button;
+}
+
+export function mountMoreMenu(pr: PR, detail: Detail, onChanged: () => void, extras: MenuEntry[] = []): HTMLElement {
+  return menuButton("pr-more-btn", "More actions", MORE_ICON, () => {
+    const lifecycle = lifecycleEntries(pr, detail, onChanged);
+    if (lifecycle.length) lifecycle[0].sepBefore = true;
+    const rest = extras.map((entry, i) => ({ ...entry, sepBefore: i === 0 }));
+    return [...decisionEntries(pr, detail, onChanged, true), ...lifecycle, ...rest];
+  });
 }
 
 export interface ActionDialogOptions {

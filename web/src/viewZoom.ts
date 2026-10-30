@@ -1,19 +1,19 @@
-// Ctrl +/−/0 in the Workspace zoom the view you're in: the Devis, Today or Tasks
-// pane, the task sheet, or History. Each view type keeps its own level, saved, so
-// every task sheet opens at the level last set on one, and the panes keep theirs
-// across launches (the service's port is stable, so localStorage lasts).
+// Ctrl +/−/0 in the Workspace zoom the view you're in: Devis's chat, the overview
+// rail, a Communication or Meetings drawer, a task, or History. Each view type keeps
+// its own level, saved, so every task opens at the level last set on one, and the
+// rest keep theirs across launches (the service's port is stable, so localStorage lasts).
 //
 // Which view: the topmost dialog when one is open (only if it's a zoomable view),
 // else the view holding keyboard focus, else the one the pointer was last over,
-// else the Tasks pane. CSS zooms each view's children (see [data-zoom-view] in
+// else Devis's chat. CSS zooms each view's children (see [data-zoom-view] in
 // style.css), so the panes keep their place in the layout.
 
 import { nextZoom, paneZoomCommand, zoomLevelOf, type PaneZoomCommand } from "./shellModel.js";
 import { toast } from "./toast.js";
 
-export type ZoomView = "lead" | "today" | "tasks" | "task" | "history";
+export type ZoomView = "lead" | "today" | "drawer" | "task" | "history";
 
-const NAME: Record<ZoomView, string> = { lead: "Devis", today: "Today", tasks: "Tasks", task: "Task view", history: "History" };
+const NAME: Record<ZoomView, string> = { lead: "Devis", today: "Overview", drawer: "Drawer", task: "Task view", history: "History" };
 const KEY = "adoPrOps.zoom.";
 
 export function viewZoom(view: ZoomView): number {
@@ -60,7 +60,7 @@ export function zoomTarget(): HTMLElement | null {
   if (focused && shown(focused)) return focused;
   if (pointed && shown(pointed)) return pointed;
   const views = [...document.querySelectorAll<HTMLElement>("#jarvisView [data-zoom-view]")].filter(shown);
-  return views.find((v) => v.dataset.zoomView === "tasks") ?? views[0] ?? null;
+  return views.find((v) => v.dataset.zoomView === "lead") ?? views[0] ?? null;
 }
 
 let started = false;

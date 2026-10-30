@@ -1,12 +1,12 @@
-// The Workspace: three panes side by side, each folding to a slim rail.
-//   Devis  — the Lead console, one persistent Copilot session that watches the
-//            Workspace and keeps its history.
-//   Today  — the user's day: Today so far, Needs you, their own to-dos and a
-//            quick note. The to-dos and note belong to no day; Devis and the
-//            workers can read them when asked.
-//   Tasks  — the board: pull request reviews, running and open tasks, done today.
-//            Each task hosts the Copilot workers doing it. Its other tabs:
-//            Communication (email and Teams chats) and Meetings (recaps by day).
+// The Workspace: Devis in the center, a quiet rail on the right, and a drawer over the center.
+//   Devis   — the Lead console, one persistent Copilot session that watches the Workspace and
+//             keeps its history. "Today so far" leads its thread.
+//   Rail    — the day at a glance: Needs you, Tasks (with reviews), Communication, Meetings,
+//             the user's own to-dos and a quick note. Each section folds. The to-dos and note
+//             belong to no day; Devis and the workers can read them when asked. On a narrow
+//             window the rail is a sheet behind the Overview button.
+//   Drawer  — opens over Devis, the rail staying in view: a task (its timeline and its Copilot
+//             workers), Communication (email and Teams chats) or Meetings (recaps by day).
 import { getJSON, postJSON, type ApiError } from "./api.js";
 import { el } from "./dom.js";
 import { esc } from "./util.js";
@@ -38,8 +38,21 @@ import { sendPrsToCopilot } from "./bridge.js";
 import { requestNotifyPermission } from "./notifyWatch.js";
 import { closeTaskModal, openTaskModal, pruneTaskModalState, reposFromCard, requestCardHtml, updateTaskModal, warnUnsaved, type LeftTab, type TaskModalHost } from "./jarvisTask.js";
 import { initViewZoom, zoomable } from "./viewZoom.js";
-import { meetingsHtml, meetingsSig, meetingsSub, pruneMeetingsState, toggleDay, toggleMeeting, toggleNote, type MeetingsView } from "./meetingsView.js";
-import { communicationHtml, communicationSig, communicationSub, pruneCommunicationState, revealConversation, toggleChat, toggleChatDay, toggleQuietMail, type CommunicationView } from "./communicationView.js";
+import { meetingDetailHtml, meetingsHtml, meetingsRail, meetingsSig, meetingsSub, pruneMeetingsState, selectMeeting, toggleDay, toggleNote, type MeetingsView } from "./meetingsView.js";
+import {
+  communicationDetailHtml,
+  communicationHtml,
+  communicationRail,
+  communicationSig,
+  communicationSub,
+  pruneCommunicationState,
+  revealConversation,
+  selectConversation,
+  toggleChatDay,
+  toggleQuietMail,
+  type CommunicationView,
+} from "./communicationView.js";
+import { openContextMenu, type ContextMenuEntry } from "./contextMenu.js";
 import { isOutlookLink, isTeamsLink, unseenRecaps, type ChatsInfo, type CommsChat, type CommsMail, type CommsMeeting, type MeetingScanInfo } from "./commsModel.js";
 import {
   ALL_SERVICES,
@@ -136,28 +149,32 @@ export interface JarvisHooks {
   openSettings: () => void;
 }
 
-type Pane = "lead" | "today" | "tasks";
-const PANES: readonly Pane[] = ["lead", "today", "tasks"];
-const PANE_NAME: Record<Pane, string> = { lead: "Devis", today: "Today", tasks: "Tasks" };
-/** Widths for an open pane that isn't the last open one; the last takes what's left. */
-const PANE_WIDTH: Record<Pane, string> = {
-  lead: "clamp(320px, 26vw, 440px)",
-  today: "clamp(300px, 28vw, 460px)",
-  tasks: "minmax(0, 1fr)",
+/** The rail's sections, top to bottom. */
+type RailSection = "needs" | "tasks" | "comms" | "meetings" | "todos" | "note";
+const RAIL_SECTIONS: readonly RailSection[] = ["needs", "tasks", "comms", "meetings", "todos", "note"];
+const RAIL_NAME: Record<RailSection, string> = {
+  needs: "Needs you",
+  tasks: "Tasks",
+  comms: "Communication",
+  meetings: "Meetings",
+  todos: "To-dos",
+  note: "Note",
 };
-const isPane = (value: unknown): value is Pane => PANES.includes(value as Pane);
+const isRailSection = (value: unknown): value is RailSection => RAIL_SECTIONS.includes(value as RailSection);
+/** What opens in the drawer over Devis. */
+type Drawer = { kind: "task"; taskId: string; tab?: LeftTab } | { kind: "comms" } | { kind: "meetings" };
 
-/** The two-pane layout before the Workspace: "both", "lead" (Today folded) or "today" (Lead folded). */
-const LAYOUT_KEY = "adoPrOps.jarvis.layout";
-const FOLD_KEY = "adoPrOps.workspace.folded";
+/** The rail's folded sections. */
+const RAIL_FOLD_KEY = "adoPrOps.workspace.railFolded";
+/** The drawer's width, in px, as the user last dragged it. */
+const DRAWER_WIDTH_KEY = "adoPrOps.workspace.drawerWidth";
+const DRAWER_MIN = 560;
 const SERVICE_KEY = "adoPrOps.jarvis.service";
 const OVERVIEW_KEY = "adoPrOps.jarvis.overviewCollapsed";
 const DONE_TODOS_KEY = "adoPrOps.workspace.showDoneTodos";
-/** Which tab the Tasks pane shows: Tasks, Communication or Meetings. */
-const PANE_TAB_KEY = "adoPrOps.workspace.paneTab";
-/** When the user last looked at the Meetings tab: recaps after it make its badge. */
+/** When the user last opened Meetings: recaps after it make its badge. */
 const MEETINGS_SEEN_KEY = "adoPrOps.workspace.meetingsSeen";
-/** When the user last looked at the Communication tab: important chats that moved after it make its badge. */
+/** When the user last opened Communication: important chats that moved after it make its badge. */
 const COMMUNICATION_SEEN_KEY = "adoPrOps.workspace.communicationSeen";
 /** The quick note's unsaved edit, kept until it saves. */
 const NOTE_DRAFT_KEY = "adoPrOps.workspace.noteDraft";
@@ -170,7 +187,8 @@ const LEAD_LIVE_MS = 400;
 const NOTE_SAVE_MS = 700;
 const NOTE_RETRY_MS = 5000;
 const NOTE_MAX_CHARS = 50_000;
-const narrowQuery = window.matchMedia("(max-width: 900px)");
+/** At this width and under, the rail is a sheet behind the Overview button. */
+const sheetQuery = window.matchMedia("(max-width: 1023.98px)");
 
 let hooks: JarvisHooks = { openSettings: () => {} };
 let root: HTMLElement | null = null;
@@ -204,11 +222,9 @@ let showAllReviews = false;
 const queuing = new Set<string>();
 const prKey = (pr: PR): string => JSON.stringify([pr.org, pr.project, pr.repoId, String(pr.id)]);
 const drafts = new Map<string, string>();
-/** Tasks whose status timeline is open. */
-const timelines = new Set<string>();
 let overviewCollapsed = readPref(OVERVIEW_KEY, "0") === "1";
 let overviewRefreshing = false;
-let folded = readFolded();
+let railFolded = readRailFolded();
 
 // The to-dos come with every Today poll. A poll that was on its way while a to-do
 // changed carries the list from before, so it's ignored: `todoRev` moves on each change.
@@ -244,37 +260,64 @@ let leadPicker: HTMLElement;
 let leadStop: HTMLButtonElement;
 /** A message or queue action is on its way to the Lead. */
 let leadPosting = false;
-let dayBody: HTMLElement;
-let daySub: HTMLElement;
+/** The center: Devis's chat, with the drawer over it. */
+let center: HTMLElement;
+let rail: HTMLElement;
+/** The Overview button that opens the rail as a sheet on a narrow window, and its count of needs. */
+let railButton: HTMLButtonElement;
+let railBadge: HTMLElement;
+/** The needs line over Devis on a narrow window. */
+let needsBanner: HTMLElement;
+/** "Today so far", kept as the first thing in Devis's thread. */
+let overviewEl: HTMLElement;
+/** Devis's line under the hello: what it watches. */
+let leadWatch: HTMLElement;
+let needsBody: HTMLElement;
+let needsCount: HTMLElement;
 let tasksBody: HTMLElement;
-let tasksSub: HTMLElement;
+let tasksCount: HTMLElement;
 let serviceSelect: HTMLSelectElement;
+let commsRailBody: HTMLElement;
+let commsRailCount: HTMLElement;
+let meetRailBody: HTMLElement;
+let meetRailCount: HTMLElement;
+let todosBody: HTMLElement;
+let todosCount: HTMLElement;
+let noteBody: HTMLElement;
 let statusLine: HTMLElement;
+let needsSig = "";
 let daySig = "";
 let tasksSig = "";
+let overviewSig = "";
 
-// The Tasks pane's other tabs: Communication (Teams chats' summaries, communicationView.ts; email
-// to come) and Meetings (meetings and their recaps, meetingsView.ts).
-type PaneTab = "tasks" | "comms" | "meetings";
-const PANE_TABS: PaneTab[] = ["tasks", "comms", "meetings"];
-const asPaneTab = (value: string | undefined): PaneTab => (PANE_TABS.includes(value as PaneTab) ? (value as PaneTab) : "tasks");
-let paneTab: PaneTab = asPaneTab(readPref(PANE_TAB_KEY, "tasks"));
+// The drawer over Devis: a task, Communication or Meetings. Opening one from another keeps a way back.
+let drawer: Drawer | null = null;
+const drawerBack: Drawer[] = [];
+let drawerLayer: HTMLElement;
+let drawerEl: HTMLElement;
+let drawerHead: HTMLElement;
+let drawerTitle: HTMLElement;
+let drawerMeta: HTMLElement;
+let drawerActs: HTMLElement;
+let drawerBackBtn: HTMLButtonElement;
+let drawerBody: HTMLElement;
+/** What had focus before the drawer opened, to go back to when it closes. */
+let drawerReturn: HTMLElement | null = null;
+/** Communication or Meetings shows the selected item rather than the list (a narrow drawer shows one). */
+let ldDetail = false;
+
+// Communication (Teams chats' and email summaries, communicationView.ts) and Meetings (meetings and
+// their recaps, meetingsView.ts): today's few in the rail, everything in the drawer.
 const meetingsView: MeetingsView = { meetings: null, status: null, error: "", scanning: false };
 /** The meetings' version the list in hand was read at; the Today poll says when it moved on. */
 let meetingsVersion: string | null = null;
 let meetingsLoading: Promise<void> | null = null;
-let meetingsBody: HTMLElement;
-let meetingsSubEl: HTMLElement;
-let meetingsBadge: HTMLElement;
 let meetingsRendered = "";
 const commsView: CommunicationView = { chats: null, status: null, mail: null, mailStatus: null, error: "", scanning: false };
 let chatsVersion: string | null = null;
 let mailVersion: string | null = null;
 let mailLoading: Promise<void> | null = null;
 let chatsLoading: Promise<void> | null = null;
-let commsBody: HTMLElement;
-let commsSubEl: HTMLElement;
-let commsBadge: HTMLElement;
 let commsRendered = "";
 
 function readPref(key: string, fallback: string): string {
@@ -293,19 +336,15 @@ function writePref(key: string, value: string): void {
   }
 }
 
-/** Which panes are folded to rails; the two-pane setting carries over the first time. */
-function readFolded(): Set<Pane> {
-  const saved = readPref(FOLD_KEY, "");
-  if (saved) {
-    try {
-      const list = JSON.parse(saved);
-      if (Array.isArray(list)) return new Set(list.filter(isPane));
-    } catch {
-      /* unreadable: carry over below */
-    }
+/** The rail's folded sections. The Note starts folded. */
+function readRailFolded(): Set<RailSection> {
+  try {
+    const list = JSON.parse(readPref(RAIL_FOLD_KEY, '["note"]'));
+    if (Array.isArray(list)) return new Set(list.filter(isRailSection));
+  } catch {
+    /* unreadable: the default */
   }
-  const old = readPref(LAYOUT_KEY, "both");
-  return new Set<Pane>(old === "today" ? ["lead"] : old === "lead" ? ["today", "tasks"] : []);
+  return new Set<RailSection>(["note"]);
 }
 
 const svg = (name: IconName): string => icon(name);
@@ -319,15 +358,16 @@ export function showJarvis(h: JarvisHooks): void {
   void loadToday();
   void loadLead();
   if (!note) void loadNote();
-  if (paneTab === "meetings") void loadMeetings();
-  if (paneTab === "comms") loadCommunication();
+  void loadMeetings();
+  loadCommunication();
 }
 
 export function hideJarvis(): void {
   visible = false;
   clearTimeout(todayTimer);
   clearTimeout(leadTimer);
-  closeTaskModal();
+  closeDrawer(false);
+  setSheet(false);
   void flushNote();
 }
 
@@ -343,7 +383,7 @@ function openPendingTask(): void {
   const p = pendingTask;
   if (!p || !data || !visible) return;
   pendingTask = null;
-  if (data.tasks.some((t) => t.id === p.taskId)) openTaskModal(p.taskId, modalHost, p.tab);
+  if (data.tasks.some((t) => t.id === p.taskId)) openDrawer({ kind: "task", taskId: p.taskId, tab: p.tab });
   else toast("That task isn't on the board anymore: it was done before today, or removed.", "err");
 }
 
@@ -382,9 +422,10 @@ const modalHost: TaskModalHost = {
       );
       pr = res.pr as PR;
     }
-    closeTaskModal();
+    closeDrawer(false);
     await openDetail(pr);
   },
+  close: () => closeDrawer(),
 };
 
 /** Refresh: work items from ADO, then Today. */
@@ -410,82 +451,74 @@ window.addEventListener("ado-pr-updated", () => {
 
 // ---- mount --------------------------------------------------------------------------
 
+const iconBtn = (act: string, name: IconName, label: string): string =>
+  `<button type="button" class="icon-btn" data-act="${act}" title="${esc(label)}" aria-label="${esc(label)}">${svg(name)}</button>`;
+
+/** A rail section: a fold toggle with its name and count, its own tools, and its body. */
+function railSectionHtml(sec: RailSection, tools = ""): string {
+  const fold = railFolded.has(sec);
+  return `<section class="rs${fold ? " folded" : ""}" data-rs="${sec}">
+      <div class="rs-h">
+        <button type="button" class="rs-t" data-act="rs-fold" aria-expanded="${!fold}" aria-controls="rs-b-${sec}">${svg("chevron")}<span class="rs-name">${RAIL_NAME[sec]}</span><span class="rs-n"></span><span class="rs-new" hidden></span></button>
+        ${tools ? `<span class="rs-ha">${tools}</span>` : ""}
+      </div>
+      <div class="rs-b" id="rs-b-${sec}"${fold ? " hidden" : ""}></div>
+    </section>`;
+}
+
 function mount(): void {
   root = document.getElementById("jarvisView")!;
-  const fold = (pane: Pane): string =>
-    `<button type="button" class="icon-btn pane-fold" data-act="pane-fold" data-pane="${pane}" title="Fold ${PANE_NAME[pane]}" aria-label="Fold ${PANE_NAME[pane]}">${svg("panel")}</button>`;
-  const rail = (pane: Pane, iconName: IconName): string =>
-    `<button type="button" class="jarvis-rail" data-act="pane-open" data-pane="${pane}" data-rail="${pane}" title="Show ${PANE_NAME[pane]}" aria-label="Show ${PANE_NAME[pane]}" hidden>
-      ${svg(iconName)}<span>${PANE_NAME[pane]}</span>
-    </button>`;
   root.innerHTML = `
-    <aside class="lead-pane" data-pane-el="lead" aria-label="Devis, the Lead">
-      <header class="lead-head">
-        <div class="lead-heading">
-          <h1 class="lead-title">${svg("sparkle")}<span>Devis</span></h1>
-          <p class="lead-sub">Lead · watches the Workspace and keeps its history</p>
-        </div>
-        <div class="lead-tools">
-          <button type="button" class="icon-btn" data-act="lead-new" title="New Lead session" aria-label="New Lead session">${svg("add")}</button>
-          <button type="button" class="icon-btn" data-act="lead-terminal" title="Open the Lead in a terminal" aria-label="Open the Lead in a terminal">${svg("terminal")}</button>
-          ${fold("lead")}
-        </div>
-      </header>
+    <section class="jv-center" data-pane-el="lead" aria-label="Devis, the Lead">
+      <div class="jv-tools">
+        <button type="button" class="jv-railbtn" data-act="rail-open" aria-expanded="false" aria-label="Show the overview">${svg("panel")}<span>Overview</span><span class="jv-badge" hidden></span></button>
+        <span class="jv-sp"></span>
+        ${iconBtn("lead-new", "add", "New Lead session")}
+        ${iconBtn("lead-terminal", "terminal", "Open the Lead in a terminal")}
+      </div>
+      <button type="button" class="jv-banner" data-act="rail-open" hidden></button>
       ${chatPaneHtml({
         id: "lead",
         inputLabel: "Message Devis",
-        headHtml: `<span class="chat-state tone-idle" hidden></span>
+        headHtml: `<span class="jv-who">${svg("sparkle")}<b>Devis</b><span class="jv-watch"></span></span>
+          <span class="chat-state tone-idle" hidden></span>
           <span class="chat-actions"><button type="button" class="btn sm ghost" data-act="lead-stop" hidden>${svg("stop")}<span>Stop</span></button></span>`,
       })}
-    </aside>
-    ${rail("lead", "sparkle")}
-    <section class="today-pane day-pane" data-pane-el="today" aria-label="Today">
-      <header class="today-head">
-        <div class="today-heading">
-          <h1 class="today-title">Today</h1>
-          <p class="today-sub day-sub"></p>
-        </div>
-        <div class="today-tools">${fold("today")}</div>
-      </header>
-      <div class="today-body day-body" tabindex="-1"></div>
+      <div class="jv-layer" hidden>
+        <div class="jv-scrim" data-act="drawer-close"></div>
+        <section class="jv-drawer" role="dialog" aria-modal="false" aria-labelledby="jv-dtitle" tabindex="-1">
+          <div class="jv-grip" role="separator" aria-orientation="vertical" aria-label="Resize the drawer" aria-valuemin="${DRAWER_MIN}" tabindex="0"></div>
+          <header class="jv-dhead">
+            <button type="button" class="icon-btn" data-act="drawer-back" title="Back" aria-label="Back" hidden>${svg("back")}</button>
+            <div class="jv-dt"><h3 id="jv-dtitle"></h3><p class="jv-dmeta"></p></div>
+            <div class="jv-dacts"></div>
+            ${iconBtn("drawer-close", "dismiss", "Close (Esc)")}
+          </header>
+          <div class="jv-dbody"></div>
+        </section>
+      </div>
     </section>
-    ${rail("today", "calendar")}
-    <section class="today-pane tasks-pane" data-pane-el="tasks" data-tab="${paneTab}" aria-label="Tasks">
-      <header class="today-head">
-        <div class="today-heading">
-          <div class="pane-tabs" role="tablist" aria-label="Tasks, communication or meetings">
-            <button type="button" class="pane-tab" role="tab" id="pane-tab-tasks" data-ptab="tasks" aria-controls="pane-panel-tasks">Tasks</button>
-            <button type="button" class="pane-tab" role="tab" id="pane-tab-comms" data-ptab="comms" aria-controls="pane-panel-comms">Communication<span class="pane-tab-badge" hidden></span></button>
-            <button type="button" class="pane-tab" role="tab" id="pane-tab-meetings" data-ptab="meetings" aria-controls="pane-panel-meetings">Meetings<span class="pane-tab-badge" hidden></span></button>
-          </div>
-          <p class="today-sub tasks-sub"></p>
-          <p class="today-sub comms-sub"></p>
-          <p class="today-sub meetings-sub"></p>
-        </div>
-        <div class="today-tools">
-          <span class="tab-tools" data-for="tasks">
-            <select class="filter-select today-service" aria-label="Service"></select>
-            <button type="button" class="btn sm ghost" data-act="history" title="History" aria-label="History">${svg("clock")}<span>History</span></button>
-            <button type="button" class="btn sm accent" data-act="new-task" title="New task" aria-label="New task">${svg("add")}<span>Task</span></button>
-          </span>
-          <span class="tab-tools" data-for="comms">
-            <button type="button" class="icon-btn" data-act="comms-scan" title="Read Teams and email now" aria-label="Read Teams and email now">${svg("sync")}</button>
-          </span>
-          <span class="tab-tools" data-for="meetings">
-            <button type="button" class="icon-btn" data-act="meetings-scan" title="Read the calendar now" aria-label="Read the calendar now">${svg("sync")}</button>
-          </span>
-          ${fold("tasks")}
-        </div>
-      </header>
-      <div class="today-body tasks-body" id="pane-panel-tasks" role="tabpanel" aria-labelledby="pane-tab-tasks" tabindex="-1"></div>
-      <div class="today-body comms-body" id="pane-panel-comms" role="tabpanel" aria-labelledby="pane-tab-comms" tabindex="-1"></div>
-      <div class="today-body meetings-body" id="pane-panel-meetings" role="tabpanel" aria-labelledby="pane-tab-meetings" tabindex="-1"></div>
+    <aside class="jv-rail" aria-label="Overview" tabindex="-1">
+      <div class="jv-rhead"><b>Overview</b>${iconBtn("rail-close", "dismiss", "Close the overview")}</div>
+      <div class="jv-rscroll">
+        ${railSectionHtml("needs")}
+        ${railSectionHtml(
+          "tasks",
+          `<select class="filter-select today-service" aria-label="Service"></select>${iconBtn("history", "clock", "History")}${iconBtn("new-task", "add", "New task")}`
+        )}
+        ${railSectionHtml("comms", iconBtn("comms-scan", "sync", "Read Teams and email now"))}
+        ${railSectionHtml("meetings", iconBtn("meetings-scan", "sync", "Read the calendar now"))}
+        ${railSectionHtml("todos")}
+        ${railSectionHtml("note")}
+      </div>
       <footer class="today-status"><span class="today-status-dot"></span><span class="today-status-text"></span></footer>
-    </section>
-    ${rail("tasks", "checklist")}`;
+    </aside>
+    <div class="jv-sheet-scrim" data-act="rail-close"></div>`;
 
   const q = <T extends Element>(sel: string): T => root!.querySelector<T>(sel)!;
-  leadPane = chatPaneRefs(root);
+  center = q(".jv-center");
+  rail = q(".jv-rail");
+  leadPane = chatPaneRefs(center);
   leadDraft = new ImageDraft(uploadImage, () => {
     paintTray(leadPane.tray, leadDraft, patchHtml);
     leadSig = "";
@@ -495,27 +528,47 @@ function mount(): void {
   leadState = q(".chat-state");
   leadPicker = leadPane.tools;
   leadStop = q('[data-act="lead-stop"]');
+  leadWatch = q(".jv-watch");
   leadPane.tools.addEventListener("change", onLeadPick);
   leadPane.steer.addEventListener("click", () => void sendToLead(leadPane.input.value, "now"));
   void loadModelCatalog().then(() => renderLeadPicker());
-  dayBody = q(".day-body");
-  daySub = q(".day-sub");
-  tasksBody = q(".tasks-body");
-  tasksSub = q(".tasks-sub");
+  overviewEl = el('<div class="jv-overview"></div>');
+  leadPane.log.prepend(overviewEl);
+
+  railButton = q(".jv-railbtn");
+  railBadge = q(".jv-badge");
+  needsBanner = q(".jv-banner");
+  const body = (sec: RailSection): HTMLElement => q(`#rs-b-${sec}`);
+  const count = (sec: RailSection): HTMLElement => q(`[data-rs="${sec}"] .rs-n`);
+  needsBody = body("needs");
+  needsCount = count("needs");
+  tasksBody = body("tasks");
+  tasksCount = count("tasks");
+  commsRailBody = body("comms");
+  commsRailCount = count("comms");
+  meetRailBody = body("meetings");
+  meetRailCount = count("meetings");
+  todosBody = body("todos");
+  todosCount = count("todos");
+  noteBody = body("note");
   serviceSelect = q(".today-service");
   statusLine = q(".today-status-text");
-  commsBody = q(".comms-body");
-  commsSubEl = q(".comms-sub");
-  meetingsBody = q(".meetings-body");
-  meetingsSubEl = q(".meetings-sub");
-  meetingsBadge = q('.pane-tab[data-ptab="meetings"] .pane-tab-badge');
-  commsBadge = q('.pane-tab[data-ptab="comms"] .pane-tab-badge');
-  applyPaneTab();
-  // Ctrl +/−/0 zoom the pane you're in; each keeps its level.
-  for (const pane of PANES) zoomable(q<HTMLElement>(`[data-pane-el="${pane}"]`), pane);
+
+  drawerLayer = q(".jv-layer");
+  drawerEl = q(".jv-drawer");
+  drawerHead = q(".jv-dhead");
+  drawerTitle = q("#jv-dtitle");
+  drawerMeta = q(".jv-dmeta");
+  drawerActs = q(".jv-dacts");
+  drawerBackBtn = q('[data-act="drawer-back"]');
+  drawerBody = q(".jv-dbody");
+  wireGrip(q<HTMLElement>(".jv-grip"));
+
+  // Ctrl +/−/0 zoom what you're in: Devis's chat or the rail (the drawer zooms on its own).
+  zoomable(leadPane.root, "lead");
+  zoomable(rail, "today");
   initViewZoom();
-  applyLayout();
-  narrowQuery.addEventListener("change", () => applyLayout());
+  sheetQuery.addEventListener("change", () => setSheet(false));
 
   root.addEventListener("click", onClick);
   root.addEventListener("dblclick", onDblClick);
@@ -530,42 +583,189 @@ function mount(): void {
   });
 }
 
-/**
- * Lay the panes out from which are folded. Folded panes become 40px rails; open
- * ones keep their width, and the last open one takes the rest. Narrow windows
- * stack them instead. One pane always stays open.
- */
-function applyLayout(): void {
-  if (!root) return;
-  if (PANES.every((p) => folded.has(p))) folded.delete("tasks");
-  const open = PANES.filter((p) => !folded.has(p));
-  const fill = open[open.length - 1];
-  const narrow = narrowQuery.matches;
-  const tracks = PANES.map((p) =>
-    folded.has(p) ? (narrow ? "38px" : "40px") : narrow ? (p === "lead" ? "minmax(0, 2fr)" : "minmax(0, 3fr)") : p === fill ? "minmax(0, 1fr)" : PANE_WIDTH[p]
-  );
-  root.style.gridTemplateColumns = narrow ? "minmax(0, 1fr)" : tracks.join(" ");
-  root.style.gridTemplateRows = narrow ? tracks.join(" ") : "minmax(0, 1fr)";
-  root.classList.toggle("is-narrow", narrow);
-  for (const p of PANES) {
-    root.querySelector<HTMLElement>(`[data-pane-el="${p}"]`)!.hidden = folded.has(p);
-    root.querySelector<HTMLElement>(`[data-rail="${p}"]`)!.hidden = !folded.has(p);
-  }
-  // Folding the only open pane would leave nothing to fold back from.
-  for (const button of root.querySelectorAll<HTMLButtonElement>(".pane-fold")) button.disabled = open.length === 1;
-  writePref(FOLD_KEY, JSON.stringify([...folded]));
-  // Needs you sits in Today, or at the top of Tasks while Today is folded.
-  renderToday(true);
+/** The drawer's left edge: drag it, or use Left and Right, to size the drawer. The width is kept. */
+function wireGrip(grip: HTMLElement): void {
+  const setWidth = (px: number, save: boolean): void => {
+    const max = Math.max(DRAWER_MIN, center.clientWidth - 64);
+    const width = Math.round(Math.min(max, Math.max(DRAWER_MIN, px)));
+    root!.style.setProperty("--drawer-w", `${width}px`);
+    grip.setAttribute("aria-valuenow", String(width));
+    if (save) writePref(DRAWER_WIDTH_KEY, String(width));
+  };
+  const saved = Number(readPref(DRAWER_WIDTH_KEY, "0"));
+  if (saved >= DRAWER_MIN) root!.style.setProperty("--drawer-w", `${saved}px`);
+  grip.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    grip.setPointerCapture(e.pointerId);
+    const right = center.getBoundingClientRect().right;
+    const move = (ev: PointerEvent): void => setWidth(right - ev.clientX, false);
+    const up = (): void => {
+      grip.removeEventListener("pointermove", move);
+      grip.removeEventListener("pointerup", up);
+      grip.removeEventListener("pointercancel", up);
+      setWidth(drawerEl.getBoundingClientRect().width, true);
+    };
+    grip.addEventListener("pointermove", move);
+    grip.addEventListener("pointerup", up);
+    grip.addEventListener("pointercancel", up);
+  });
+  grip.addEventListener("dblclick", () => {
+    root!.style.removeProperty("--drawer-w");
+    try {
+      localStorage.removeItem(DRAWER_WIDTH_KEY);
+    } catch {
+      /* private mode */
+    }
+  });
+  grip.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    e.stopPropagation();
+    setWidth(drawerEl.getBoundingClientRect().width + (e.key === "ArrowLeft" ? 32 : -32), true);
+  });
 }
 
-function setFolded(pane: Pane, fold: boolean): void {
-  if (fold === folded.has(pane)) return;
-  if (fold) folded.add(pane);
-  else folded.delete(pane);
-  applyLayout();
-  if (fold) root!.querySelector<HTMLElement>(`[data-rail="${pane}"]`)?.focus();
-  else if (pane === "lead") leadPane.input.focus();
-  else (pane === "today" ? dayBody : tasksBody).focus({ preventScroll: true });
+// ---- the drawer ---------------------------------------------------------------------
+
+const sameDrawer = (a: Drawer, b: Drawer): boolean =>
+  a.kind === b.kind && (a.kind !== "task" || (b.kind === "task" && a.taskId === b.taskId));
+
+/**
+ * Open a task, Communication or Meetings over Devis. Opened from inside the drawer, Back
+ * returns to what was there. `detail` shows the selected conversation or meeting at once
+ * on a narrow window, where the list and the detail take turns.
+ */
+function openDrawer(d: Drawer, detail = false): void {
+  if (!root) return;
+  const active = document.activeElement as HTMLElement | null;
+  const fromDrawer = !!drawer && !!active && drawerEl.contains(active);
+  if (drawer && sameDrawer(drawer, d) && !(d.kind === "task" && d.tab)) {
+    if (d.kind !== "task") {
+      ldDetail = detail || ldDetail;
+      renderComms(true);
+    }
+    return;
+  }
+  if (!fromDrawer) {
+    drawerReturn = active && active !== document.body ? active : null;
+    drawerBack.length = 0;
+  } else if (drawer && !sameDrawer(drawer, d)) drawerBack.push(drawer);
+  showDrawer(d, detail);
+}
+
+function showDrawer(d: Drawer, detail: boolean): void {
+  if (drawer?.kind === "task") closeTaskModal();
+  const opening = drawerLayer.hidden;
+  drawer = d;
+  ldDetail = detail;
+  drawerLayer.hidden = false;
+  if (opening) {
+    drawerLayer.classList.remove("anim");
+    void drawerLayer.offsetWidth;
+    drawerLayer.classList.add("anim");
+  }
+  drawerBody.replaceChildren();
+  drawerActs.replaceChildren();
+  delete drawerBody.dataset.zoomView;
+  drawerBody.style.removeProperty("--view-zoom");
+  drawerEl.dataset.kind = d.kind;
+  drawerBackBtn.hidden = !drawerBack.length;
+  if (d.kind === "task") {
+    // The task brings its own head, with its close button.
+    drawerHead.hidden = true;
+    drawerEl.removeAttribute("aria-labelledby");
+    drawerEl.setAttribute("aria-label", `Task: ${data?.tasks.find((t) => t.id === d.taskId)?.title || ""}`);
+    openTaskModal(d.taskId, modalHost, d.tab, drawerBody);
+  } else {
+    const comms = d.kind === "comms";
+    drawerHead.hidden = false;
+    drawerEl.removeAttribute("aria-label");
+    drawerEl.setAttribute("aria-labelledby", "jv-dtitle");
+    drawerTitle.textContent = comms ? "Communication" : "Meetings";
+    drawerMeta.textContent = "";
+    drawerActs.innerHTML = comms
+      ? iconBtn("comms-scan", "sync", "Read Teams and email now") + iconBtn("comms-settings", "settings", "Communication settings")
+      : iconBtn("meetings-scan", "sync", "Read the calendar now") + iconBtn("meetings-settings", "settings", "Meetings settings");
+    drawerBody.innerHTML = `<div class="ld" data-pane="${detail ? "detail" : "list"}"><div class="ld-list" tabindex="-1"></div><div class="ld-detail" tabindex="-1"></div></div>`;
+    zoomable(drawerBody, "drawer");
+    if (comms) {
+      writePref(COMMUNICATION_SEEN_KEY, String(Date.now()));
+      loadCommunication();
+    } else {
+      markMeetingsSeen();
+      void loadMeetings();
+    }
+    drawerEl.focus({ preventScroll: true });
+  }
+  commsRendered = "";
+  meetingsRendered = "";
+  renderComms(true);
+}
+
+/** Close the drawer; `restore` puts focus back where it was before the drawer opened. */
+function closeDrawer(restore = true): void {
+  if (!drawer) return;
+  if (drawer.kind === "task") closeTaskModal();
+  drawer = null;
+  drawerBack.length = 0;
+  ldDetail = false;
+  drawerBody.replaceChildren();
+  drawerActs.replaceChildren();
+  delete drawerBody.dataset.zoomView;
+  drawerBody.style.removeProperty("--view-zoom");
+  delete drawerEl.dataset.kind;
+  drawerLayer.hidden = true;
+  drawerLayer.classList.remove("anim");
+  const back = drawerReturn;
+  drawerReturn = null;
+  if (restore) (back?.isConnected ? back : leadPane.input).focus({ preventScroll: true });
+  // The rail's "new" marks come back, now counted from this visit.
+  commsRendered = "";
+  meetingsRendered = "";
+  renderComms(true);
+}
+
+function drawerGoBack(): void {
+  const prev = drawerBack.pop();
+  if (!prev || !drawer) return;
+  showDrawer(prev, false);
+}
+
+// ---- the rail -----------------------------------------------------------------------
+
+/** On a narrow window the rail is a sheet over the right edge, behind the Overview button. */
+function setSheet(open: boolean): void {
+  if (!root) return;
+  if (open && !sheetQuery.matches) {
+    rail.focus({ preventScroll: true });
+    return;
+  }
+  const was = root.classList.contains("sheet-open");
+  root.classList.toggle("sheet-open", open);
+  railButton.setAttribute("aria-expanded", String(open));
+  if (open) rail.focus({ preventScroll: true });
+  else if (was && rail.contains(document.activeElement)) railButton.focus({ preventScroll: true });
+}
+
+function setRailFold(sec: RailSection, fold: boolean): void {
+  if (fold) railFolded.add(sec);
+  else railFolded.delete(sec);
+  writePref(RAIL_FOLD_KEY, JSON.stringify([...railFolded]));
+  const box = root?.querySelector<HTMLElement>(`[data-rs="${sec}"]`);
+  if (!box) return;
+  box.classList.toggle("folded", fold);
+  box.querySelector(".rs-t")?.setAttribute("aria-expanded", String(!fold));
+  box.querySelector<HTMLElement>(".rs-b")!.hidden = fold;
+}
+
+/** Unfold a rail section and, on a narrow window, bring the sheet up, so something in it can be shown. */
+function revealRail(sec: RailSection): void {
+  if (railFolded.has(sec)) setRailFold(sec, false);
+  if (sheetQuery.matches && !root!.classList.contains("sheet-open")) {
+    root!.classList.add("sheet-open");
+    railButton.setAttribute("aria-expanded", "true");
+  }
 }
 
 // ---- the Lead -----------------------------------------------------------------------
@@ -647,6 +847,8 @@ function renderLead(): void {
     ),
   };
   paintChatLog(leadPane.log, spec);
+  // Today's overview leads the chat; a log repainted from scratch takes it back.
+  if (overviewEl.parentNode !== leadPane.log) leadPane.log.prepend(overviewEl);
   setComposer(leadPane, {
     placeholder: working ? "Queue a message for after this turn, or send it now…" : "Ask or direct Devis…",
     disabled: false,
@@ -809,13 +1011,13 @@ async function loadToday(): Promise<void> {
     // The poll says only which version the note is at; read it when that moves on.
     const version = next.note?.version;
     if (version !== undefined && (!note || version !== note.version)) void loadNote();
-    // Likewise the meetings, while their tab shows.
+    // Likewise the meetings, chats and email: the rail shows today's, and the drawer all of them.
     const meetingsAt = next.comms?.meetings?.version;
-    if (paneTab === "meetings" && meetingsAt !== undefined && meetingsAt !== meetingsVersion) void loadMeetings();
+    if ((!meetingsView.meetings && !meetingsView.error) || (meetingsAt !== undefined && meetingsAt !== meetingsVersion)) void loadMeetings();
     const chatsAt = next.comms?.chats?.version;
-    if (paneTab === "comms" && chatsAt !== undefined && chatsAt !== chatsVersion) void loadChats();
+    if ((!commsView.chats && !commsView.error) || (chatsAt !== undefined && chatsAt !== chatsVersion)) void loadChats();
     const mailAt = next.comms?.mail?.version;
-    if (paneTab === "comms" && mailAt !== undefined && mailAt !== mailVersion) void loadMail();
+    if ((!commsView.mail && !commsView.error) || (mailAt !== undefined && mailAt !== mailVersion)) void loadMail();
   } catch (e) {
     if (token !== todayToken) return;
     loadError = (e as Error).message;
@@ -833,8 +1035,8 @@ function scopedPrs(): PR[] {
 }
 
 /**
- * Drop per-task and per-request state for what's no longer on Today: drafts,
- * open timelines, and the task modal's chat notes and choices. The page runs
+ * Drop per-task and per-request state for what's no longer on Today: drafts
+ * and the task modal's chat notes and choices. The page runs
  * for days; without this, every task and question ever seen stays in memory.
  */
 function pruneTodayState(today: TodayData): void {
@@ -842,7 +1044,6 @@ function pruneTodayState(today: TodayData): void {
   const sessionIds = new Set(today.tasks.flatMap((t) => t.workers.map((w) => w.sessionId)));
   const requestIds = new Set(today.tasks.flatMap((t) => t.workers.flatMap((w) => w.requests.map((r) => r.id))));
   const todoIds = new Set((today.todos || []).map((t) => String(t.id)));
-  for (const id of [...timelines]) if (!taskIds.has(id)) timelines.delete(id);
   for (const key of [...drafts.keys()]) {
     const [kind, id] = [key.slice(0, key.indexOf(":")), key.slice(key.indexOf(":") + 1)];
     if ((kind === "st" && !taskIds.has(id)) || (kind === "ans" && !requestIds.has(id))) drafts.delete(key);
@@ -866,47 +1067,10 @@ function renderToday(force = false): void {
   renderComms(force);
 }
 
-// ---- the Tasks pane's tabs: Tasks and Communication ---------------------------------
+// ---- Communication and Meetings ---------------------------------------------------
 
-/** Show the tab chosen: its tools, sub line and body; the other's hide. */
-function applyPaneTab(): void {
-  const pane = root!.querySelector<HTMLElement>('[data-pane-el="tasks"]')!;
-  pane.dataset.tab = paneTab;
-  for (const tab of pane.querySelectorAll<HTMLButtonElement>(".pane-tab")) {
-    const on = tab.dataset.ptab === paneTab;
-    tab.setAttribute("aria-selected", String(on));
-    tab.tabIndex = on ? 0 : -1;
-  }
-  for (const tools of pane.querySelectorAll<HTMLElement>(".tab-tools")) tools.hidden = tools.dataset.for !== paneTab;
-  tasksBody.hidden = paneTab !== "tasks";
-  tasksSub.hidden = paneTab !== "tasks";
-  commsBody.hidden = paneTab !== "comms";
-  commsSubEl.hidden = paneTab !== "comms";
-  meetingsBody.hidden = paneTab !== "meetings";
-  meetingsSubEl.hidden = paneTab !== "meetings";
-  pane.querySelector<HTMLElement>(".today-status")!.hidden = paneTab !== "tasks";
-}
-
-function setPaneTab(tab: PaneTab, focus = false): void {
-  if (tab !== paneTab) {
-    paneTab = tab;
-    writePref(PANE_TAB_KEY, tab);
-    applyPaneTab();
-  }
-  if (tab === "meetings") {
-    markMeetingsSeen();
-    if (!meetingsView.meetings || meetingsVersion !== (data?.comms?.meetings?.version ?? meetingsVersion)) void loadMeetings();
-  }
-  if (tab === "comms") {
-    writePref(COMMUNICATION_SEEN_KEY, String(Date.now()));
-    loadCommunication();
-  }
-  renderToday(true);
-  if (focus) root!.querySelector<HTMLElement>(`.pane-tab[data-ptab="${tab}"]`)?.focus();
-}
-
-const meetingsShown = (): boolean => visible && paneTab === "meetings" && !folded.has("tasks");
-const commsShown = (): boolean => visible && paneTab === "comms" && !folded.has("tasks");
+const meetingsShown = (): boolean => visible && drawer?.kind === "meetings";
+const commsShown = (): boolean => visible && drawer?.kind === "comms";
 
 /** Read the chats' summaries, unless a read is under way. */
 function loadChats(): Promise<void> {
@@ -985,38 +1149,63 @@ function loadMeetings(): Promise<void> {
   return meetingsLoading;
 }
 
+/** What's new, by rail section; on a narrow window the Overview button's badge adds them up. */
+const railNew = { needs: 0, comms: 0, meetings: 0 };
+
+function paintRailBadge(): void {
+  const n = railNew.needs + railNew.comms + railNew.meetings;
+  railBadge.hidden = !n;
+  railBadge.textContent = n ? String(n) : "";
+  railButton.setAttribute("aria-label", n ? `Show the overview, ${n} new` : "Show the overview");
+}
+
+/** A rail section's "N new" pill; none while its drawer is open, since you're looking at it. */
+function paintNew(sec: "comms" | "meetings", n: number, label: string): void {
+  railNew[sec] = n;
+  const pill = root!.querySelector<HTMLElement>(`[data-rs="${sec}"] .rs-new`)!;
+  pill.hidden = !n;
+  pill.textContent = n ? `${n} new` : "";
+  root!.querySelector(`[data-rs="${sec}"] .rs-t`)!.setAttribute("aria-label", n ? `${RAIL_NAME[sec]}, ${label}` : RAIL_NAME[sec]);
+}
+
 /**
- * Repaint the Communication and Meetings tabs and the Meetings badge; a tab's body only while
- * it's showing.
+ * Repaint Communication and Meetings: the rail's rows and "new" pills, and, while the drawer
+ * shows one of them, its list and the selected conversation or meeting.
  */
 function renderComms(force = false): void {
   if (!root) return;
-  const seen = Number(readPref(MEETINGS_SEEN_KEY, "0")) || dayStart(Date.now());
-  const unseen = meetingsShown() ? 0 : unseenRecaps(data?.comms?.meetings?.ready, seen);
-  meetingsBadge.hidden = !unseen;
-  meetingsBadge.textContent = unseen ? String(unseen) : "";
-  root.querySelector(".pane-tab[data-ptab='meetings']")!.setAttribute("aria-label", unseen ? `Meetings, ${unseen} new recap${unseen === 1 ? "" : "s"}` : "Meetings");
-  // Communication: conversations and threads that need you, or matter, and moved since you last looked.
-  const commsSeen = Number(readPref(COMMUNICATION_SEEN_KEY, "0")) || dayStart(Date.now());
-  const flagged = commsShown() ? 0 : unseenRecaps(data?.comms?.chats?.flagged, commsSeen) + unseenRecaps(data?.comms?.mail?.flagged, commsSeen);
-  commsBadge.hidden = !flagged;
-  commsBadge.textContent = flagged ? String(flagged) : "";
-  root.querySelector(".pane-tab[data-ptab='comms']")!.setAttribute("aria-label", flagged ? `Communication, ${flagged} to look at` : "Communication");
   const now = Date.now();
-  if (paneTab === "comms") {
-    commsSubEl.textContent = communicationSub(commsView, now);
+  const seen = Number(readPref(MEETINGS_SEEN_KEY, "0")) || dayStart(now);
+  const unseen = meetingsShown() ? 0 : unseenRecaps(data?.comms?.meetings?.ready, seen);
+  paintNew("meetings", unseen, `${unseen} new recap${unseen === 1 ? "" : "s"}`);
+  // Communication: conversations and threads that need you, or matter, and moved since you last looked.
+  const commsSeen = Number(readPref(COMMUNICATION_SEEN_KEY, "0")) || dayStart(now);
+  const flagged = commsShown() ? 0 : unseenRecaps(data?.comms?.chats?.flagged, commsSeen) + unseenRecaps(data?.comms?.mail?.flagged, commsSeen);
+  paintNew("comms", flagged, `${flagged} to look at`);
+  paintRailBadge();
+  patchPane(commsRailBody, communicationRail(commsView, now).html);
+  patchPane(meetRailBody, meetingsRail(meetingsView, now));
+  if (!drawer || drawer.kind === "task") return;
+  const ld = drawerBody.querySelector<HTMLElement>(".ld");
+  if (!ld) return;
+  ld.dataset.pane = ldDetail ? "detail" : "list";
+  const list = ld.querySelector<HTMLElement>(".ld-list")!;
+  const detail = ld.querySelector<HTMLElement>(".ld-detail")!;
+  if (drawer.kind === "comms") {
+    drawerMeta.textContent = communicationSub(commsView, now);
     const sig = communicationSig(commsView, now);
     if (!force && sig === commsRendered) return;
     commsRendered = sig;
-    patchPane(commsBody, communicationHtml(commsView, now));
+    patchPane(list, communicationHtml(commsView, now));
+    patchPane(detail, communicationDetailHtml(commsView, now));
     return;
   }
-  if (paneTab !== "meetings") return;
-  meetingsSubEl.textContent = meetingsSub(meetingsView, now);
+  drawerMeta.textContent = meetingsSub(meetingsView, now);
   const sig = meetingsSig(meetingsView, data?.todos, now);
   if (!force && sig === meetingsRendered) return;
   meetingsRendered = sig;
-  patchPane(meetingsBody, meetingsHtml(meetingsView, data?.todos, now));
+  patchPane(list, meetingsHtml(meetingsView, data?.todos, now));
+  patchPane(detail, meetingDetailHtml(meetingsView, data?.todos, now));
 }
 
 /** Read Teams and email now, from the Communication tab's head: the chats and threads, and their summaries. */
@@ -1102,21 +1291,6 @@ const loadingHtml = (what: string): string =>
     ? `<div class="empty">Could not load ${what}: ${esc(loadError)}</div>`
     : `<div class="loading"><span class="spinner"></span> Loading ${what}…</div>`;
 const staleNote = (): string => (loadError ? `<div class="today-note err">Showing the last update. ${esc(loadError)}</div>` : "");
-
-function sectionHead(title: string, tone: string, count: number): string {
-  return `<h2 class="today-group tone-${tone}"><span class="today-group-dot"></span>${esc(title)}<span class="count">${count}</span></h2>`;
-}
-
-/**
- * Needs you: everything waiting on the user, from every service, one compact item per ask:
- * the task, who asks, and the ask itself, answerable here. The tasks' cards stay on the board.
- */
-function needsSection(items: NeedItem[], now: number): string {
-  const section = SECTIONS[0];
-  return `<section class="today-section" data-section="needs" data-key="sec:needs">${sectionHead(section.title, section.tone, items.length)}${
-    items.length ? items.map((n) => needHtml(n, now)).join("") : `<p class="today-empty">${esc(section.empty)}</p>`
-  }</section>`;
-}
 
 function needHtml(n: NeedItem, now: number): string {
   if (n.kind === "teams") return teamsNeedHtml(n, now);
@@ -1238,20 +1412,17 @@ function todoLinkHtml(src: NonNullable<Todo["source"]>): string {
 /** The chats and email threads someone waits on you in. */
 const commsNeedsNow = (): CommsNeed[] => data?.comms?.needs || [];
 
-/** Show a chat or thread that waits on you in the Communication tab, opened, in view. */
+/** Open a chat or thread that waits on you in Communication, selected and in view. */
 function showCommsNeed(key: string): void {
   const need = commsNeedsNow().find((n) => n.key === key);
   if (!need) return;
   const at = revealConversation(need.source, need.id, need.day);
-  if (folded.has("tasks")) {
-    folded.delete("tasks");
-    applyLayout();
-  }
-  setPaneTab("comms");
+  if (sheetQuery.matches) setSheet(false);
+  openDrawer({ kind: "comms" }, true);
   const show = (): boolean => {
-    const el = commsBody.querySelector<HTMLElement>(`[data-chat="${CSS.escape(at)}"]`);
-    if (el) flashInView(el, el.querySelector<HTMLElement>(".cs-head"));
-    return !!el;
+    const row = drawerBody.querySelector<HTMLElement>(`.ld-list [data-chat="${CSS.escape(at)}"]`);
+    if (row) row.scrollIntoView({ block: "nearest" });
+    return !!row;
   };
   if (!show()) void Promise.all([loadChats(), loadMail()]).then(() => void show());
 }
@@ -1314,24 +1485,21 @@ async function dismissAsk(ask: CommsAsk): Promise<void> {
   renderToday(true);
 }
 
-// ---- Tasks: the board ---------------------------------------------------------------
+// ---- Tasks: the rail's board -------------------------------------------------------
 
 function renderTasks(force: boolean): void {
   const now = Date.now();
   const prs = scopedPrs();
-  const needsHere = folded.has("today");
   const sig = todayFingerprint(
     data,
     JSON.stringify([
       service,
       loadError,
-      needsHere,
       // What the to-dos took out of Needs you.
       data?.todos?.filter((t) => !t.done && t.source).map((t) => t.source!.key),
       prsLoaded || state.prs.length > 0,
       prs.map((p) => [p.id, reviewPhase(p)]),
-      [...timelines],
-      // Ages ("4m ago") move on even when nothing else does.
+      // Ages ("4m") move on even when nothing else does.
       Math.floor(now / 60_000),
     ])
   );
@@ -1362,9 +1530,11 @@ function renderTasks(force: boolean): void {
     idle: groups.idle.length,
     done: groups.done.length + reviewed.length,
   };
-  const workers = tasks.flatMap((t) => t.workers);
   const open = tasks.filter((t) => t.status === "open").length;
-  tasksSub.textContent = `${open} open task${open === 1 ? "" : "s"} · ${workers.length} worker${workers.length === 1 ? "" : "s"}`;
+  tasksCount.textContent = open ? String(open) : "";
+  const allOpen = data.tasks.filter((t) => t.status === "open").length;
+  const working = data.tasks.flatMap((t) => t.workers).filter((w) => workerState(w) === "working").length;
+  leadWatch.textContent = allOpen ? `Watching ${allOpen} task${allOpen === 1 ? "" : "s"}${working ? ` · ${working} working` : ""}` : "";
   statusLine.textContent = todaySummary(counts);
   root!.querySelector(".today-status")!.className = `today-status tone-${counts.needs ? "warn" : counts.running ? "run" : "ok"}`;
 
@@ -1377,36 +1547,31 @@ function renderTasks(force: boolean): void {
         <button type="button" class="btn sm accent" data-act="new-task">${svg("add")}<span>Task</span></button>
       </div>`);
   }
-  // While Today is folded, what needs the user stays in sight here.
-  if (needsHere && needs.length) html.push(needsSection(needs, now));
   for (const section of SECTIONS) {
     const id = section.id;
     if (id === "needs") continue;
     const count = counts[id] || 0;
     if (!count && id !== "reviews") continue;
-    html.push(`<section class="today-section" data-section="${id}" data-key="sec:${id}">${sectionHead(section.title, section.tone, count)}`);
+    html.push(`<div class="rr-sec" data-section="${id}" data-key="sec:${id}">${subHead(section.title, count)}`);
     if (id === "reviews") html.push(renderReviews(prs, now));
     else if (id === "done") {
       html.push(groups.done.map((t) => taskCard(t, now, "done")).join(""));
       html.push(reviewed.map((e) => reviewedRow(e, now)).join(""));
     } else html.push(groups[id].map((t) => taskCard(t, now, id)).join(""));
-    html.push(`</section>`);
+    html.push(`</div>`);
   }
   patchPane(tasksBody, html.join(""));
 }
 
-// ---- Today: the user's day ----------------------------------------------------------
+// ---- The day: Needs you, the overview, to-dos and the note ----------------------------
 
 function renderDay(force: boolean): void {
   // The note can save before the Workspace is ever shown (an edit restored at startup).
   if (!root) return;
   const now = Date.now();
-  const needsHere = !folded.has("today");
   const sig = JSON.stringify([
     todayFingerprint(data, ""),
     loadError,
-    needsHere,
-    [...timelines],
     overviewCollapsed,
     overviewRefreshing,
     data?.todos?.map((t) => [t.id, t.text, t.done, t.author, t.source?.key, t.doneNote]),
@@ -1425,26 +1590,31 @@ function renderDay(force: boolean): void {
 
   const todos = data?.todos || [];
   const openTodos = todos.filter((t) => !t.done).length;
+  todosCount.textContent = openTodos ? String(openTodos) : "";
+  // Needs you covers every service: the filter belongs to the board in Tasks.
   const needs = data ? visibleNeeds(needsItems(data.tasks, teamsAsks(), commsNeedsNow()), data.todos) : [];
-  daySub.textContent = [
-    new Date(now).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }),
-    needs.length ? `${needs.length} need${needs.length === 1 ? "s" : ""} you` : "",
-    `${openTodos} to-do${openTodos === 1 ? "" : "s"}`,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  needsCount.textContent = needs.length ? String(needs.length) : "";
+  root.querySelector('[data-rs="needs"]')!.classList.toggle("has-needs", needs.length > 0);
+  railNew.needs = needs.length;
+  paintRailBadge();
+  const banner = needs.length ? `${needs.length} thing${needs.length === 1 ? "" : "s"} need${needs.length === 1 ? "s" : ""} you` : "";
+  needsBanner.hidden = !banner;
+  if (needsBanner.dataset.text !== banner) {
+    needsBanner.dataset.text = banner;
+    needsBanner.innerHTML = banner ? `${svg("warning")}<span>${esc(banner)}</span><span class="jv-banner-go">Show</span>` : "";
+  }
 
   if (!data) {
-    dayBody.innerHTML = loadingHtml("Today");
+    needsBody.innerHTML = loadingHtml("Today");
     return;
   }
-  const html: string[] = [staleNote()];
-  // Today covers every service: the filter belongs to the board in Tasks.
-  html.push(renderOverview(data.tasks, now));
-  if (needsHere) html.push(needsSection(needs, now));
-  html.push(renderTodos(todos, now));
-  html.push(renderNote(now));
-  patchPane(dayBody, html.join(""));
+  patchPane(
+    needsBody,
+    staleNote() + (needs.length ? needs.map((n) => needHtml(n, now)).join("") : `<p class="rs-empty" data-key="none">${esc(SECTIONS[0].empty)}</p>`)
+  );
+  patchPane(overviewEl, renderOverview(data.tasks, now));
+  patchPane(todosBody, renderTodos(todos, now));
+  patchPane(noteBody, renderNote(now));
 }
 
 // ---- Today: to-dos ------------------------------------------------------------------
@@ -1459,7 +1629,7 @@ function renderTodos(todos: Todo[], now: number): string {
     </form>`;
   const list = open.length
     ? `<ul class="todo-list" data-key="todo-open">${open.map((t, i) => todoRow(t, now, i, open.length)).join("")}</ul>`
-    : `<p class="today-empty" data-key="todo-none">Nothing on your list.</p>`;
+    : `<p class="rs-empty" data-key="todo-none">Nothing on your list.</p>`;
   const doneHead = done.length
     ? `<div class="todo-done-head" data-key="todo-done-head">
         <button type="button" class="tu-toggle" data-act="todo-show-done" aria-expanded="${showDoneTodos}">Done · ${done.length}${svg("chevron")}</button>
@@ -1468,9 +1638,7 @@ function renderTodos(todos: Todo[], now: number): string {
     : "";
   const doneList =
     done.length && showDoneTodos ? `<ul class="todo-list is-done" data-key="todo-done">${done.map((t) => todoRow(t, now, 0, 0)).join("")}</ul>` : "";
-  return `<section class="today-section todo-section" data-section="todos" data-key="sec:todos">
-      ${sectionHead("To-dos", "idle", open.length)}${add}${list}${doneHead}${doneList}
-    </section>`;
+  return `${list}${add}${doneHead}${doneList}`;
 }
 
 function todoRow(t: Todo, now: number, index: number, count: number): string {
@@ -1574,7 +1742,7 @@ async function needToTodo(button: HTMLElement): Promise<void> {
   const focusTarget = next
     ? root!.querySelector<HTMLElement>(`[data-source="${CSS.escape(next)}"] [data-act='need-todo']`)
     : added
-      ? dayBody.querySelector<HTMLElement>(`[data-todo="${added.id}"] .todo-check`)
+      ? todosBody.querySelector<HTMLElement>(`[data-todo="${added.id}"] .todo-check`)
       : null;
   focusTarget?.focus({ preventScroll: true });
   toast("Moved to your to-dos", "ok", added ? { label: "Undo", run: () => void todoAct("/api/jarvis/todos/delete", { id: added.id }).then(() => renderTasks(true)) } : undefined);
@@ -1610,7 +1778,7 @@ function startTodoEdit(todo: Todo): void {
   todoEditing = todo.id;
   drafts.set(`todo:${todo.id}`, todo.text);
   renderDay(true);
-  const input = dayBody.querySelector<HTMLInputElement>(`[data-todo="${todo.id}"] .todo-edit`);
+  const input = todosBody.querySelector<HTMLInputElement>(`[data-todo="${todo.id}"] .todo-edit`);
   input?.focus();
   input?.setSelectionRange(input.value.length, input.value.length);
 }
@@ -1625,7 +1793,7 @@ function endTodoEdit(save: boolean, refocus: boolean): void {
   drafts.delete(key);
   const todo = data?.todos?.find((t) => t.id === id);
   const focusRow = (): void => {
-    if (refocus) dayBody.querySelector<HTMLElement>(`[data-todo="${id}"] .todo-check`)?.focus();
+    if (refocus) todosBody.querySelector<HTMLElement>(`[data-todo="${id}"] .todo-check`)?.focus();
   };
   if (!save || !todo || !text || text === todo.text) {
     renderDay(true);
@@ -1668,21 +1836,18 @@ function renderNote(now: number): string {
       </div>`
     : "";
   const merged = noteMerged ? `<p class="note-merged" data-key="note-merged">${esc(noteMerged)}</p>` : "";
-  return `<section class="today-section note-section" data-section="note" data-key="sec:note">
-      <h2 class="today-group tone-idle"><span class="today-group-dot"></span>Quick note
-        <span class="note-state tone-${s.tone}" role="status"${s.title ? ` title="${esc(s.title)}"` : ""}>${esc(s.text)}</span></h2>
-      ${conflict}${merged}
+  return `${conflict}${merged}
       <textarea class="quick-note" data-role="quick-note" data-max="480" rows="5" maxlength="${NOTE_MAX_CHARS}" spellcheck="true"
         aria-label="Quick note" placeholder="Anything to keep in mind. Devis and your workers can read it when you ask."${
           note || noteDraft !== null ? "" : " disabled"
         }>
 ${esc(noteValue())}</textarea>
-    </section>`;
+      <p class="note-foot" data-key="note-foot"><span class="note-state tone-${s.tone}" role="status"${s.title ? ` title="${esc(s.title)}"` : ""}>${esc(s.text)}</span></p>`;
 }
 
 /** Repaint just the note's status, so typing doesn't repaint the pane. */
 function paintNoteState(): void {
-  const label = dayBody?.querySelector<HTMLElement>(".note-state");
+  const label = noteBody?.querySelector<HTMLElement>(".note-state");
   if (!label) return;
   const s = noteState(Date.now());
   label.textContent = s.text;
@@ -1948,43 +2113,31 @@ async function refreshOverview(): Promise<void> {
   }
 }
 
-/**
- * Scroll to a task's card in whichever pane shows it. A card that's hidden by
- * the service filter or a folded Tasks pane is brought into view first.
- */
+/** Show a task's row in the rail; one hidden by the service filter is brought into view first. Else open it. */
 function jumpToTask(taskId: string): void {
-  const find = (): HTMLElement | null =>
-    root!.querySelector<HTMLElement>(`.today-pane:not([hidden]) article.task-card[data-task="${CSS.escape(taskId)}"]`);
-  let card = find();
-  if (!card) {
-    const task = data?.tasks.find((t) => t.id === taskId);
-    if (!task) return;
-    if (!inService(task, service)) {
-      service = ALL_SERVICES;
-      writePref(SERVICE_KEY, service);
-    }
-    if (folded.has("tasks")) {
-      folded.delete("tasks");
-      applyLayout();
-    } else renderToday(true);
-    card = find();
+  const find = (): HTMLElement | null => tasksBody.querySelector<HTMLElement>(`.rr[data-task="${CSS.escape(taskId)}"]`);
+  const task = data?.tasks.find((t) => t.id === taskId);
+  if (!task) return;
+  if (!inService(task, service)) {
+    service = ALL_SERVICES;
+    writePref(SERVICE_KEY, service);
   }
-  if (!card) return;
-  flashInView(card, card.querySelector<HTMLElement>("button"));
+  revealRail("tasks");
+  renderToday(true);
+  const row = find();
+  if (row) return flashInView(row, row.querySelector<HTMLElement>(".rr-main"));
+  openDrawer({ kind: "task", taskId });
 }
 
-/** Scroll to the first thing a task waits on you for, under Needs you, wherever that shows. */
+/** Show the first thing a task waits on you for, under Needs you. */
 function jumpToNeed(taskId: string): void {
-  const find = (): HTMLElement | null => root!.querySelector<HTMLElement>(`.today-pane:not([hidden]) .need[data-need="${CSS.escape(taskId)}"]`);
-  let item = find();
-  if (!item && folded.has("today") && folded.has("tasks")) {
-    folded.delete("today");
-    applyLayout();
-    item = find();
-  }
+  if (drawer) closeDrawer(false);
+  revealRail("needs");
+  const item = needsBody.querySelector<HTMLElement>(`.need[data-need="${CSS.escape(taskId)}"]`);
   if (item) return flashInView(item, item.querySelector<HTMLElement>(".need-body button, .need-body textarea, .need-body input"));
   // Taken on as a to-do: that's where it is now. Else the task itself.
-  const todo = root!.querySelector<HTMLElement>(`.today-pane:not([hidden]) .todo-src[data-src-task="${CSS.escape(taskId)}"]`)?.closest<HTMLElement>(".todo");
+  revealRail("todos");
+  const todo = todosBody.querySelector<HTMLElement>(`.todo-src[data-src-task="${CSS.escape(taskId)}"]`)?.closest<HTMLElement>(".todo");
   if (todo) return flashInView(todo, todo.querySelector<HTMLElement>(".todo-check"));
   openTaskById(taskId);
 }
@@ -1998,46 +2151,6 @@ function flashInView(el: HTMLElement, focus: HTMLElement | null): void {
   focus?.focus({ preventScroll: true });
 }
 
-// ---- Today: a task's status updates -------------------------------------------------
-
-function clockTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-}
-
-/** The latest status under a task's title, and the toggle for its timeline. `tone` colors its dot like the card's icon. */
-function updateRow(task: TodayTask, now: number, tone: string): string {
-  const latest = task.updates?.latest || null;
-  const count = task.updates?.today.length || 0;
-  const open = timelines.has(task.id);
-  const text = latest
-    ? `<span class="tu-text">${esc(latest.text)}</span><span class="tu-meta">${esc(latest.author)} · ${esc(agoPhrase(latest.at, now))}</span>`
-    : `<span class="tu-text is-muted">No status yet</span>`;
-  const label = count ? `${count} update${count === 1 ? "" : "s"} today` : "Post status";
-  return `<div class="task-update tone-${tone}"><span class="tu-dot"></span>${text}<button type="button" class="tu-toggle" data-act="updates" aria-expanded="${open}">${esc(label)}${svg("chevron")}</button></div>`;
-}
-
-function timelineBlock(task: TodayTask, now: number): string {
-  const today = task.updates?.today || [];
-  const latest = task.updates?.latest;
-  const list = today.length
-    ? `<ol class="tl">${today
-        .map(
-          (s) =>
-            `<li><time datetime="${esc(s.at)}">${esc(clockTime(s.at))}</time><span class="tl-who">${esc(s.author)}</span><span class="tl-text">${esc(s.text)}</span></li>`
-        )
-        .join("")}</ol>`
-    : `<p class="tl-empty">No updates today${latest ? `. The last one, ${esc(agoPhrase(latest.at, now))}: ${esc(latest.text)}` : ""}.</p>`;
-  const key = `st:${task.id}`;
-  return `<div class="task-timeline">${list}
-    <form class="tl-post" data-form="status">
-      <input type="text" maxlength="160" data-draft="${esc(key)}" value="${esc(drafts.get(key) || "")}"
-        placeholder="Post a status… (Enter to post)" aria-label="Post a status on ${esc(task.title)}" autocomplete="off">
-      <button type="submit" class="btn sm">Post</button>
-      <button type="button" class="btn sm ghost" data-act="all-updates" title="Every update since the task started">All updates</button>
-    </form>
-  </div>`;
-}
-
 /** A stable identity for a control across repaints: its owners' ids plus its own role. */
 function focusKey(node: HTMLElement): string | null {
   if (!node.matches('button, textarea, input, a[href], [role="button"][tabindex]')) return null;
@@ -2048,10 +2161,14 @@ function focusKey(node: HTMLElement): string | null {
   return [...owners, ...own, node.tagName].join("|");
 }
 
+/** A group's quiet head inside the rail's Tasks: its name and count. */
+const subHead = (title: string, count: number): string =>
+  `<h4 class="rr-group" data-key="h">${esc(title)}<span>${count}</span></h4>`;
+
 function renderReviews(prs: PR[], now: number): string {
   if (!prs.length) {
     const loading = !prsLoaded && !state.prs.length;
-    return `<p class="today-empty">${loading ? '<span class="spinner"></span> Loading pull requests…' : esc(SECTIONS.find((s) => s.id === "reviews")!.empty)}</p>`;
+    return `<p class="rs-empty">${loading ? '<span class="spinner"></span> Loading pull requests…' : esc(SECTIONS.find((s) => s.id === "reviews")!.empty)}</p>`;
   }
   // PRs someone asked for in Teams come first; otherwise the feed's order stands.
   const asks = data?.comms?.asks;
@@ -2060,130 +2177,122 @@ function renderReviews(prs: PR[], now: number): string {
   const more = prs.length - shown.length;
   const toggle =
     prs.length > REVIEW_PREVIEW
-      ? `<button type="button" class="btn sm ghost today-more" data-act="more-reviews">${
-          more ? `Show ${more} more` : "Show fewer"
-        }</button>`
+      ? `<button type="button" class="rs-more" data-key="more-reviews" data-act="more-reviews">${more ? `Show ${more} more` : "Show fewer"}</button>`
       : "";
   return (
     shown
-    .map((pr) => {
-      const control = copilotReviewControl(reviewPhase(pr));
-      const chip = control.chip
-        ? `<span class="tchip tone-${control.chip.tone}">${svg("sparkle")}${esc(control.chip.label)}</span>`
-        : "";
-      const queued = queuing.has(prKey(pr));
-      const busy = control.disabled || queued;
-      const copilot = `<button type="button" class="btn sm ghost copilot-review" data-act="copilot-review" title="${esc(
-        control.title
-      )}"${busy ? " disabled" : ""}>${busy ? '<span class="spinner"></span>' : svg("sparkle")}<span>${esc(
-        queued ? "Queuing…" : control.label
-      )}</span></button>`;
-      const ask = askFor(asks, pr);
-      const asked = ask
-        ? `<a class="tchip tone-warn ask-chip" href="${esc(ask.askers[0]?.link || "")}" target="_blank" rel="noopener" data-act="pr-teams" title="${esc(
-            `${askersLine(ask.askers)} asked ${ask.askers[0] ? askerWhere(ask.askers[0]) : "in Teams"}. Open the message in Teams.`
-          )}">${svg("chat")}<span>Asked by ${esc(askersLine(ask.askers))}</span></a>`
-        : "";
-      return `
-        <article class="task-card review-card" data-key="pr:${esc(prKey(pr))}" data-pr="${esc(JSON.stringify([pr.org, pr.project, pr.repoId, pr.id]))}">
-          <div class="task-row" data-act="open-pr">
-            <span class="task-icon tone-run">${svg("pullRequest")}</span>
-            <div class="task-main">
-              <div class="task-title">${esc(pr.title)}</div>
-              <div class="task-meta">#${pr.id} · ${esc(pr.repo)} · ${esc(pr.author)} · waiting ${esc(ago(pr.created, now))}${pr.isDraft ? " · Draft" : ""}</div>
-            </div>
-            <div class="task-side">${asked}${chip}${copilot}<button type="button" class="btn sm" data-act="open-pr">Review</button></div>
-          </div>
-        </article>`;
-    })
-    .join("") + toggle
+      .map((pr) => {
+        const control = copilotReviewControl(reviewPhase(pr));
+        const queued = queuing.has(prKey(pr));
+        const busy = control.disabled || queued;
+        const copilot = `<button type="button" class="icon-btn copilot-review" data-act="copilot-review" title="${esc(queued ? "Queuing…" : control.title)}" aria-label="${esc(
+          `${queued ? "Queuing" : control.label}: ${pr.title}`
+        )}"${busy ? " disabled" : ""}>${busy ? '<span class="spinner"></span>' : svg("sparkle")}</button>`;
+        const ask = askFor(asks, pr);
+        const asked = ask
+          ? `<a class="rr-ask" href="${esc(ask.askers[0]?.link || "")}" target="_blank" rel="noopener" data-act="pr-teams" title="${esc(
+              `${askersLine(ask.askers)} asked ${ask.askers[0] ? askerWhere(ask.askers[0]) : "in Teams"}. Open the message in Teams.`
+            )}">${svg("chat")}<span class="ell">Asked by ${esc(askersLine(ask.askers))}</span></a>`
+          : "";
+        const status = control.chip ? `<span class="rr-st tone-${control.chip.tone}">${esc(control.chip.label)}</span>` : "";
+        const meta = `#${pr.id} · ${pr.repo} · ${pr.author} · waiting ${ago(pr.created, now)}${pr.isDraft ? " · Draft" : ""}`;
+        return `
+        <div class="rr" data-key="pr:${esc(prKey(pr))}" data-pr="${esc(JSON.stringify([pr.org, pr.project, pr.repoId, pr.id]))}">
+          <button type="button" class="rr-main" data-act="open-pr" title="${esc(meta)}">
+            <span class="rdot tone-run"></span><span class="rr-t ell">${esc(pr.title)}</span><span class="rr-tm">${esc(ago(pr.created, now))}</span>
+          </button>
+          <span class="rr-ha">${copilot}</span>
+          ${asked || status ? `<div class="rr-p">${asked}${status}</div>` : ""}
+        </div>`;
+      })
+      .join("") + toggle
   );
 }
 
 function reviewedRow(e: JarvisEvent, now: number): string {
   return `
-    <article class="task-card done-card">
-      <div class="task-row">
-        <span class="task-icon tone-ok">${svg("pullRequest")}</span>
-        <div class="task-main">
-          <div class="task-title">${esc(e.text)}</div>
-          <div class="task-meta">Pull request review · ${esc(agoPhrase(e.at, now))}</div>
-        </div>
-      </div>
-    </article>`;
+    <div class="rr is-done" data-key="rev:${esc(e.at)}">
+      <span class="rr-main" title="Pull request review · ${esc(agoPhrase(e.at, now))}">
+        <span class="rdot tone-ok"></span><span class="rr-t ell">${esc(e.text)}</span><span class="rr-tm">${esc(ago(e.at, now))}</span>
+      </span>
+    </div>`;
 }
 
-const SECTION_ICON: Record<BoardSection, [IconName, string]> = {
-  running: ["sync", "run"],
-  idle: ["circle", "idle"],
-  done: ["check", "ok"],
-};
+const SECTION_TONE: Record<BoardSection, string> = { running: "run", idle: "idle", done: "ok" };
 
+/**
+ * A task in the rail: its state, title and when it last moved. It opens in the drawer;
+ * ✓ marks it done, and ⋯ has the rest (artifacts, status, pull requests, a worker, …).
+ */
 function taskCard(task: TodayTask, now: number, section: BoardSection): string {
-  // Waiting on the user: the card stays where it is, marked, and its warning leads to the ask under Needs you.
   const asks = taskNeeds([task]);
-  const [iconName, tone] = asks.length ? (["warning", "warn"] as [IconName, string]) : SECTION_ICON[section];
-  const reason = asks.length ? `Needs you: ${asks.map(needLine).join(" · ")}` : "";
-  // Asks the user took on as to-dos are there now, not under Needs you.
-  const where = asks.length && !visibleNeeds(asks, data?.todos).length ? "Show it in your to-dos" : "Show it under Needs you";
-  const icon = asks.length
-    ? `<button type="button" class="task-icon task-need tone-warn" data-act="need-jump" title="${esc(reason)}" aria-label="${esc(reason)}. ${where}">${svg(iconName)}</button>`
-    : `<span class="task-icon tone-${tone}">${svg(iconName)}</span>`;
   const done = task.status === "done";
-  const pills = task.workers
-    .map((w) => {
-      const s = workerState(w);
-      const doing = s === "working" && w.activity ? ` · ${w.activity}` : "";
-      return `<span class="wpill tone-${WORKER_TONE[s]}"><span class="wdot"></span><span class="wname">${esc(w.label)}</span><span class="wstate">${esc(WORKER_LABEL[s] + doing)}</span></span>`;
-    })
-    .join("");
-  const actions = [
-    task.workItem?.url
-      ? `<a class="icon-btn" href="${esc(task.workItem.url)}" target="_blank" rel="noopener" title="Open in Azure DevOps" aria-label="Open in Azure DevOps">${svg("external")}</a>`
-      : "",
-    `<button type="button" class="btn sm ghost" data-act="artifacts">${svg("file")}<span>Artifacts</span></button>`,
-    done
-      ? `<button type="button" class="btn sm ghost" data-act="reopen">Reopen</button>`
-      : `<button type="button" class="btn sm ghost" data-act="start-worker">${svg("play")}<span>Worker</span></button>
-         <button type="button" class="icon-btn" data-act="done" title="Mark done" aria-label="Mark done">${svg("check")}</button>`,
-    `<button type="button" class="icon-btn" data-act="delete-task" title="Remove task" aria-label="Remove task">${svg("trash")}</button>`,
-  ].join("");
+  const tone = asks.length ? "warn" : task.validation?.attention === "failed" ? "bad" : SECTION_TONE[section];
+  const working = task.workers.filter((w) => workerState(w) === "working");
+  const workers = task.workers.length
+    ? `${task.workers.length} worker${task.workers.length === 1 ? "" : "s"}${working.length ? `, ${working.length} working` : ""}`
+    : "No worker yet";
+  const tip = [asks.length ? `Needs you: ${asks.map(needLine).join(" · ")}` : "", taskMeta(task), done ? "" : workers].filter(Boolean).join("\n");
+  const at = done ? task.doneAt : task.updatedAt;
+  const doing = working.find((w) => w.activity);
   const { shown, more } = cardPrs(task.prs);
   const vChip = validationChip(task.validation);
   const cChip = prCommentsChip(task.prComments);
   const bChip = prBuildsChip(task.prBuilds);
-  const prChips =
-    shown.length || vChip || cChip || bChip
-      ? `<div class="task-prs">${shown
-          .map((p) => {
-            const chip = prChipText(p);
-            return `<button type="button" class="pr-chip tone-${chip.tone}" data-act="task-prs" title="${esc(p.snapshot?.title || `PR ${p.prId}`)}">${svg("pullRequest")}<span>${esc(chip.text)}</span></button>`;
-          })
-          .join("")}${more ? `<button type="button" class="pr-chip more" data-act="task-prs" title="All of this task's pull requests">+${more}</button>` : ""}${
-          vChip
-            ? `<button type="button" class="pr-chip tone-${vChip.tone}" data-act="task-validation" title="${esc(task.validation?.name || "Validation")}">${svg("flow")}<span>${esc(vChip.text)}</span></button>`
-            : ""
-        }${
-          cChip ? `<button type="button" class="pr-chip tone-${cChip.tone}" data-act="task-comments" title="Review comments on this task's PRs">${svg("chat")}<span>${esc(cChip.text)}</span></button>` : ""
-        }${
-          bChip ? `<button type="button" class="pr-chip tone-${bChip.tone}" data-act="task-comments" title="Failed builds on this task's PRs">${svg("pipeline")}<span>${esc(bChip.text)}</span></button>` : ""
-        }</div>`
-      : "";
+  const chips = [
+    ...shown.map((p) => {
+      const chip = prChipText(p);
+      return `<button type="button" class="rr-chip tone-${chip.tone}" data-act="task-prs" title="${esc(p.snapshot?.title || `PR ${p.prId}`)}">${svg("pullRequest")}<span>${esc(chip.text)}</span></button>`;
+    }),
+    more ? `<button type="button" class="rr-chip" data-act="task-prs" title="All of this task's pull requests">+${more}</button>` : "",
+    vChip
+      ? `<button type="button" class="rr-chip tone-${vChip.tone}" data-act="task-validation" title="${esc(task.validation?.name || "Validation")}">${svg("flow")}<span>${esc(vChip.text)}</span></button>`
+      : "",
+    cChip
+      ? `<button type="button" class="rr-chip tone-${cChip.tone}" data-act="task-comments" title="Review comments on this task's PRs">${svg("chat")}<span>${esc(cChip.text)}</span></button>`
+      : "",
+    bChip
+      ? `<button type="button" class="rr-chip tone-${bChip.tone}" data-act="task-comments" title="Failed builds on this task's PRs">${svg("pipeline")}<span>${esc(bChip.text)}</span></button>`
+      : "",
+  ].join("");
+  const sub = doing ? `<span class="rr-doing ell">${esc(doing.label)} · ${esc(doing.activity)}</span>` : "";
   return `
-    <article class="task-card${asks.length ? " needs" : ""}" data-key="task:${esc(task.id)}" data-task="${esc(task.id)}">
-      <div class="task-row" data-act="open-task">
-        ${icon}
-        <div class="task-main">
-          <button type="button" class="task-title task-open" data-act="open-task" title="Open the task and chat with its workers">${esc(task.title)}</button>
-          <div class="task-meta" title="${esc(taskMeta(task))}">${esc(taskMeta(task))}${done && task.doneAt ? ` · done ${esc(agoPhrase(task.doneAt, now))}` : ""}</div>
-          ${prChips}
-          ${pills ? `<div class="task-workers">${pills}</div>` : section === "idle" ? `<div class="task-workers"><span class="today-hint">No worker yet</span></div>` : ""}
-        </div>
-        <div class="task-side">${actions}</div>
-      </div>
-      ${updateRow(task, now, asks.length ? "warn" : tone)}
-      ${timelines.has(task.id) ? timelineBlock(task, now) : ""}
-    </article>`;
+    <div class="rr${asks.length ? " needs" : ""}${done ? " is-done" : ""}" data-key="task:${esc(task.id)}" data-task="${esc(task.id)}">
+      <button type="button" class="rr-main" data-act="open-task" title="${esc(tip)}">
+        <span class="rdot tone-${tone}"></span><span class="rr-t ell">${esc(task.title)}</span><span class="rr-tm">${esc(ago(at, now))}</span>
+      </button>
+      <span class="rr-ha">
+        ${done ? "" : `<button type="button" class="icon-btn" data-act="done" title="Mark done" aria-label="Mark done: ${esc(task.title)}">${svg("check")}</button>`}
+        <button type="button" class="icon-btn rr-more" data-act="task-more" title="More" aria-label="More for ${esc(task.title)}" aria-haspopup="menu">⋯</button>
+      </span>
+      ${sub || chips ? `<div class="rr-p">${sub}${chips}</div>` : ""}
+    </div>`;
+}
+
+/** ⋯ on a task's row: everything its old card had, as a menu. */
+function taskMenu(task: TodayTask, anchor: HTMLElement): void {
+  const done = task.status === "done";
+  const open = (tab?: LeftTab) => (): void => openDrawer({ kind: "task", taskId: task.id, tab });
+  const status = (to: "done" | "open") => (): void =>
+    void act(anchor, () => postJSON("/api/jarvis/tasks/update", { id: task.id, status: to }));
+  const entries: ContextMenuEntry[] = [
+    { label: "Open", icon: "panel", run: open() },
+    { label: "Artifacts", icon: "file", run: open("artifacts") },
+    { label: "Status updates", icon: "clock", run: open("status") },
+    { label: "Pull requests", icon: "pullRequest", run: open("devops") },
+    { label: "Validation", icon: "flow", run: open("validation") },
+  ];
+  if (taskNeeds([task]).length) entries.unshift({ label: "Show what it needs", icon: "warning", run: () => jumpToNeed(task.id) });
+  if (done) entries.push({ label: "Reopen", icon: "sync", run: status("open") });
+  else {
+    entries.push({ label: "Start a worker", icon: "play", run: () => openStartWorker(task) });
+    entries.push({ label: "Mark done", icon: "check", run: status("done") });
+  }
+  const url = task.workItem?.url;
+  if (url) entries.push({ label: "Open in Azure DevOps", icon: "external", run: () => void window.open(url, "_blank", "noopener") });
+  entries.push({ label: "Remove", icon: "trash", run: () => confirmDeleteTask(task) });
+  const r = anchor.getBoundingClientRect();
+  openContextMenu(r.right - 200, r.bottom + 4, `Task: ${task.title}`, entries, () => anchor.isConnected && anchor.focus());
 }
 
 // ---- events -------------------------------------------------------------------------
@@ -2218,11 +2327,26 @@ async function act(button: HTMLElement | null, run: () => Promise<unknown>): Pro
   }
 }
 
+/** The task drawer's tab each of a task row's actions opens. */
+const TASK_TAB: Record<string, LeftTab | undefined> = { artifacts: "artifacts", "all-updates": "status", "task-prs": "devops", "task-validation": "validation", "task-comments": "comments" };
+
+/** After picking a conversation or meeting, the keyboard follows it to the detail. */
+function focusDetail(): void {
+  const detail = drawerBody.querySelector<HTMLElement>(".ld-detail");
+  if (!detail) return;
+  detail.scrollTop = 0;
+  // A narrow drawer shows the item alone (style.css, @container jvbody): move focus into it.
+  const list = drawerBody.querySelector<HTMLElement>(".ld-list");
+  if (ldDetail && list && !list.getClientRects().length) detail.focus({ preventScroll: true });
+}
+
+/** Inside the task drawer: the task handles its own events. */
+const inTask = (e: Event): boolean => !!(e.target as Element).closest?.(".tm-mount");
+
 function onClick(e: MouseEvent): void {
+  if (inTask(e)) return;
   const target = e.target as HTMLElement;
   if (target.closest("a[href]")) return;
-  const paneTabButton = target.closest<HTMLElement>(".pane-tab[data-ptab]");
-  if (paneTabButton) return setPaneTab(asPaneTab(paneTabButton.dataset.ptab));
   const starter = target.closest<HTMLElement>("[data-starter]");
   if (starter) return void sendToLead(starter.dataset.starter || "");
   // The Lead's queue: send a message now, or take it out.
@@ -2266,10 +2390,52 @@ function onClick(e: MouseEvent): void {
   const task = taskFor(node);
   const todo = todoFor(node);
   switch (node.dataset.act) {
-    case "pane-fold":
-    case "pane-open": {
-      const pane = node.dataset.pane;
-      if (isPane(pane)) setFolded(pane, node.dataset.act === "pane-fold");
+    case "rail-open":
+      return setSheet(true);
+    case "rail-close":
+      return setSheet(false);
+    case "rs-fold": {
+      const sec = node.closest<HTMLElement>("[data-rs]")?.dataset.rs as RailSection | undefined;
+      if (sec) setRailFold(sec, !railFolded.has(sec));
+      return;
+    }
+    case "drawer-close":
+      return closeDrawer();
+    case "drawer-back":
+      return drawerGoBack();
+    case "ld-back":
+      ldDetail = false;
+      renderComms(true);
+      return void drawerBody.querySelector<HTMLElement>(".ld-list .sel, .ld-list")?.focus({ preventScroll: true });
+    case "chat-select": {
+      const key = node.closest<HTMLElement>("[data-chat]")?.dataset.chat;
+      if (!key) return;
+      selectConversation(key);
+      ldDetail = true;
+      renderComms(true);
+      return focusDetail();
+    }
+    case "meet-select": {
+      const id = node.closest<HTMLElement>("[data-meet]")?.dataset.meet;
+      if (!id) return;
+      selectMeeting(id, node.closest<HTMLElement>("[data-day]")?.dataset.day);
+      ldDetail = true;
+      renderComms(true);
+      return focusDetail();
+    }
+    case "comms-open":
+    case "meet-open": {
+      const comms = node.dataset.act === "comms-open";
+      const key = comms ? node.dataset.chat : node.dataset.meet;
+      if (key) {
+        if (comms) selectConversation(key);
+        else selectMeeting(key);
+      }
+      if (sheetQuery.matches) setSheet(false);
+      return openDrawer({ kind: comms ? "comms" : "meetings" }, !!key);
+    }
+    case "task-more": {
+      if (task) taskMenu(task, node);
       return;
     }
     case "todo-toggle":
@@ -2313,11 +2479,6 @@ function onClick(e: MouseEvent): void {
     case "meet-day":
       toggleDay(node.dataset.day || "", node.dataset.today === "1");
       return renderComms(true);
-    case "meet-toggle": {
-      const id = node.closest<HTMLElement>("[data-meet]")?.dataset.meet;
-      if (id) toggleMeeting(id);
-      return renderComms(true);
-    }
     case "note-toggle": {
       const id = node.closest<HTMLElement>("[data-meet]")?.dataset.meet;
       if (id) toggleNote(id, Number(node.dataset.index));
@@ -2329,6 +2490,7 @@ function onClick(e: MouseEvent): void {
       return void scanMeetingsNow(node);
     case "meetings-settings":
     case "comms-settings":
+      closeDrawer(false);
       return hooks.openSettings();
     case "comms-scan":
       return void scanChatsNow(node);
@@ -2338,11 +2500,6 @@ function onClick(e: MouseEvent): void {
     case "mail-quiet":
       toggleQuietMail(node.dataset.day || "");
       return renderComms(true);
-    case "chat-toggle": {
-      const key = node.closest<HTMLElement>("[data-chat]")?.dataset.chat;
-      if (key) toggleChat(key);
-      return renderComms(true);
-    }
     case "note-keep-both":
       return resolveConflict("both");
     case "note-keep-mine":
@@ -2385,27 +2542,17 @@ function onClick(e: MouseEvent): void {
       return jumpToTask(node.dataset.jump || "");
     case "need-jump":
       return void (task && jumpToNeed(task.id));
-    case "updates": {
-      if (!task) return;
-      const opening = !timelines.has(task.id);
-      if (opening) timelines.add(task.id);
-      else timelines.delete(task.id);
-      renderToday(true);
-      if (opening) root!.querySelector<HTMLInputElement>(`.today-pane:not([hidden]) article.task-card[data-task="${CSS.escape(task.id)}"] .tl-post input`)?.focus();
-      return;
-    }
     case "open-task":
-      return void (task && openTaskModal(task.id, modalHost));
     case "artifacts":
-      return void (task && openTaskModal(task.id, modalHost, "artifacts"));
     case "all-updates":
-      return void (task && openTaskModal(task.id, modalHost, "status"));
     case "task-prs":
-      return void (task && openTaskModal(task.id, modalHost, "devops"));
     case "task-validation":
-      return void (task && openTaskModal(task.id, modalHost, "validation"));
-    case "task-comments":
-      return void (task && openTaskModal(task.id, modalHost, "comments"));
+    case "task-comments": {
+      if (!task) return;
+      const tab = TASK_TAB[node.dataset.act];
+      if (sheetQuery.matches) setSheet(false);
+      return openDrawer({ kind: "task", taskId: task.id, tab });
+    }
     case "start-worker":
       return void (task && openStartWorker(task));
     case "done":
@@ -2418,6 +2565,7 @@ function onClick(e: MouseEvent): void {
 }
 
 function onSubmit(e: SubmitEvent): void {
+  if (inTask(e)) return;
   const form = e.target as HTMLFormElement;
   e.preventDefault();
   if (form === leadPane.form) return void sendToLead(leadPane.input.value);
@@ -2450,6 +2598,7 @@ function onSubmit(e: SubmitEvent): void {
 }
 
 function onInput(e: Event): void {
+  if (inTask(e)) return;
   const field = e.target as HTMLElement;
   if (!(field instanceof HTMLTextAreaElement || field instanceof HTMLInputElement)) return;
   if (field.dataset.role === "quick-note") onNoteInput(field as HTMLTextAreaElement);
@@ -2459,6 +2608,18 @@ function onInput(e: Event): void {
 
 function onKeydown(e: KeyboardEvent): void {
   const target = e.target as HTMLElement;
+  if (e.key === "Escape" && !e.defaultPrevented && !e.isComposing && !target.classList.contains("todo-edit")) {
+    const typing = (target instanceof HTMLTextAreaElement || target instanceof HTMLInputElement) && !!target.value;
+    if (drawer && !typing && (drawerEl.contains(target) || !rail.contains(target))) {
+      e.preventDefault();
+      return closeDrawer();
+    }
+    if (root!.classList.contains("sheet-open") && !typing) {
+      e.preventDefault();
+      return setSheet(false);
+    }
+  }
+  if (inTask(e)) return;
   // A task named in Today so far is inline text that acts as a button: Enter or Space follows it.
   if ((e.key === "Enter" || e.key === " ") && target.matches('span.ov-mention[role="button"]')) {
     e.preventDefault();
@@ -2482,18 +2643,6 @@ function onKeydown(e: KeyboardEvent): void {
     }
     return;
   }
-  // The Tasks pane's tabs: Left and Right (or Home and End) move between them.
-  if (target.matches(".pane-tab") && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) {
-    e.preventDefault();
-    const at = PANE_TABS.indexOf(paneTab);
-    const next =
-      e.key === "Home"
-        ? PANE_TABS[0]
-        : e.key === "End"
-          ? PANE_TABS[PANE_TABS.length - 1]
-          : PANE_TABS[(at + (e.key === "ArrowRight" ? 1 : PANE_TABS.length - 1)) % PANE_TABS.length];
-    return setPaneTab(next, true);
-  }
   // The Lead's box: Ctrl+Enter sends it now, into the turn that's running.
   if (target === leadPane.input && composerKey(e) === "steer") {
     e.preventDefault();
@@ -2508,12 +2657,14 @@ function onKeydown(e: KeyboardEvent): void {
 }
 
 function onDblClick(e: MouseEvent): void {
+  if (inTask(e)) return;
   const text = (e.target as HTMLElement).closest(".todo-text");
   const todo = text && todoFor(text);
   if (todo) startTodoEdit(todo);
 }
 
 function onFocusOut(e: FocusEvent): void {
+  if (inTask(e)) return;
   const target = e.target as HTMLElement;
   // Clicking away keeps a to-do edit, as Enter does.
   if (target.classList.contains("todo-edit") && todoEditing !== null && document.hasFocus()) endTodoEdit(true, false);
@@ -2659,7 +2810,7 @@ function openNewTask(): void {
       else toast(res.worker ? `Added ${res.task.title}. ${res.worker.label} is setting it up.` : `Added ${res.task.title}`, "ok");
       await loadToday();
       // Show the new task's chat, where its worker asks about the repositories.
-      if (res.created && res.worker && data?.tasks.some((t) => t.id === res.task.id)) openTaskModal(res.task.id, modalHost);
+      if (res.created && res.worker && data?.tasks.some((t) => t.id === res.task.id)) openDrawer({ kind: "task", taskId: res.task.id });
     },
   });
   const field = <T extends HTMLElement>(sel: string) => dialog.querySelector<T>(sel)!;

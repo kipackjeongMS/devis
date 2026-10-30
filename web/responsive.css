@@ -1,0 +1,285 @@
+/* Responsive layout for narrow windows (index.html, code.html). Loads after style.css and only
+   adds to it. One breakpoint system:
+     1280px and up   desktop, unchanged
+     1024–1279px     tighter side panes
+     600–1023px      one primary column; drawers and flyouts span the window
+     under 600px     phone width: bottom tab bar, sheets, sticky PR actions
+   Touch targets reach 44px at phone width and on coarse pointers.
+   The Workspace page (#jarvisView) lays itself out; nothing here reaches inside it.
+   The PR list and detail already stack below 1100px (readingPane.ts sets body.layout-stacked). */
+
+:root { --tabbar-h: 56px; }
+
+/* Phone-width chrome: off until the phone block turns it on. */
+.tabbar,
+.filter-toggle,
+.reading-pane .detail-menu-wrap:has(> .pr-more-btn),
+.reading-pane .detail-actionbar { display: none; }
+
+/* The ⋯ menu splits votes from lifecycle actions with a hairline. */
+.detail-menu-item.sep-before { position: relative; margin-top: 5px; }
+.detail-menu-item.sep-before::before {
+  content: "";
+  position: absolute;
+  top: -3px;
+  right: 8px;
+  left: 8px;
+  height: 1px;
+  background: var(--divider);
+}
+
+/* ---------- 1024–1279px: tighten ---------- */
+@media (min-width: 1024px) and (max-width: 1279.98px) {
+  .workspace { --list-w: clamp(320px, 30vw, 380px); }
+  body[data-feature="pipelines"]:not([data-page="settings"]) .pipelines-view {
+    grid-template-columns: clamp(240px, 22vw, 280px) minmax(0, 1fr);
+  }
+}
+
+/* ---------- Under 1024px: one primary column ---------- */
+@media (max-width: 1023.98px) {
+  /* Pipelines: the catalog sits above the chain. */
+  body[data-feature="pipelines"]:not([data-page="settings"]) .pipelines-view {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 2fr) minmax(0, 3fr);
+  }
+  .chain-pane { grid-template-columns: minmax(0, 1fr); }
+  .chain-inspector { left: 8px; width: auto; }
+
+  /* Drawers and flyouts span the window (inboxPanel.ts sets top/left inline). */
+  .inbox-flyout {
+    right: var(--gutter) !important;
+    left: var(--gutter) !important;
+    width: auto;
+  }
+  .reading-pane .pr-comments-pop { right: var(--pane-pad); left: var(--pane-pad); width: auto; }
+}
+
+/* ---------- Under 600px: phone width ---------- */
+@media (max-width: 599.98px) {
+  /* Title bar keeps the brand, bell, refresh and settings; the tab bar takes the features. */
+  .titlebar { gap: 8px; padding-left: 12px; }
+  .feature-nav,
+  #btnSettings { display: none; }
+
+  .tabbar {
+    position: relative;
+    z-index: 10;
+    display: flex;
+    flex: none;
+    order: 3;
+    height: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px));
+    padding: 0 4px env(safe-area-inset-bottom, 0px);
+    border-top: 1px solid var(--divider);
+    background: var(--glass-head);
+  }
+  .tabbar-btn {
+    position: relative;
+    display: flex;
+    flex: 1 1 0;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    min-width: 0;
+    min-height: 44px;
+    padding: 6px 4px;
+    border: 0;
+    border-radius: var(--r-control);
+    background: transparent;
+    color: var(--text-3);
+    font-size: var(--fs-micro);
+    line-height: 14px;
+    transition: color var(--t-fast) linear;
+  }
+  .tabbar-btn svg.ic { width: 20px; height: 20px; }
+  .tabbar-btn > span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tabbar-btn:hover { color: var(--text-1); }
+  .tabbar-btn:active { background: var(--fill-press); }
+  .tabbar-btn:focus-visible { outline-offset: -2px; }
+  .tabbar-btn[aria-current="page"] { color: var(--text-1); }
+  .tabbar-btn[aria-current="page"] svg.ic { color: var(--accent-text); }
+  .tabbar-btn[aria-current="page"]::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 50%;
+    width: 16px;
+    height: 2px;
+    margin-left: -8px;
+    background: var(--accent);
+  }
+
+  /* Panes run edge to edge, split by hairlines instead of framed in boxes. */
+  .workspace,
+  body[data-feature="pipelines"]:not([data-page="settings"]) .pipelines-view { gap: 0; padding: 0; }
+  .list-pane,
+  .pipeline-catalog,
+  .chain-pane,
+  body.layout-stacked .reading-pane {
+    border-width: 1px 0 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+  body.layout-stacked .reading-pane { inset: 0; }
+
+  .toast {
+    bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px) + 12px);
+    max-width: calc(100vw - 24px);
+  }
+  /* Clear the open PR's Approve bar too. */
+  body[data-feature="prs"]:not([data-page="settings"]):has(.reading-pane.open .detail-actionbar) .toast {
+    bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px) + 76px);
+  }
+
+  /* PR list: search keeps the row; organization and project fold behind the filter button. */
+  .filterbar { grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 8px 12px 0; }
+  .filterbar > :not(.queue-search, .filter-toggle) { grid-column: 1 / -1; }
+  .queue-search:has(+ .filter-toggle[hidden]) { grid-column: 1 / -1; }
+  .filterbar:not(.scope-open) > .filterbar-fields { display: none; }
+  .filter-toggle { display: inline-grid; }
+  .filter-toggle[aria-expanded="true"] { background: var(--fill-selected); color: var(--text-1); }
+  .filter-toggle.is-scoped::after {
+    content: "";
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+  .search-kbd { display: none; }
+  .queue-search input:placeholder-shown:not(:focus) { padding-right: 11px; }
+  .bulk-review-host { margin: -8px -12px 0; padding: 8px 12px; }
+  :is(.workspace, .pipelines-view) :is(.filter-select, .queue-search input, .catalog-search input) { height: 44px; }
+
+  /* Rows: the branch drops to its own line instead of being clipped. */
+  .pr-meta { height: auto; max-height: 34px; row-gap: 2px; }
+  .pr-meta .branch { flex-basis: 100%; }
+  .pr-meta > .branch::before { content: none; }
+
+  /* PR detail: back and title, then id and actions, then the section tabs, all sticky. */
+  .reading-pane .pane-scroll { padding-bottom: 0; }
+  .reading-pane .detail-head {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    column-gap: 4px;
+    padding-top: 6px;
+  }
+  .reading-pane .detail-bar { display: contents; }
+  .reading-pane .pane-back { grid-area: 1 / 1; align-self: start; }
+  .reading-pane .detail-title {
+    grid-area: 1 / 2 / 2 / -1;
+    margin: 0;
+    font-size: var(--fs-subhead);
+    line-height: 22px;
+  }
+  .reading-pane .detail-sub {
+    grid-area: 2 / 1 / 3 / 3;
+    flex-wrap: nowrap;
+    min-width: 0;
+    margin: 0;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  .reading-pane .detail-id-group { flex: none; flex-wrap: nowrap; }
+  .reading-pane .detail-repo,
+  .reading-pane .detail-branch { display: none; }
+  .reading-pane .detail-sub-actions { grid-area: 2 / 3; gap: 0; margin-right: -6px; }
+  .reading-pane .detail-tabs { grid-area: 3 / 1 / 4 / -1; margin-top: 2px; }
+  /* One scroll per screen: the description grows instead of scrolling inside the pane. */
+  .reading-pane .pr-desc { max-height: none; padding: 12px 14px; }
+  /* Votes, lifecycle actions, refresh and the ADO link move under ⋯; Approve moves to the bottom bar. */
+  .reading-pane .detail-menu-wrap:has(> .pr-decision-btn),
+  .reading-pane .detail-menu-wrap:has(> .pr-lifecycle-btn),
+  .reading-pane :is(.pr-refresh, .ado-icon-btn) { display: none; }
+  .reading-pane .detail-menu-wrap:has(> .pr-more-btn) { display: inline-flex; }
+  .reading-pane .copilot-review-btn { margin-left: 0; }
+  .reading-pane .copilot-review-btn::before { content: none; }
+  .reading-pane .detail-menu { max-width: calc(100vw - 24px); }
+  .reading-pane .pr-comments-pop { right: 8px; left: 8px; max-height: 70vh; }
+  .reading-pane .detail-actionbar {
+    position: sticky;
+    bottom: 0;
+    z-index: 4;
+    display: flex;
+    gap: 8px;
+    margin: 24px calc(-1 * var(--pane-pad)) 0;
+    padding: 10px var(--pane-pad) calc(10px + env(safe-area-inset-bottom, 0px));
+    border-top: 1px solid var(--divider);
+    background: #151515;
+  }
+  .reading-pane .pr-approve-btn { flex: 1 1 auto; }
+
+  /* Pipelines: the toolbar wraps to two rows; the canvas pans inside its own box. */
+  .chain-toolbar { gap: 8px; padding: 8px 12px; }
+  .chain-toolbar-doc { flex-basis: 100%; }
+  .chain-picker { flex: 1 1 40%; min-width: 0; }
+  .chain-name { flex: 1 1 40%; min-width: 0; max-width: none; }
+  .chain-toolbar-run { flex: 1 1 100%; justify-content: flex-end; margin-left: 0; }
+  .chain-run-chip { margin-right: auto; }
+  .catalog-head { padding: 8px 12px 0; }
+  .catalog-tools { grid-template-columns: minmax(0, 1fr) minmax(0, 40%); padding: 8px 12px; }
+  .chain-inspector { inset: 0; border-width: 1px 0 0; border-radius: 0; }
+
+  /* Settings: one column of groups; controls take the full width under their label. */
+  .settings { padding: 16px 12px 32px; }
+  .settings-heading { margin-bottom: 16px; }
+  .settings-heading h1 { font-size: var(--fs-title); line-height: var(--lh-title); }
+  .settings-card { gap: 4px 12px; padding: 12px; }
+  .settings-card-control { flex-wrap: wrap; }
+  .settings-model-select { width: 100%; }
+  .proj-add input,
+  .org-add input { max-width: none; }
+  .cb-item { grid-template-columns: minmax(0, 1fr) auto auto; row-gap: 0; padding: 4px 0 4px 10px; }
+  .cb-item-where { grid-area: 2 / 1; }
+  .cb-item > :is(.cb-state, .remove-btn) { grid-row: 1 / 3; }
+  .settings-actions .btn { flex: 1 1 0; }
+
+  /* Notifications: a full-screen sheet between the title bar and the tab bar. */
+  .inbox-flyout {
+    top: var(--titlebar-h) !important;
+    right: 0 !important;
+    bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px));
+    left: 0 !important;
+    max-height: none;
+    border-width: 1px 0;
+    border-radius: 0;
+  }
+
+  /* Dialogs: bottom sheets. The Workspace task sheet (.tm-overlay) keeps its own layout. */
+  .ask-overlay:not(.tm-overlay) { place-items: end stretch; padding: 0; }
+  .ask-overlay:not(.tm-overlay) > .ask-dialog {
+    width: 100%;
+    max-height: 90vh;
+    padding: 16px 16px calc(16px + env(safe-area-inset-bottom, 0px));
+    border-width: 1px 0 0;
+    border-radius: var(--r-pane) var(--r-pane) 0 0;
+    animation: sheet-in var(--t-slow) var(--ease);
+  }
+  html.lean .ask-overlay:not(.tm-overlay) > .ask-dialog { animation: fade-in var(--t-fast) linear; }
+  .ask-overlay:not(.tm-overlay) .ask-title { font-size: var(--fs-heading); line-height: 26px; }
+  .ask-overlay:not(.tm-overlay) .ask-actions > .btn { flex: 1 1 0; }
+
+  /* Code window: the toolbar wraps to a second row; code lines wrap instead of scrolling sideways. */
+  .cw-toolbar { flex-wrap: wrap; row-gap: 6px; }
+  .cw-toolbar > :not(.cw-sp) { flex: none; }
+  .cw-toolbar > .cw-sp { display: none; }
+  .cw-toolbar > .cw-icon { margin-left: auto; }
+  .cw-dbody .diff { width: 100%; min-width: 0; }
+  .cw-dbody .diff .code { white-space: pre-wrap; overflow-wrap: anywhere; }
+}
+@keyframes sheet-in { from { opacity: 0; transform: translateY(24px); } }
+
+/* ---------- Touch targets: 44px at phone width and on coarse pointers ---------- */
+@media (max-width: 599.98px), (pointer: coarse) {
+  :is(.workspace, .pipelines-view, .tabbar, .ask-overlay:not(.tm-overlay), .inbox-flyout, .cw)
+    :is(.btn, .icon-btn, .detail-icon-btn, .pane-back, .remove-btn, .seg-btn, .detail-tab, .detail-menu-item,
+        .inbox-row, .inbox-markall, .catalog-row, .pr-comments-loc, .tabbar-btn) { min-height: 44px; }
+  :is(.workspace, .pipelines-view, .ask-overlay:not(.tm-overlay), .inbox-flyout, .cw)
+    :is(.icon-btn, .detail-icon-btn, .pane-back, .remove-btn, .cw-icon) { min-width: 44px; }
+  /* The title bar stays 40px tall to line up with the window controls, so its buttons widen instead. */
+  .titlebar :is(.icon-btn, .feature-tab) { min-width: 44px; }
+}
