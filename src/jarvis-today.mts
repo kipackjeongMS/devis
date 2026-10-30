@@ -27,6 +27,8 @@ import {
 } from "./jarvis-store.mjs";
 import { recapState, startWorker, workerLiveState, type RecapState, type WorkerLiveState } from "./jarvis-workers.mjs";
 import { validationSummaries, type ValidationSummary } from "./jarvis-validation.mjs";
+import { prCommentSummaries, type PrCommentSummary } from "./jarvis-pr-comments.mjs";
+import { prBuildSummaries, type PrBuildSummary } from "./jarvis-pr-builds.mjs";
 
 export interface TodayWorker extends JarvisWorker, WorkerLiveState {
     /** The repositories it works in, on a task with a folder. */
@@ -49,6 +51,10 @@ export interface TodayTask extends JarvisTask {
     prs: TaskPr[];
     /** The task's validation chain, its last run and any proposal; null when it has none. */
     validation: ValidationSummary | null;
+    /** Comment reviews on the task's PRs that have something going on (see jarvis-pr-comments). */
+    prComments: PrCommentSummary[];
+    /** Failed-build reviews on the task's PRs that have something going on (see jarvis-pr-builds). */
+    prBuilds: PrBuildSummary[];
 }
 
 export interface ReviewItem {
@@ -71,6 +77,10 @@ export interface TodaySnapshot {
     folders: string[];
     /** The tasks' validation couldn't be read this time, so it's missing from them (and from Needs you). */
     validationFailed?: boolean;
+    /** The tasks' PR comment reviews couldn't be read this time, so they're missing (and from Needs you). */
+    prCommentsFailed?: boolean;
+    /** The same for the PRs' failed-build reviews. */
+    prBuildsFailed?: boolean;
 }
 
 /** Local midnight, as an ISO timestamp. */
@@ -116,12 +126,24 @@ export async function todaySnapshot(since = startOfToday()): Promise<TodaySnapsh
     }
     // Tasks quiet today still show their last word from an earlier day.
     let validationFailed = false;
-    const [older, validation] = await Promise.all([
+    let prCommentsFailed = false;
+    let prBuildsFailed = false;
+    const [older, validation, prComments, prBuilds] = await Promise.all([
         latestStatuses(tasks.filter((t) => !todayByTask.has(t.id)).map((t) => t.id)),
         validationSummaries(tasks.map((t) => t.id)).catch((error: Error) => {
             console.warn(`[jarvis] validation summaries: ${error.message}`);
             validationFailed = true;
             return new Map<string, ValidationSummary>();
+        }),
+        prCommentSummaries(tasks.map((t) => t.id)).catch((error: Error) => {
+            console.warn(`[jarvis] PR comment summaries: ${error.message}`);
+            prCommentsFailed = true;
+            return new Map<string, PrCommentSummary[]>();
+        }),
+        prBuildSummaries(tasks.map((t) => t.id)).catch((error: Error) => {
+            console.warn(`[jarvis] PR build summaries: ${error.message}`);
+            prBuildsFailed = true;
+            return new Map<string, PrBuildSummary[]>();
         }),
     ]);
     return {
@@ -134,11 +156,15 @@ export async function todaySnapshot(since = startOfToday()): Promise<TodaySnapsh
                 recap: recapState(task.id),
                 prs: prsByTask.get(task.id) || [],
                 validation: validation.get(task.id) || null,
+                prComments: prComments.get(task.id) || [],
+                prBuilds: prBuilds.get(task.id) || [],
             };
         }),
         reviewed,
         folders,
         ...(validationFailed ? { validationFailed } : {}),
+        ...(prCommentsFailed ? { prCommentsFailed } : {}),
+        ...(prBuildsFailed ? { prBuildsFailed } : {}),
     };
 }
 

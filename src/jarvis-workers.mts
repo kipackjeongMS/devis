@@ -75,6 +75,8 @@ import { isPrCreateCall, linkFromWorker, notePrCreated, noteWorkerTurn, type Too
 import type { WorkItem } from "./service-files.mjs";
 import { runNotesAction } from "./jarvis-notes.mjs";
 import { taskValidationTool } from "./jarvis-validation-agent.mjs";
+import { taskPrBuildsTool } from "./jarvis-pr-builds.mjs";
+import { taskPrCommentsTool } from "./jarvis-pr-comments.mjs";
 import { openWorkspaceIde } from "./workspace-ide.mjs";
 import { APP_NAME, LEAD_NAME } from "./brand.mjs";
 
@@ -149,6 +151,8 @@ interface Live {
     postedStatus: boolean;
     /** The current turn writes the task's recap: it only reads, and asks nothing. */
     recapping: boolean;
+    /** The current turn reviews PR comments: it only reads, asks nothing, and ends with a proposal. */
+    auditing: boolean;
     requests: Map<string, Pending>;
     /** The session's slash commands, read once per attach. */
     commands: Promise<WorkerCommand[]> | null;
@@ -199,6 +203,7 @@ function live(sessionId: string): Live {
             modelState: null,
             postedStatus: false,
             recapping: false,
+            auditing: false,
             requests: new Map(),
             commands: null,
             prCalls: new Map(),
@@ -316,7 +321,7 @@ export function workerLiveState(sessionId: string): WorkerLiveState {
         requests: [...entry.requests.values()].map(({ settle: _settle, ...request }) => request),
         ...queued,
         steered: entry.steered.map((m) => ({ ...m })),
-        canSteer: entry.busy && entry.live && !entry.stopping && !entry.recapping && !entry.requests.size,
+        canSteer: entry.busy && entry.live && !entry.stopping && !entry.recapping && !entry.auditing && !entry.requests.size,
         currentModel: entry.modelState?.model ?? null,
         currentEffort: entry.modelState?.effort ?? null,
     };
@@ -411,7 +416,9 @@ function workerBrief(task: JarvisTask, worker: { label: string; cwd: string }, w
         WEB_BRIEF,
         "The user keeps a to-do list and a quick note in the Workspace that every agent can read with user_notes: check them when the user mentions their notes or to-dos.",
         "The task can have a validation chain: Azure DevOps pipelines that prove the change works, run in order. Find and propose one with task_validation (candidates, then propose) when the user asks or the app does; the user accepts it and decides when it runs.",
-        "End each turn with a short plain summary of what you did and what is next.",
+        "When reviewers comment on your pull requests, the app asks you to review them and propose a response per thread with task_pr_comments. The user accepts the proposal before anything changes; then make only the accepted changes and report with task_pr_comments done.",
+                "When blocking builds fail on your pull requests, the app asks you to read the failures and propose, per build, a fix or a rerun with task_pr_builds. The user accepts before anything changes; then make only the accepted fixes, push, and report with task_pr_builds done. Don't queue builds yourself.",
+                "End each turn with a short plain summary of what you did and what is next.",
     ].join("\n");
 }
 
@@ -565,6 +572,35 @@ function taskLinkPrTool(): Tool<unknown> {
         // The task comes from the invoking session, never from the input.
         handler: async (args, invocation) => linkFromWorker(invocation.sessionId, (args as { pr?: unknown })?.pr),
     });
+}
+
+/**
+ * The app's own tools skip the permission check, so a PR feedback review is held to reading here:
+ * per tool, the actions that only read. A tool not listed does nothing during a review.
+ */
+const AUDIT_ACTIONS: Readonly<Record<string, ReadonlySet<string>>> = {
+    task_artifacts: new Set(["list", "read"]),
+    user_notes: new Set(["read"]),
+    task_validation: new Set(["status", "candidates"]),
+    task_pr_comments: new Set(["threads", "propose"]),
+    task_pr_builds: new Set(["builds", "propose"]),
+    task_workspace: new Set(["repos"]),
+};
+
+function readOnlyWhileAuditing(tool: Tool<unknown>): Tool<unknown> {
+    const run = tool.handler;
+    if (!run) return tool;
+    const allowed = AUDIT_ACTIONS[tool.name];
+    return {
+        ...tool,
+        handler: (args, invocation) => {
+            const action = (args as { action?: unknown } | null)?.action;
+            if (lives.get(invocation.sessionId)?.auditing && !(typeof action === "string" && allowed?.has(action))) {
+                return `While reviewing PR feedback, only read; ${tool.name}${typeof action === "string" ? ` ${action}` : ""} can't run now. Put what you'd change in the proposal.`;
+            }
+            return run(args, invocation);
+        },
+    };
 }
 
 // ---- a worker's repositories (tasks with a folder) -----------------------------------
@@ -731,7 +767,7 @@ function sessionConfig(
 ): ResumeSessionConfig {
     const model = worker.model?.trim();
     const effort = worker.effort?.trim();
-    const tools = [taskArtifactsTool(), taskStatusTool(), taskLinkPrTool(), userNotesTool(), taskValidationTool()];
+    const tools = [taskArtifactsTool(), taskStatusTool(), taskLinkPrTool(), userNotesTool(), taskValidationTool(), taskPrCommentsTool(), taskPrBuildsTool()];
     if (task.folder) tools.push(taskWorkspaceTool());
     // Skills come from each repository first, then the worker's folder, then the user's own and plugins'.
     const roots = [...worktrees.map((w) => w.path), worker.cwd];
@@ -745,7 +781,7 @@ function sessionConfig(
         ...(model && model !== "auto" && effort ? { reasoningEffort: effort as ResumeSessionConfig["reasoningEffort"] } : {}),
         streaming: true,
         skillDirectories: skills,
-        tools,
+        tools: tools.map(readOnlyWhileAuditing),
         systemMessage: { mode: "append", content: workerBrief(task, worker, worktrees) },
         onPermissionRequest: (request, invocation) => onPermission(invocation.sessionId, request),
         onUserInputRequest: (request, invocation) => onUserInput(invocation.sessionId, request),
@@ -890,7 +926,39 @@ export async function askWorkerApproval(sessionId: string, title: string, detail
     return decision === "allow" || decision === "always";
 }
 
+/** While reviewing PR feedback a worker only reads: files, web pages, the app's tools, and MCP tools that don't change anything. */
+const MCP_WRITE_WORDS = new Set(
+    (
+        "write create update delete remove post put patch set add insert upsert push queue run start restart resume suspend stop cancel skip retry " +
+        "send reply forward flag approve reject accept decline merge complete abandon vote edit upload link unlink register unregister install share " +
+        "submit mitigate resolve acknowledge transfer reactivate click type press drag drop navigate fill select evaluate execute exec invoke call do " +
+        "ingest command commit apply assign move rename archive publish deploy trigger enable disable lock unlock save clear upsert"
+    ).split(" "),
+);
+/** Arguments that pick what a combined MCP tool does, like action: "update". */
+const MCP_VERB_ARGS = /^(action|operation|method|op|verb)$/i;
+function auditPermission(request: PermissionRequest): PermissionRequestResult {
+    if (request.kind === "read" || request.kind === "url" || request.kind === "custom-tool") return { kind: "approve-once" };
+    if (request.kind === "mcp") {
+        if (request.readOnly) return { kind: "approve-once" };
+        const args = request.args && typeof request.args === "object" && !Array.isArray(request.args) ? request.args : {};
+        const verbs = Object.entries(args).filter(([k, v]) => MCP_VERB_ARGS.test(k) && typeof v === "string").map(([, v]) => v);
+        const words = [request.toolName, request.toolTitle, ...verbs]
+            .join(" ")
+            .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+            .toLowerCase()
+            .split(/[^a-z0-9]+/)
+            .filter(Boolean);
+        if (words.length && !words.some((w) => MCP_WRITE_WORDS.has(w))) return { kind: "approve-once" };
+    }
+    return {
+        kind: "reject",
+        feedback: "While reviewing PR feedback, only read (view, grep, read-only tools). Put what you'd change in the proposal; nothing changes until the user accepts it.",
+    };
+}
+
 async function onPermission(sessionId: string, request: PermissionRequest): Promise<PermissionRequestResult> {
+    if (lives.get(sessionId)?.auditing) return auditPermission(request);
     // MCP servers (Agency's and the user's own) are on in every session, and their tools run without
     // asking; so do web pages (web_fetch). Shell commands and edits wait for the user.
     if (request.kind === "read" || request.kind === "custom-tool" || request.kind === "mcp" || request.kind === "url") return { kind: "approve-once" };
@@ -913,6 +981,12 @@ async function onUserInput(sessionId: string, request: UserInputRequest): Promis
     if (lives.get(sessionId)?.recapping) {
         return { answer: "The user isn't here right now. Write the recap from what you already know.", wasFreeform: true };
     }
+    if (lives.get(sessionId)?.auditing) {
+        return {
+            answer: "The user isn't here right now. Put open questions in the proposal: verdict unclear, or choice with the options.",
+            wasFreeform: true,
+        };
+    }
     const choices = (request.choices || []).map(String);
     const answer = await waitForUser(sessionId, {
         kind: "question",
@@ -926,11 +1000,19 @@ async function onUserInput(sessionId: string, request: UserInputRequest): Promis
 
 // ---- turns --------------------------------------------------------------------------
 
-function runTurn(sessionId: string, prompt: string, displayPrompt?: string, images: readonly ChatImage[] = []): void {
+interface TurnOptions {
+    /** A PR feedback review (comments or failed builds): it only reads, asks nothing, and leaves the user's queue alone. */
+    audit?: boolean;
+    /** Called once the turn ends, however it ends. */
+    onEnd?: (ended: "done" | "stopped" | "failed") => void;
+}
+
+function runTurn(sessionId: string, prompt: string, displayPrompt?: string, images: readonly ChatImage[] = [], opts: TurnOptions = {}): void {
     const entry = live(sessionId);
     const attachments = imageAttachments(images);
     inTerminal.delete(sessionId);
     entry.busy = true;
+    entry.auditing = !!opts.audit;
     entry.stopping = false;
     entry.partial = "";
     entry.partialId = "";
@@ -943,7 +1025,7 @@ function runTurn(sessionId: string, prompt: string, displayPrompt?: string, imag
     entry.live = false;
     entry.steered = [];
     // A turn the user starts lets what's queued run after it.
-    queues.get(sessionId)?.resume();
+    if (!opts.audit) queues.get(sessionId)?.resume();
     const stopTurn = new AbortController();
     entry.stopTurn = stopTurn;
     void (async () => {
@@ -977,7 +1059,7 @@ function runTurn(sessionId: string, prompt: string, displayPrompt?: string, imag
                 sessionId,
             });
             // A worker that forgot task_status still leaves a line in the task's timeline.
-            const fallback = said && !entry.postedStatus ? statusFromSummary(said) : "";
+            const fallback = said && !entry.postedStatus && !opts.audit ? statusFromSummary(said) : "";
             if (fallback && worker) {
                 await postStatus({ taskId: worker.taskId, text: fallback, author: worker.label, sessionId }).catch((error: Error) =>
                     console.warn(`[jarvis] status from ${worker?.label}'s summary not posted: ${error.message}`),
@@ -1001,6 +1083,7 @@ function runTurn(sessionId: string, prompt: string, displayPrompt?: string, imag
             ).catch(() => undefined);
         } finally {
             entry.busy = false;
+            entry.auditing = false;
             entry.live = false;
             entry.stopping = false;
             entry.partial = "";
@@ -1014,11 +1097,31 @@ function runTurn(sessionId: string, prompt: string, displayPrompt?: string, imag
             for (const pending of entry.requests.values()) pending.settle(pending.kind === "permission" ? "deny" : "");
             // The branch the turn left the folder on, and your PRs from it.
             void noteWorkerTurn(sessionId);
+            try {
+                opts.onEnd?.(ended);
+            } catch (error) {
+                console.warn(`[jarvis] ${worker?.label || sessionId}'s turn-end hook failed: ${(error as Error).message}`);
+            }
             // What the user queued runs next; after a stop or a failure it waits for them.
             if (ended !== "done") queues.get(sessionId)?.hold();
             void drainQueue(sessionId).catch((error: Error) => console.warn(`[jarvis] ${worker?.label || sessionId}'s queue didn't run: ${error.message}`));
         }
     })();
+}
+
+/**
+ * A read-only turn that reviews a pull request's new comments or failed builds (see jarvis-pr-comments
+ * and jarvis-pr-builds). It starts
+ * only when the worker is free and resolves when the turn ends, however it ends.
+ */
+export async function auditTurn(sessionId: string, prompt: string, display: string): Promise<"done" | "stopped" | "failed"> {
+    const worker = await getWorker(sessionId);
+    if (!worker) throw new JarvisError("That worker is gone.", 404);
+    if (inTerminal.has(sessionId)) throw new JarvisError(`${worker.label} is open in a terminal.`, 409);
+    const task = await getTask(worker.taskId);
+    if (!task || task.status !== "open" || (await isRemoving(task.id))) throw new JarvisError("The task isn't open.", 409);
+    if (lives.get(sessionId)?.busy) throw new JarvisError(`${worker.label} is busy.`, 409);
+    return new Promise((resolve) => runTurn(sessionId, prompt, display, [], { audit: true, onEnd: resolve }));
 }
 
 /** Start the next queued message when the worker is free to take it. */
@@ -1199,7 +1302,8 @@ export async function messageWorker(
         return "sent";
     }
     if (now.recapping) throw new JarvisError(`${worker.label} is writing the task's recap. Send it when that's done.`, 409);
-    if (mode === "now" && now.live && !now.stopping) {
+    // A comment review only reads; what the user sends runs after it.
+    if (mode === "now" && now.live && !now.stopping && !now.auditing) {
         if (now.requests.size) throw new JarvisError(`${worker.label} is waiting on you. Answer above, or queue the message.`, 409);
         await steerWorker(worker, now, typed, images);
         return "steered";
@@ -1249,6 +1353,7 @@ export async function sendQueuedNow(sessionId: unknown, id: unknown): Promise<"s
         return "sent";
     }
     if (entry.recapping) throw new JarvisError(`${worker.label} is writing the task's recap. Send it when that's done.`, 409);
+    if (entry.auditing) throw new JarvisError(`${worker.label} is reviewing PR feedback. It runs when that's done.`, 409);
     if (!entry.live || entry.stopping) throw new JarvisError(`${worker.label} is between turns. Try again in a moment.`, 409);
     if (entry.requests.size) throw new JarvisError(`${worker.label} is waiting on you. Answer above first.`, 409);
     queue.take(item.id);
@@ -1718,6 +1823,10 @@ async function finishRemoval(taskId: string): Promise<void> {
             console.warn(`[jarvis] validation of ${taskId} not retired: ${error.message}`);
             return null;
         });
+        const { retirePrComments } = await import("./jarvis-pr-comments.mjs");
+        await retirePrComments(taskId).catch((error: Error) => console.warn(`[jarvis] PR comment reviews of ${taskId} not retired: ${error.message}`));
+        const { retirePrBuilds } = await import("./jarvis-pr-builds.mjs");
+        await retirePrBuilds(taskId).catch((error: Error) => console.warn(`[jarvis] PR build reviews of ${taskId} not retired: ${error.message}`));
         // The task's folder and its workers' worktrees go too; read them before the rows go.
         const task = await getTask(taskId);
         const worktrees = await listWorktrees({ taskId });

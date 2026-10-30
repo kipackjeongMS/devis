@@ -726,7 +726,7 @@ export async function updateThreadStatus(
     repoId: string,
     prId: string | number,
     threadId: string | number,
-    status: ThreadStatus,
+    status: ThreadStatus | "wontFix" | "byDesign" | "closed",
 ): Promise<{ id: number; status: string }> {
     const url = `${repoBase(org, project, repoId)}/pullRequests/${enc(String(prId))}/threads/${enc(String(threadId))}?${API}`;
     const updated = await adoJson("PATCH", url, { status });
@@ -906,6 +906,8 @@ export interface BuildFailure {
     /** The first error messages ADO recorded for it. */
     errors: string[];
     logUrl: string | null;
+    /** The step's log, for getBuildLogTail. */
+    logId: number | null;
 }
 
 /** What failed in a build: the failed steps first, each with its first errors and log. */
@@ -924,6 +926,7 @@ export async function getBuildFailures(org: string, project: string, buildId: nu
                 .map((i) => String(i.message).slice(0, 300))
                 .slice(0, 3),
             logUrl: typeof r.log?.url === "string" ? r.log.url : null,
+            logId: Number.isSafeInteger(r.log?.id) && r.log.id > 0 ? r.log.id : null,
         }));
 }
 
@@ -1229,6 +1232,88 @@ export async function getPrBuildPolicies(org: string, projectId: string, prId: n
         if (!seen || (policy.blocking && !seen.blocking)) out.set(id, policy);
     }
     return [...out.values()].sort((a, b) => Number(b.blocking) - Number(a.blocking));
+}
+
+export interface PrBuildEvaluation {
+    /** The policy evaluation's id; requeuePolicyEvaluation reruns its build. */
+    evaluationId: string;
+    definitionId: number;
+    name: string;
+    /** A failing build blocks completing the PR. */
+    blocking: boolean;
+    /** approved · rejected · running · queued · broken … as ADO reports it. */
+    status: string;
+    /** The build the evaluation last ran, if any. */
+    buildId: number | null;
+    /** The source commit that build ran on, when ADO says. */
+    sourceCommit: string | null;
+    /** The build ran on an older commit or its result expired. */
+    expired: boolean;
+    /** The policy only builds when someone queues it. */
+    manual: boolean;
+}
+
+/** The PR's build validation evaluations, one per policy, with the build each last ran. */
+export async function getPrBuildEvaluations(org: string, projectId: string, prId: number): Promise<PrBuildEvaluation[]> {
+    const artifact = `vstfs:///CodeReview/CodeReviewId/${projectId}/${prId}`;
+    const data = await adoJson(
+        "GET",
+        `${orgBase(org)}/${enc(projectId)}/_apis/policy/evaluations?artifactId=${enc(artifact)}&api-version=7.1-preview.1`,
+    );
+    const out: PrBuildEvaluation[] = [];
+    for (const e of (data?.value || []) as any[]) {
+        const config = e?.configuration || {};
+        const settings = config.settings || {};
+        const id = Number(settings.buildDefinitionId);
+        if (config.isEnabled === false || !Number.isSafeInteger(id) || id <= 0) continue;
+        const status = String(e?.status || "");
+        if (status === "notApplicable" || typeof e?.evaluationId !== "string") continue;
+        const context = e?.context || {};
+        const buildId = Number(context.buildId);
+        const commit = context.lastMergeSourceCommit;
+        const sourceCommit = typeof commit === "string" ? commit : typeof commit?.commitId === "string" ? commit.commitId : null;
+        out.push({
+            evaluationId: e.evaluationId,
+            definitionId: id,
+            name: String(settings.displayName || `Pipeline ${id}`),
+            blocking: config.isBlocking !== false,
+            status,
+            buildId: Number.isSafeInteger(buildId) && buildId > 0 ? buildId : null,
+            sourceCommit: sourceCommit ? sourceCommit.toLowerCase() : null,
+            expired: context.isExpired === true || context.buildIsNotCurrent === true,
+            manual: settings.manualQueueOnly === true,
+        });
+    }
+    return out;
+}
+
+/** Rerun a PR policy evaluation; for a build policy, ADO queues a new build (and cancels a running one). */
+export async function requeuePolicyEvaluation(org: string, projectId: string, evaluationId: string): Promise<void> {
+    await adoJson(
+        "PATCH",
+        `${orgBase(org)}/${enc(projectId)}/_apis/policy/evaluations/${enc(evaluationId)}?api-version=7.1-preview.1`,
+    );
+}
+
+/** The last lines of one build log, timestamps stripped and long lines cut. */
+export async function getBuildLogTail(org: string, project: string, buildId: number, logId: number, lines = 60): Promise<string[]> {
+    const url = `${buildsBase(org, project)}/${enc(String(buildId))}/logs/${enc(String(logId))}?${API}`;
+    const text = (await adoText(url)) || "";
+    return text
+        .split(/\r?\n/)
+        .map((l) => l.replace(/^\d{4}-\d\d-\d\dT[\d:.]+Z\s?/, "").trimEnd())
+        .filter((l) => l.length > 0)
+        .slice(-lines)
+        .map((l) => (l.length > 400 ? `${l.slice(0, 400)}…` : l));
+}
+
+/** A PR's comment threads, deleted ones and system notes left out (each thread keeps its human comments). */
+export async function listPrThreads(org: string, project: string, repoId: string, prId: number): Promise<Thread[]> {
+    const data = await adoJson("GET", `${repoBase(org, project, repoId)}/pullRequests/${prId}/threads?${API}`);
+    return ((data?.value || []) as any[])
+        .filter((t) => t && !t.isDeleted)
+        .map((t) => normalizeThread(t))
+        .filter((t) => t.comments.length > 0);
 }
 
 /** Comment threads people still need to resolve (active or pending), system notes left out. */

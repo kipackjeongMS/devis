@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="Devis">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2=".85" y2="1">
+      <stop stop-color="#1b1b1b"/><stop offset="1" stop-color="#050505"/>
+    </linearGradient>
+    <linearGradient id="edge" x1="0" y1="0" x2=".65" y2="1">
+      <stop stop-color="#fff" stop-opacity=".2"/><stop offset=".65" stop-color="#fff" stop-opacity=".06"/><stop offset="1" stop-color="#fff" stop-opacity=".09"/>
+    </linearGradient>
+    <filter id="glow" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="54" fill="url(#tile)"/>
+  <rect x="8.5" y="8.5" width="239" height="239" rx="53.5" fill="none" stroke="url(#edge)"/>
+  <g fill="none" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" transform="translate(128 128) scale(1.1) translate(-130 -126)">
+    <path stroke="#f2f2f2" d="M128 64C121 104 112 146 103 180"/>
+    <path stroke="#f2f2f2" d="M112 178C132 188 158 192 176 168C196 142 194 96 168 74C146 54 98 54 74 74C60 88 72 106 92 94"/>
+    <path stroke="#4cd6ff" filter="url(#glow)" d="M103 180C99 195 78 198 75 184C73 170 96 168 112 178"/>
+  </g>
+</svg>

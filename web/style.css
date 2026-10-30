@@ -4834,6 +4834,44 @@ button.tm-pr-title:hover { color: var(--accent-text); text-decoration: underline
 .tv-dismiss textarea { width: 100%; min-height: 52px; padding: 6px 8px; border: 1px solid var(--stroke-control); border-radius: var(--r-control); background: var(--control); color: var(--text-1); font: inherit; font-size: var(--fs-label); resize: vertical; }
 .tv-confirm-list { margin: 10px 0 0; padding-left: 20px; color: var(--text-2); font-size: var(--fs-label); line-height: 22px; }
 
+/* PR comments: per PR, the worker's proposal for each new reviewer comment, decided one by one. */
+.tpc-pr > .tm-dv-bar { margin: 0; }
+.tm-dv-h.tpc-title { flex: 1 1 auto; min-width: 0; overflow: hidden; color: var(--text-1); font: 600 var(--fs-label)/20px var(--font); letter-spacing: 0; text-overflow: ellipsis; text-transform: none; white-space: nowrap; }
+.tpc-pr > .tv-block-meta { margin: -6px 0 0; }
+.tpc-line { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--text-2); font-size: var(--fs-label); line-height: 20px; }
+.tpc-line code { font: var(--fs-readout)/18px var(--mono); }
+.tpc-proposal { display: flex; flex-direction: column; gap: 10px; }
+.tpc-items { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.tpc-item { display: flex; flex-direction: column; gap: 6px; }
+.tpc-item > p, .tpc-item > blockquote { margin: 0; }
+.tpc-conf { color: var(--text-2); }
+.tpc-conf.conf-high { color: var(--success); }
+.tpc-conf.conf-low { color: var(--caution); }
+.tpc-quote { max-height: 9em; padding: 4px 0 4px 10px; overflow: auto; border-left: 2px solid var(--stroke-control); color: var(--text-2); font-size: var(--fs-caption); line-height: var(--lh-caption); white-space: pre-wrap; overflow-wrap: anywhere; }
+.tpc-ask, .tpc-plan { color: var(--text-1); font-size: var(--fs-caption); line-height: var(--lh-caption); overflow-wrap: anywhere; }
+.tpc-options { display: flex; flex-direction: column; gap: 6px; }
+.tpc-option { display: flex; align-items: flex-start; gap: 8px; padding: 6px 8px; border: 1px solid var(--stroke-card); border-radius: var(--r-control); color: var(--text-1); font-size: var(--fs-caption); line-height: var(--lh-caption); cursor: pointer; }
+.tpc-option:has(input:checked) { border-color: color-mix(in srgb, var(--accent) 55%, transparent); background: var(--fill-hover); }
+.tpc-option input { flex: none; margin: 2px 0 0; accent-color: var(--accent); }
+.tpc-option > span { min-width: 0; overflow-wrap: anywhere; }
+.tpc-option-plan { display: block; margin-top: 2px; color: var(--text-2); }
+.tpc-rec { margin-left: 4px; color: var(--accent-text); font-size: var(--fs-readout); font-style: normal; }
+.tpc-files { display: flex; align-items: center; gap: 4px; }
+.tpc-files > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tpc-files svg.ic { flex: none; width: 11px; height: 11px; }
+.tpc-decide { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 2px; }
+.tpc-decide select { flex: none; }
+.tpc-hint { flex: 1 1 160px; min-width: 0; color: var(--text-3); font-size: var(--fs-caption); line-height: var(--lh-caption); }
+.tpc-reply, .tpc-note { width: 100%; padding: 6px 8px; border: 1px solid var(--stroke-control); border-radius: var(--r-control); background: var(--control); color: var(--text-1); font: inherit; font-size: var(--fs-label); }
+.tpc-reply { min-height: 52px; resize: vertical; }
+.tpc-reply:focus, .tpc-note:focus { outline: none; border-color: var(--accent); }
+.tpc-applying { display: flex; flex-direction: column; gap: 4px; margin: 0; padding-left: 18px; color: var(--text-2); font-size: var(--fs-caption); line-height: var(--lh-caption); overflow-wrap: anywhere; }
+.tpc-part { display: flex; flex-direction: column; gap: 10px; }
+.tpc-part + .tpc-part { padding-top: 10px; border-top: 1px solid var(--divider); }
+.tpc-part-h { display: flex; align-items: center; gap: 8px; }
+.tpc-part-h > .tv-sub { flex: 1 1 auto; margin: 0; }
+.tpb-fails { display: flex; flex-direction: column; gap: 4px; margin: 0; padding-left: 18px; color: var(--text-2); font-size: var(--fs-caption); line-height: var(--lh-caption); overflow-wrap: anywhere; }
+
 /* Artifacts: a list, one file at a time, or its editor. */
 .tm-arts .tm-note-md { max-height: none; }
 .tm-art-bar { display: flex; align-items: center; gap: 8px; min-height: 28px; margin-bottom: 10px; }

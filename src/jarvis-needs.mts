@@ -4,14 +4,17 @@
 // known by when the worker's state last changed, so switching its model doesn't make it a new ask.
 // A PR review asked for in Teams (comms.mts) is need:teams:<the ask's id>; a chat or email thread
 // someone waits on the user in is need:chat|mail:<a hash of the conversation> (comms.mts commsNeeds).
+// A worker's proposal for new comments on its PR, or its trouble reviewing them, is
+// need:pr:<task>:<org>:<PR>:<when the proposal was made or the trouble started> (jarvis-pr-comments.mts).
+// The same for failed builds on the PR is need:ci:<task>:<org>:<PR>:<when> (jarvis-pr-builds.mts).
 
 import type { TodayTask } from "./jarvis-today.mjs";
 
-/** A key Needs you gives an ask: need:req|fail|val|teams|chat|mail:<what identifies it>. */
-export const NEED_KEY = /^need:(req|fail|val|teams|chat|mail):[\w:.\-]{1,200}$/;
+/** A key Needs you gives an ask: need:req|fail|val|pr|ci|teams|chat|mail:<what identifies it>. */
+export const NEED_KEY = /^need:(req|fail|val|pr|ci|teams|chat|mail):[\w:.\-]{1,200}$/;
 
 /** The kinds of keys, as settleNeedTodos can be told to leave one alone. */
-export type NeedKind = "req" | "fail" | "val" | "teams" | "chat" | "mail";
+export type NeedKind = "req" | "fail" | "val" | "pr" | "ci" | "teams" | "chat" | "mail";
 
 type Worker = TodayTask["workers"][number];
 
@@ -33,7 +36,7 @@ function liveState(w: Pick<Worker, "state" | "busy" | "requests">): string {
 
 /** The keys of everything Needs you shows for these tasks, Teams asks, and chats and email threads. */
 export function needKeys(
-    tasks: ReadonlyArray<Pick<TodayTask, "id" | "status" | "workers" | "validation">>,
+    tasks: ReadonlyArray<Pick<TodayTask, "id" | "status" | "workers" | "validation"> & Partial<Pick<TodayTask, "prComments" | "prBuilds">>>,
     asks: ReadonlyArray<{ id: number }> = [],
     comms: ReadonlyArray<{ key: string }> = [],
 ): Set<string> {
@@ -46,10 +49,23 @@ export function needKeys(
             if (request) keys.add(`need:req:${worker.sessionId}:${request.id}`);
             else if (task.status === "open" && liveState(worker) === "error") keys.add(`need:fail:${worker.sessionId}:${worker.stateAt || worker.updatedAt}`);
         }
+        if (task.status !== "open") continue;
+        for (const pr of task.prComments ?? []) if (pr.attention) keys.add(prNeedKey(task.id, pr));
+        for (const pr of task.prBuilds ?? []) if (pr.attention) keys.add(prBuildNeedKey(task.id, pr));
         const v = task.validation;
-        if (!v || task.status !== "open") continue;
+        if (!v) continue;
         if (v.attention === "proposal" && v.proposal) keys.add(`need:val:${task.id}:proposal:${v.proposal.at}`);
         else if (v.attention === "failed") keys.add(`need:val:${task.id}:failed:${v.run?.runId ?? "run"}`);
     }
     return keys;
+}
+
+/** The Needs you key of a PR's comment review (prNeedKey in jarvisModel.ts gives the same). */
+export function prNeedKey(taskId: string, pr: { org: string; prId: number; at: string }): string {
+    return `need:pr:${taskId}:${pr.org.toLowerCase()}:${pr.prId}:${pr.at}`;
+}
+
+/** The Needs you key of a PR's failed-build review (prBuildNeedKey in jarvisModel.ts gives the same). */
+export function prBuildNeedKey(taskId: string, pr: { org: string; prId: number; at: string }): string {
+    return `need:ci:${taskId}:${pr.org.toLowerCase()}:${pr.prId}:${pr.at}`;
 }

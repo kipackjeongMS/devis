@@ -74,6 +74,8 @@ import {
   overviewFreshness,
   overviewSummary,
   prChipText,
+  prCommentsChip,
+  prBuildsChip,
   reviewQueue,
   serviceOptions,
   taskFolderPreview,
@@ -1119,19 +1121,24 @@ function needsSection(items: NeedItem[], now: number): string {
 function needHtml(n: NeedItem, now: number): string {
   if (n.kind === "teams") return teamsNeedHtml(n, now);
   if (n.kind === "comms") return commsNeedHtml(n, now);
-  const who = n.kind === "validation" ? n.who : n.worker.label;
-  const session = n.kind === "validation" ? "" : ` data-session="${esc(n.worker.sessionId)}"`;
+  const who = n.kind === "validation" || n.kind === "prComments" || n.kind === "prBuilds" ? n.who : n.worker.label;
+  const session = n.kind === "validation" || n.kind === "prComments" || n.kind === "prBuilds" ? "" : ` data-session="${esc(n.worker.sessionId)}"`;
+  const glyph = n.kind === "validation" ? "flow" : n.kind === "prComments" ? "pullRequest" : n.kind === "prBuilds" ? "pipeline" : "warning";
   const ask = (text: string, button: string): string =>
-    `<div class="ask-card"><p class="ask-card-title">${svg(n.kind === "validation" ? "flow" : "warning")}<span>${esc(text)}</span></p><div class="ask-card-actions">${button}</div></div>`;
+    `<div class="ask-card"><p class="ask-card-title">${svg(glyph)}<span>${esc(text)}</span></p><div class="ask-card-actions">${button}</div></div>`;
   const body =
     n.kind === "request"
       ? n.worker.requests.map((r) => requestCardHtml(n.worker.label, r, drafts.get(`ans:${r.id}`) || "")).join("")
       : n.kind === "failed"
         ? ask(n.worker.summary ? `Its turn failed: ${n.worker.summary}` : "Its turn failed.", `<button type="button" class="btn sm accent" data-act="open-task">Open the chat</button>`)
-        : ask(
-            n.text,
-            `<button type="button" class="btn sm accent" data-act="task-validation">${n.task.validation?.attention === "proposal" ? "Review the proposal" : "See what failed"}</button>`
-          );
+        : n.kind === "prComments"
+          ? ask(n.text, `<button type="button" class="btn sm accent" data-act="task-comments">${n.pr.attention === "proposal" ? "Review the plan" : "See what happened"}</button>`)
+          : n.kind === "prBuilds"
+            ? ask(n.text, `<button type="button" class="btn sm accent" data-act="task-comments">${n.pr.attention === "proposal" ? "Review the plan" : "See what happened"}</button>`)
+            : ask(
+              n.text,
+              `<button type="button" class="btn sm accent" data-act="task-validation">${n.task.validation?.attention === "proposal" ? "Review the proposal" : "See what failed"}</button>`
+            );
   const age = n.at ? `<span class="need-age">${esc(ago(new Date(n.at).toISOString(), now))}</span>` : "";
   // Taken on as a to-do, it leaves Needs you; the to-do ticks itself once the ask is gone.
   const toTodo = `<button type="button" class="need-todo" data-act="need-todo" title="Move it to your to-dos" aria-label="Move to your to-dos: ${esc(n.task.title)}, ${esc(who)}">${svg("checklist")}<span>To-do</span></button>`;
@@ -2143,8 +2150,10 @@ function taskCard(task: TodayTask, now: number, section: BoardSection): string {
   ].join("");
   const { shown, more } = cardPrs(task.prs);
   const vChip = validationChip(task.validation);
+  const cChip = prCommentsChip(task.prComments);
+  const bChip = prBuildsChip(task.prBuilds);
   const prChips =
-    shown.length || vChip
+    shown.length || vChip || cChip || bChip
       ? `<div class="task-prs">${shown
           .map((p) => {
             const chip = prChipText(p);
@@ -2154,6 +2163,10 @@ function taskCard(task: TodayTask, now: number, section: BoardSection): string {
           vChip
             ? `<button type="button" class="pr-chip tone-${vChip.tone}" data-act="task-validation" title="${esc(task.validation?.name || "Validation")}">${svg("flow")}<span>${esc(vChip.text)}</span></button>`
             : ""
+        }${
+          cChip ? `<button type="button" class="pr-chip tone-${cChip.tone}" data-act="task-comments" title="Review comments on this task's PRs">${svg("chat")}<span>${esc(cChip.text)}</span></button>` : ""
+        }${
+          bChip ? `<button type="button" class="pr-chip tone-${bChip.tone}" data-act="task-comments" title="Failed builds on this task's PRs">${svg("pipeline")}<span>${esc(bChip.text)}</span></button>` : ""
         }</div>`
       : "";
   return `
@@ -2391,6 +2404,8 @@ function onClick(e: MouseEvent): void {
       return void (task && openTaskModal(task.id, modalHost, "devops"));
     case "task-validation":
       return void (task && openTaskModal(task.id, modalHost, "validation"));
+    case "task-comments":
+      return void (task && openTaskModal(task.id, modalHost, "comments"));
     case "start-worker":
       return void (task && openStartWorker(task));
     case "done":

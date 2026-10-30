@@ -23,6 +23,7 @@ const ALLOWED_PERMISSIONS = new Set(["notifications", "clipboard-sanitized-write
 const MAX_RECOVERIES = 3;
 
 const appDir = dirname(fileURLToPath(import.meta.url));
+const APP_ICON = join(appDir, "assets", "icon.png");
 let mainWindow: BrowserWindow | null = null;
 /** One code window per worker, keyed by its session id. */
 const codeWindows = new Map<string, BrowserWindow>();
@@ -145,6 +146,7 @@ function chromeOptions(): BrowserWindowConstructorOptions {
     nativeTheme.themeSource = "dark";
     return {
         title: APP_NAME,
+        icon: APP_ICON,
         backgroundColor: glass ? "#00000000" : "#050505",
         ...(glass ? { backgroundMaterial: backdrop } : {}),
         titleBarStyle: "hidden",

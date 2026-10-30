@@ -368,6 +368,64 @@ try {
     );
     session.script = null;
 
+    // ---- a PR-comment review only reads, through the app's tools and MCP alike ----
+    const commentsTool = session.config.tools.find((t) => t.name === "task_pr_comments");
+    assert.ok(commentsTool?.skipPermission, "the worker has task_pr_comments");
+    const buildsTool = session.config.tools.find((t) => t.name === "task_pr_builds");
+    assert.ok(buildsTool?.skipPermission, "the worker has task_pr_builds");
+    const linkedBefore = await linkedIds();
+    const notesBefore = await userNotes({ action: "read" });
+    const seen = {};
+    const mcp = (toolName, args, readOnly = false) => ({ kind: "mcp", serverName: "ado", toolName, toolTitle: toolName, readOnly, args });
+    session.script = async (s) => {
+        const as = { sessionId: s.sessionId };
+        seen.append = await art({ action: "append", content: "x" }, s.sessionId);
+        seen.write = await art({ action: "write", name: "x.md", content: "x" }, s.sessionId);
+        seen.noAction = await art({}, s.sessionId);
+        seen.read = await art({ action: "read", name: "design.md" }, s.sessionId);
+        seen.list = await art({ action: "list" }, s.sessionId);
+        seen.todo = await userNotes({ action: "add_todo", text: "Sneaky" }, s.sessionId);
+        seen.notes = await userNotes({ action: "read" }, s.sessionId);
+        seen.status = await statusTool.handler({ text: "Reviewing" }, as);
+        seen.link = await linkTool.handler({ pr: prUrl(43) }, as);
+        seen.vstatus = await validate({ action: "status" }, s.sessionId);
+        seen.vpropose = await validate({ action: "propose" }, s.sessionId);
+        seen.vrun = await validate({ action: "run" }, s.sessionId);
+        seen.check = await commentsTool.handler({ action: "check" }, as);
+        seen.done = await commentsTool.handler({ action: "done" }, as);
+        seen.buildCheck = await buildsTool.handler({ action: "check", prId: 7 }, as);
+        seen.buildDone = await buildsTool.handler({ action: "done", prId: 7 }, as);
+        seen.mcpUpdate = await s.ask(mcp("wit_work_item", { action: "update", id: 1 }));
+        seen.mcpGet = await s.ask(mcp("wit_work_item", { action: "get", id: 1 }));
+        seen.mcpWriteTool = await s.ask(mcp("repo_pull_request_thread_write", { action: "get" }));
+        seen.mcpReadOnly = await s.ask(mcp("anything", { action: "update" }, true));
+        seen.shell = await s.ask({ kind: "shell", intention: "Edit", fullCommandText: "echo x > a.txt" });
+        return "Reviewed.";
+    };
+    const reviewStatusCount = (await store.listStatuses({ taskId: task.id })).length;
+    assert.equal(await workers.auditTurn(plain.sessionId, "Review PR 7's comments", "Review PR 7"), "done");
+    const refused = /^While reviewing PR feedback, only read; /;
+    for (const key of ["append", "write", "noAction", "todo", "status", "link", "vpropose", "vrun", "check", "done", "buildCheck", "buildDone"]) {
+        assert.match(String(seen[key]), refused, `${key} is refused during a review`);
+    }
+    assert.match(seen.append, /task_artifacts append can't run now/);
+    assert.match(seen.status, /task_status can't run now/);
+    assert.equal(seen.read, "# Design\n\nOption B.", "reading an artifact still works");
+    assert.match(seen.list, /^note\.md · /);
+    assert.equal(seen.notes, notesBefore);
+    assert.equal(seen.vstatus, "No validation chain yet.");
+    assert.equal(seen.mcpUpdate.kind, "reject", "an MCP tool told to update is refused");
+    assert.deepEqual(seen.mcpGet, { kind: "approve-once" }, "…told to get, it runs");
+    assert.equal(seen.mcpWriteTool.kind, "reject", "a write tool is refused whatever its action");
+    assert.deepEqual(seen.mcpReadOnly, { kind: "approve-once" }, "a tool marked read-only runs");
+    assert.equal(seen.shell.kind, "reject");
+    assert.deepEqual(await linkedIds(), linkedBefore, "nothing was linked");
+    assert.equal((await store.listStatuses({ taskId: task.id })).length, reviewStatusCount, "nothing was posted");
+    assert.doesNotMatch(await art({ action: "list" }), /x\.md/, "nothing was written");
+    // Once the review ends, the same tools work again.
+    assert.equal(await art({ action: "append", content: "After the review." }), "Added to note.md.");
+    session.script = null;
+
     // ---- an approval: Needs you, then allow ----
     const gate = deferred();
     session.script = async (s) => {

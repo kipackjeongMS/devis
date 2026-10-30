@@ -222,6 +222,10 @@ export interface TodayTask {
   prs?: TaskPr[];
   /** The task's validation chain, its last run and any proposal. */
   validation?: ValidationSummary | null;
+  /** Review comments on the task's PRs: being reviewed, or waiting on the user. */
+  prComments?: PrCommentSummary[];
+  /** Failed blocking builds on the task's PRs: being reviewed, fixed, or waiting on the user. */
+  prBuilds?: PrBuildSummary[];
 }
 
 // ---- a task's validation chain ---------------------------------------------------------
@@ -362,6 +366,287 @@ export function validationNeed(task: Pick<TodayTask, "status" | "validation">): 
   if (!v || task.status !== "open") return null;
   if (v.attention === "proposal" && v.proposal) return `${v.proposal.by} proposed a validation chain of ${v.proposal.blocks} pipeline${v.proposal.blocks === 1 ? "" : "s"}`;
   if (v.attention === "failed") return `Validation failed${v.run?.failed ? ` at ${v.run.failed}` : ""}`;
+  return null;
+}
+
+// ---- review comments on the task's PRs (jarvis-pr-comments.mts) -------------------------
+
+export type PrReviewState = "watching" | "collecting" | "auditing" | "awaiting" | "applying" | "error";
+export type PrCommentVerdict = "ready" | "choice" | "unclear" | "nochange";
+export type PrConfidence = "high" | "medium" | "low";
+export type PrThreadStatus = "fixed" | "wontFix" | "byDesign" | "closed" | "active";
+
+export interface PrProposalItem {
+  threadId: number;
+  file: string | null;
+  line: number | null;
+  reviewer: string;
+  /** The reviewer's latest comment on the thread. */
+  comment: string;
+  /** What the reviewer asks for, in the worker's words. */
+  ask: string;
+  verdict: PrCommentVerdict;
+  confidence: PrConfidence;
+  reason: string;
+  plan: string;
+  options?: { id: string; label: string; plan: string }[];
+  recommended?: string;
+  files: string[];
+  reply: string;
+  status: PrThreadStatus;
+}
+
+export interface PrCommentProposal {
+  id: string;
+  summary: string;
+  items: PrProposalItem[];
+  by: string;
+  sessionId: string;
+  at: string;
+  baseCommit: string | null;
+  stale: boolean;
+}
+
+export interface PrApplyState {
+  proposalId: string;
+  sessionId: string;
+  items: { threadId: number; file: string | null; ask: string; plan: string; files: string[]; reply: string; status: PrThreadStatus; note?: string }[];
+  sentAt: string | null;
+  commit: string | null;
+  posted: Record<string, number>;
+}
+
+/** One PR's comment review, as Today, Needs you and the task card show it. */
+export interface PrCommentSummary {
+  org: string;
+  prId: number;
+  title: string;
+  state: PrReviewState;
+  worker: string | null;
+  items: number;
+  ready: number;
+  choice: number;
+  unclear: number;
+  nochange: number;
+  at: string;
+  note: string | null;
+  attention: "proposal" | "error" | null;
+}
+
+export interface PrCommentsPr {
+  org: string;
+  prId: number;
+  title: string;
+  url: string;
+  repo: string;
+  branch: string;
+  state: PrReviewState;
+  worker: string | null;
+  note: string | null;
+  proposal: PrCommentProposal | null;
+  apply: PrApplyState | null;
+}
+
+/** The task's Comments tab. */
+export interface PrCommentsView {
+  auto: boolean;
+  prs: PrCommentsPr[];
+}
+
+export type PrDecisionAction = "apply" | "reply" | "decline" | "defer";
+export interface PrDecision {
+  threadId: number;
+  action: PrDecisionAction;
+  reply?: string;
+  choice?: string;
+  note?: string;
+}
+
+/** The Needs you key the server gives a PR's review (jarvis-needs prNeedKey): a new proposal is a new ask. */
+export function prNeedKey(taskId: string, s: Pick<PrCommentSummary, "org" | "prId" | "at">): string {
+  return `need:pr:${taskId}:${s.org.toLowerCase()}:${s.prId}:${s.at}`;
+}
+
+/** The task's PR reviews waiting on the user: a plan to look at, or one that went wrong. */
+export function prCommentsNeeds(task: Pick<TodayTask, "status" | "prComments">): PrCommentSummary[] {
+  return task.status === "open" ? (task.prComments || []).filter((s) => s.attention) : [];
+}
+
+const count = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
+
+/** "PR 1234 got 4 review comments. Worker 2 has a plan: 3 fixes ready, 1 needs your call." */
+export function prCommentsNeedText(s: PrCommentSummary): string {
+  const who = s.worker || "The worker";
+  if (s.attention === "error") return `PR ${s.prId}: ${s.note || `${who} couldn't handle the review comments.`}`;
+  if (!s.items) return `PR ${s.prId}: ${who} has a plan for the review comments.`;
+  const parts = [
+    s.ready ? count(s.ready, "fix ready", "fixes ready") : "",
+    s.choice ? count(s.choice, "needs your call", "need your call") : "",
+    s.unclear ? count(s.unclear, "needs a question back", "need a question back") : "",
+    s.nochange ? count(s.nochange, "just needs a reply", "just need a reply") : "",
+  ].filter(Boolean);
+  return `PR ${s.prId} got ${count(s.items, "review comment", "review comments")}. ${who} has a plan: ${parts.join(", ")}.`;
+}
+
+const REVIEW_RANK: Record<PrReviewState, number> = { error: 0, awaiting: 1, applying: 2, auditing: 3, collecting: 4, watching: 5 };
+
+/** The card chip and Comments tab badge: the PR review that matters most right now. */
+export function prCommentsChip(list: PrCommentSummary[] | null | undefined): { text: string; tone: Tone } | null {
+  const top = (list || []).slice().sort((a, b) => REVIEW_RANK[a.state] - REVIEW_RANK[b.state])[0];
+  if (!top) return null;
+  const pr = `PR ${top.prId}`;
+  if (top.attention === "error") return { text: `Comments · ${pr} · went wrong`, tone: "warn" };
+  if (top.attention === "proposal") return { text: `Comments · ${pr} · plan ready`, tone: "warn" };
+  if (top.state === "applying") return { text: `Comments · ${pr} · applying fixes`, tone: "run" };
+  if (top.state === "auditing") return { text: `Comments · ${pr} · reviewing`, tone: "run" };
+  if (top.state === "collecting") return { text: `Comments · ${pr} · new comments`, tone: "idle" };
+  return null;
+}
+
+// ---- failed builds on the task's PRs (jarvis-pr-builds.mts) ------------------------------
+
+export type BuildVerdict = "fix" | "rerun" | "unclear";
+/** failed: every blocking build finished and one failed, and no review is under way. */
+export type BuildReviewState = "watching" | "failed" | "auditing" | "awaiting" | "applying" | "error";
+
+export interface FailedBuild {
+  evaluationId: string;
+  definitionId: number;
+  name: string;
+  buildId: number;
+  status: string;
+  url: string;
+  /** Its policy only builds when someone queues it, so a push doesn't rerun it. */
+  manual: boolean;
+}
+
+export interface BuildProposalItem {
+  evaluationId: string;
+  buildId: number;
+  name: string;
+  verdict: BuildVerdict;
+  confidence: PrConfidence;
+  /** What failed and why, in the worker's words. */
+  cause: string;
+  reason: string;
+  plan: string;
+  options?: { id: string; label: string; plan: string }[];
+  recommended?: string;
+  files: string[];
+}
+
+export interface BuildProposal {
+  id: string;
+  summary: string;
+  items: BuildProposalItem[];
+  by: string;
+  sessionId: string;
+  at: string;
+  baseCommit: string | null;
+  fingerprint: string;
+}
+
+export interface BuildApplyState {
+  proposalId: string;
+  sessionId: string;
+  items: { evaluationId: string; buildId: number; name: string; cause: string; plan: string; files: string[]; note?: string }[];
+  requeue: { evaluationId: string; name: string; manual: boolean }[];
+  baseCommit: string | null;
+  sentAt: string | null;
+  commit: string | null;
+  requeued: string[];
+}
+
+/** One PR's failed-build review, as Today, Needs you and the task card show it. */
+export interface PrBuildSummary {
+  org: string;
+  prId: number;
+  title: string;
+  state: BuildReviewState;
+  worker: string | null;
+  items: number;
+  fix: number;
+  rerun: number;
+  unclear: number;
+  failed: number;
+  at: string;
+  note: string | null;
+  attention: "proposal" | "error" | null;
+}
+
+export interface PrBuildsPr {
+  org: string;
+  prId: number;
+  title: string;
+  url: string;
+  repo: string;
+  branch: string;
+  state: BuildReviewState;
+  worker: string | null;
+  note: string | null;
+  commit: string | null;
+  failures: FailedBuild[];
+  /** Blocking builds still running or queued. */
+  pending: string[];
+  /** The user already dismissed or acted on exactly these failures. */
+  handled: boolean;
+  reviews: number;
+  proposal: BuildProposal | null;
+  apply: BuildApplyState | null;
+}
+
+/** The build side of the task's PR feedback tab. */
+export interface PrBuildsView {
+  auto: boolean;
+  prs: PrBuildsPr[];
+}
+
+export type BuildDecisionAction = "fix" | "rerun" | "skip";
+export interface BuildDecision {
+  evaluationId: string;
+  action: BuildDecisionAction;
+  choice?: string;
+  note?: string;
+}
+
+/** The Needs you key the server gives a PR's build review (jarvis-needs prBuildNeedKey). */
+export function prBuildNeedKey(taskId: string, s: Pick<PrBuildSummary, "org" | "prId" | "at">): string {
+  return `need:ci:${taskId}:${s.org.toLowerCase()}:${s.prId}:${s.at}`;
+}
+
+/** The task's build reviews waiting on the user: a plan to look at, or one that went wrong. */
+export function prBuildsNeeds(task: Pick<TodayTask, "status" | "prBuilds">): PrBuildSummary[] {
+  return task.status === "open" ? (task.prBuilds || []).filter((s) => s.attention) : [];
+}
+
+/** "PR 1234: 2 blocking builds failed. Worker 2 has a plan: 1 fix ready, 1 to rerun." */
+export function prBuildsNeedText(s: PrBuildSummary): string {
+  const who = s.worker || "The worker";
+  if (s.attention === "error") return `PR ${s.prId}: ${s.note || "the build review needs you."}`;
+  const n = s.items || s.failed;
+  const failed = n ? `${count(n, "blocking build", "blocking builds")} failed` : "a blocking build failed";
+  if (s.items && s.rerun === s.items) return `PR ${s.prId}: ${failed}. ${who} thinks ${s.items === 1 ? "it's" : "they're"} flaky. Rerun?`;
+  if (s.items && s.fix === s.items) return `PR ${s.prId}: ${failed}. ${who} has ${s.fix === 1 ? "a fix" : `${s.fix} fixes`} to review.`;
+  const parts = [
+    s.fix ? count(s.fix, "fix ready", "fixes ready") : "",
+    s.rerun ? `${s.rerun} to rerun` : "",
+    s.unclear ? count(s.unclear, "needs your call", "need your call") : "",
+  ].filter(Boolean);
+  return parts.length ? `PR ${s.prId}: ${failed}. ${who} has a plan: ${parts.join(", ")}.` : `PR ${s.prId}: ${failed}. ${who} has a plan.`;
+}
+
+const BUILD_RANK: Record<BuildReviewState, number> = { error: 0, awaiting: 1, applying: 2, auditing: 3, failed: 4, watching: 5 };
+
+/** The card chip and the tab badge's build side: the build review that matters most right now. */
+export function prBuildsChip(list: PrBuildSummary[] | null | undefined): { text: string; tone: Tone } | null {
+  const top = (list || []).slice().sort((a, b) => BUILD_RANK[a.state] - BUILD_RANK[b.state])[0];
+  if (!top) return null;
+  const pr = `PR ${top.prId}`;
+  if (top.attention === "error") return { text: `Builds · ${pr} · needs you`, tone: "warn" };
+  if (top.attention === "proposal") return { text: `Builds · ${pr} · ${top.rerun === top.items ? "rerun?" : "fix ready"}`, tone: "warn" };
+  if (top.state === "applying") return { text: `Builds · ${pr} · fixing`, tone: "run" };
+  if (top.state === "auditing") return { text: `Builds · ${pr} · reviewing`, tone: "run" };
+  if (top.state === "failed") return { text: `Builds · ${pr} · failed`, tone: "idle" };
   return null;
 }
 
@@ -638,7 +923,7 @@ export function taskSection(task: TodayTask, dayStart: number): Exclude<SectionI
   if (states.includes("needsInput")) return "needs";
   if (task.status === "done") return states.includes("working") ? "running" : time(task.doneAt) >= dayStart ? "done" : null;
   if (states.includes("error")) return "needs";
-  if (validationNeed(task)) return "needs";
+  if (validationNeed(task) || prCommentsNeeds(task).length || prBuildsNeeds(task).length) return "needs";
   if (states.includes("working")) return "running";
   return "idle";
 }
@@ -700,6 +985,10 @@ export type NeedItem =
   | { kind: "failed"; key: string; source: string; task: TodayTask; worker: TodayWorker; at: number }
   /** The task's validation: a chain proposed for review, or a run that failed. */
   | { kind: "validation"; key: string; source: string; task: TodayTask; who: string; text: string; at: number }
+  /** Review comments on one of the task's PRs: the worker's plan to look at, or a review that went wrong. */
+  | { kind: "prComments"; key: string; source: string; task: TodayTask; pr: PrCommentSummary; who: string; text: string; at: number }
+  /** Failed builds on one of the task's PRs: the worker's fix or rerun to look at, or a review that went wrong. */
+  | { kind: "prBuilds"; key: string; source: string; task: TodayTask; pr: PrBuildSummary; who: string; text: string; at: number }
   /** A PR someone asked the user to review in Teams. No task: the PR is what it's about. */
   | { kind: "teams"; key: string; source: string; ask: CommsAsk; at: number }
   /** A chat or email thread someone waits on the user in. No task either. */
@@ -712,7 +1001,7 @@ export type TaskNeedItem = Exclude<NeedItem, { kind: "teams" | "comms" }>;
 export function needLine(n: NeedItem): string {
   if (n.kind === "teams") return `${askersLine(n.ask.askers)} asked you to review PR ${n.ask.prId}`;
   if (n.kind === "comms") return `${commsNeedWho(n.need)}: ${n.need.needsYou}`;
-  if (n.kind === "validation") return n.text;
+  if (n.kind === "validation" || n.kind === "prComments" || n.kind === "prBuilds") return n.text;
   if (n.kind === "failed") return `${n.worker.label} failed`;
   const r = n.worker.requests[0];
   const what = r.kind === "repos" ? "confirm its repositories" : r.title;
@@ -750,6 +1039,14 @@ export function taskNeeds(tasks: TodayTask[]): TaskNeedItem[] {
       const at = proposal ? time(proposal.at) : time(task.validation?.run?.finishedAt) || time(task.updatedAt);
       const source = proposal ? `need:val:${task.id}:proposal:${proposal.at}` : `need:val:${task.id}:failed:${task.validation?.run?.runId ?? "run"}`;
       items.push({ kind: "validation", key: `val:${task.id}`, source, task, who: proposal?.by || "Validation", text: v, at });
+    }
+    for (const pr of prCommentsNeeds(task)) {
+      const key = `pr:${task.id}:${pr.org.toLowerCase()}:${pr.prId}`;
+      items.push({ kind: "prComments", key, source: prNeedKey(task.id, pr), task, pr, who: pr.worker || "The worker", text: prCommentsNeedText(pr), at: time(pr.at) });
+    }
+    for (const pr of prBuildsNeeds(task)) {
+      const key = `ci:${task.id}:${pr.org.toLowerCase()}:${pr.prId}`;
+      items.push({ kind: "prBuilds", key, source: prBuildNeedKey(task.id, pr), task, pr, who: pr.worker || "The worker", text: prBuildsNeedText(pr), at: time(pr.at) });
     }
   }
   return items.sort((a, b) => a.at - b.at || a.key.localeCompare(b.key));
@@ -793,8 +1090,16 @@ export function needTodo(n: NeedItem): { text: string; source: TodoSource } {
       source: { key: n.source, taskId: "", taskTitle: pr, who, ...(asker?.link ? { link: asker.link } : {}) },
     };
   }
-  const who = n.kind === "validation" ? n.who : n.worker.label;
+  const who = n.kind === "validation" || n.kind === "prComments" || n.kind === "prBuilds" ? n.who : n.worker.label;
   const source: TodoSource = { key: n.source, taskId: n.task.id, taskTitle: n.task.title, who };
+  if (n.kind === "prBuilds") {
+    const text = n.pr.attention === "proposal" ? `Review ${who}'s plan for the failed builds on PR ${n.pr.prId}` : `See what went wrong with the builds on PR ${n.pr.prId}`;
+    return { text, source };
+  }
+  if (n.kind === "prComments") {
+    const text = n.pr.attention === "proposal" ? `Review ${who}'s plan for the comments on PR ${n.pr.prId}` : `See what went wrong with the comments on PR ${n.pr.prId}`;
+    return { text, source };
+  }
   if (n.kind === "validation") {
     const text = n.task.validation?.attention === "proposal" ? `Review the validation chain ${who} proposed` : "Look at the failed validation run";
     return { text, source };
@@ -971,6 +1276,8 @@ export function todayFingerprint(data: TodayData | null, extra: string): string 
       t.updates?.today.length,
       t.workers.map((w) => [w.sessionId, w.state, w.busy, w.summary, w.partial.length, w.activity, w.requests.map((r) => r.id)]),
       t.validation ? [t.validation.chainId, t.validation.blocks, t.validation.attention, t.validation.proposal?.at, t.validation.run && [t.validation.run.runId, t.validation.run.status, t.validation.run.done, t.validation.run.current]] : null,
+      (t.prComments || []).map((p) => [p.org, p.prId, p.state, p.at, p.attention, p.items, p.worker]),
+      (t.prBuilds || []).map((p) => [p.org, p.prId, p.state, p.at, p.attention, p.items, p.failed, p.worker]),
     ]),
     data.reviewed.map((e) => e.id),
     o ? [o.phase, o.text, o.at, o.stale, o.error] : null,

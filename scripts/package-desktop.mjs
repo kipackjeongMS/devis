@@ -41,6 +41,8 @@ const [appPath] = await packager({
     tmpdir: false,
     quiet: true,
     ignore,
+    // The exe's own icon, which the taskbar and the Start menu shortcut show. Regenerate with scripts/build-icon.mjs.
+    icon: fileURLToPath(new URL("../assets/icon.ico", import.meta.url)),
     win32metadata: {
         CompanyName: pkg.productName,
         ProductName: pkg.productName,

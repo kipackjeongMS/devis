@@ -82,6 +82,7 @@ import {
   type SeenMessage,
 } from "./taskChatModel.js";
 import { createValidationPanel, type ValidationPanel } from "./taskValidation.js";
+import { createPrCommentsPanel, type PrCommentsPanel } from "./taskPrComments.js";
 import { zoomable } from "./viewZoom.js";
 import { attachSplitter } from "./splitter.js";
 import { ImageDraft, paintTray, trayNote, uploadWith, wireImages, type ChatImage } from "./chatImages.js";
@@ -238,8 +239,8 @@ export function pruneTaskModalState(taskIds: Set<string>, sessionIds: Set<string
   for (const id of [...leftTabByTask.keys()]) if (!taskIds.has(id)) leftTabByTask.delete(id);
 }
 
-export type LeftTab = "status" | "devops" | "validation" | "artifacts";
-const LEFT_TABS: readonly LeftTab[] = ["status", "devops", "validation", "artifacts"];
+export type LeftTab = "status" | "devops" | "validation" | "comments" | "artifacts";
+const LEFT_TABS: readonly LeftTab[] = ["status", "devops", "validation", "comments", "artifacts"];
 
 interface Devops {
   /** The task's PRs as last read; Today's copy until the first read. */
@@ -312,6 +313,7 @@ interface Modal {
   panels: Record<LeftTab, HTMLElement>;
   leftTab: LeftTab;
   validation: ValidationPanel | null;
+  prComments: PrCommentsPanel | null;
   artsCount: HTMLElement;
   statusList: HTMLElement;
   statusInput: HTMLInputElement;
@@ -388,7 +390,7 @@ export function openTaskModal(taskId: string, host: TaskModalHost, tab?: LeftTab
       <div class="tm-body">
         <section class="tm-left" aria-label="Task">
           <div class="tm-ltabs" role="tablist" aria-label="Task">
-            ${tabButton("status", "Status")}${tabButton("devops", "Azure DevOps", '<span class="tm-ltab-count tm-dv-count"></span>')}${tabButton("validation", "Validation", '<span class="tm-ltab-dot tm-val-dot" hidden></span>')}${tabButton("artifacts", "Artifacts", '<span class="tm-ltab-count tm-arts-count"></span>')}
+            ${tabButton("status", "Status")}${tabButton("devops", "Azure DevOps", '<span class="tm-ltab-count tm-dv-count"></span>')}${tabButton("validation", "Validation", '<span class="tm-ltab-dot tm-val-dot" hidden></span>')}${tabButton("comments", "PR feedback", '<span class="tm-ltab-dot tm-prc-dot" hidden></span>')}${tabButton("artifacts", "Artifacts", '<span class="tm-ltab-count tm-arts-count"></span>')}
           </div>
           <div class="tm-lpanel" role="tabpanel" id="tm-lp-status" aria-labelledby="tm-lt-status" hidden>
             <form class="tl-post tm-status-form" data-form="status">
@@ -408,6 +410,7 @@ export function openTaskModal(taskId: string, host: TaskModalHost, tab?: LeftTab
             <div class="tm-dv-list"></div>
           </div>
           <div class="tm-lpanel tm-val" role="tabpanel" id="tm-lp-validation" aria-labelledby="tm-lt-validation" hidden></div>
+          <div class="tm-lpanel tm-prc" role="tabpanel" id="tm-lp-comments" aria-labelledby="tm-lt-comments" hidden></div>
           <div class="tm-lpanel tm-arts" role="tabpanel" id="tm-lp-artifacts" aria-labelledby="tm-lt-artifacts" hidden></div>
           <div class="tm-split" role="separator" aria-orientation="vertical" tabindex="0" aria-label="Resize the task and chat panels" title="Drag to resize · double-click to reset"></div>
         </section>
@@ -427,9 +430,10 @@ export function openTaskModal(taskId: string, host: TaskModalHost, tab?: LeftTab
     dialog: q(".tm"),
     head: q(".tm-head"),
     ltabs: q(".tm-ltabs"),
-    panels: { status: q("#tm-lp-status"), devops: q("#tm-lp-devops"), validation: q("#tm-lp-validation"), artifacts: q("#tm-lp-artifacts") },
+    panels: { status: q("#tm-lp-status"), devops: q("#tm-lp-devops"),     validation: q("#tm-lp-validation"), comments: q("#tm-lp-comments"), artifacts: q("#tm-lp-artifacts") },
     leftTab: "status",
     validation: null,
+        prComments: null,
     artsCount: q(".tm-arts-count"),
     statusList: q(".tm-status-list"),
     statusInput: q(".tm-status-form input"),
@@ -508,6 +512,13 @@ export function openTaskModal(taskId: string, host: TaskModalHost, tab?: LeftTab
     refresh: () => m.host.refresh(),
     close: () => modal === m && closeTaskModal(),
     visible: () => modal === m && m.leftTab === "validation",
+  });
+  m.prComments = createPrCommentsPanel({
+    taskId,
+    panel: m.panels.comments,
+    badge: q(".tm-prc-dot"),
+    refresh: () => m.host.refresh(),
+    visible: () => modal === m && m.leftTab === "comments",
   });
   m.sessionId = pickWorker(task);
   m.input.value = (m.sessionId && draftsBySession.get(m.sessionId)) || "";
@@ -739,6 +750,7 @@ function render(): void {
   syncDevops(task);
   paintDevops(now);
   m.validation?.sync(task);
+  m.prComments?.sync(task);
   syncArtifacts(task);
   paintArts();
   region("tabs", JSON.stringify([task.workers.map((w) => [w.sessionId, w.label, workerState(shown(w))]), m.sessionId, task.status]), () => renderTabs(task));
@@ -1116,6 +1128,7 @@ function selectLeftTab(tab: LeftTab, focus = false): void {
   if (tab === "artifacts" && m.arts.mode === "view") void loadArtifacts();
   const task = currentTask();
   if (tab === "validation" && task) m.validation?.shown(task);
+  if (tab === "comments" && task) m.prComments?.shown(task);
 }
 
 /** Arrow keys, Home and End move between the left tabs. */
@@ -2215,6 +2228,7 @@ function onKeydown(e: KeyboardEvent): void {
     if (m.arts.mode === "new" && m.artsEl.contains(target)) return cancelNewArt();
     if (!m.dvLink.hidden && m.dvLink.contains(target)) return showLinkForm(false);
     if (m.validation?.escape(target)) return;
+    if (m.prComments?.escape(target)) return;
     return closeTaskModal();
   }
   if (target.closest("[data-ltab]") && onLeftTabKey(e)) return;

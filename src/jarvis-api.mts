@@ -96,6 +96,15 @@ import {
     stopValidation,
     validationView,
 } from "./jarvis-validation.mjs";
+import {
+    acceptPrComments,
+    auditPrCommentsNow,
+    dismissPrComments,
+    postAppliedAnyway,
+    prCommentsView,
+    setPrCommentsAuto,
+} from "./jarvis-pr-comments.mjs";
+import { acceptPrBuilds, auditPrBuildsNow, dismissPrBuilds, prBuildsView } from "./jarvis-pr-builds.mjs";
 
 function since(value: string | null): string {
     const t = Date.parse(value || "");
@@ -169,6 +178,8 @@ export async function handleJarvisApi(req: IncomingMessage, res: ServerResponse,
             // To-dos made from Needs you items tick themselves once the ask is gone.
             const skip = [
                 ...(snapshot.validationFailed ? (["val"] as const) : []),
+                ...(snapshot.prCommentsFailed ? (["pr"] as const) : []),
+                ...(snapshot.prBuildsFailed ? (["ci"] as const) : []),
                 ...(comms ? [] : (["teams"] as const)),
                 ...(needs ? [] : (["chat", "mail"] as const)),
             ];
@@ -378,6 +389,53 @@ export async function handleJarvisApi(req: IncomingMessage, res: ServerResponse,
                     return sendJson(res, 200, { ok: true });
                 case "ask":
                     return sendJson(res, 200, { message: await askForProposal(id) });
+            }
+        }
+
+        // ---- review comments on a task's PRs ----
+        if (p === "/api/jarvis/pr-comments" && get) {
+            return sendJson(res, 200, await prCommentsView(requireId(q.get("id"))));
+        }
+        if (p.startsWith("/api/jarvis/pr-comments/") && post) {
+            const b = await readBody(req);
+            const action = p.slice("/api/jarvis/pr-comments/".length);
+            if (action === "auto") {
+                await setPrCommentsAuto(b?.on === true);
+                return sendJson(res, 200, { ok: true, auto: b?.on === true });
+            }
+            const pr = { id: requireId(b?.id), org: b?.org, prId: b?.prId };
+            switch (action) {
+                case "accept":
+                    if (typeof b?.proposalId !== "string") throw new JarvisError("Say which proposal you reviewed.", 400);
+                    return sendJson(res, 200, await acceptPrComments({ ...pr, proposalId: b.proposalId, decisions: b?.decisions }));
+                case "dismiss":
+                    await dismissPrComments({ ...pr, proposalId: b?.proposalId });
+                    return sendJson(res, 200, { ok: true });
+                case "audit":
+                    await auditPrCommentsNow(pr);
+                    return sendJson(res, 200, { ok: true });
+                case "post":
+                    return sendJson(res, 200, { posted: await postAppliedAnyway(pr) });
+            }
+        }
+
+        // ---- failed builds on a task's PRs ----
+        if (p === "/api/jarvis/pr-builds" && get) {
+            return sendJson(res, 200, await prBuildsView(requireId(q.get("id"))));
+        }
+        if (p.startsWith("/api/jarvis/pr-builds/") && post) {
+            const b = await readBody(req);
+            const pr = { id: requireId(b?.id), org: b?.org, prId: b?.prId };
+            switch (p.slice("/api/jarvis/pr-builds/".length)) {
+                case "accept":
+                    if (typeof b?.proposalId !== "string") throw new JarvisError("Say which proposal you reviewed.", 400);
+                    return sendJson(res, 200, await acceptPrBuilds({ ...pr, proposalId: b.proposalId, decisions: b?.decisions }));
+                case "dismiss":
+                    await dismissPrBuilds({ ...pr, proposalId: b?.proposalId });
+                    return sendJson(res, 200, { ok: true });
+                case "audit":
+                    await auditPrBuildsNow(pr);
+                    return sendJson(res, 200, { ok: true });
             }
         }
 

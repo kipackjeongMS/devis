@@ -193,6 +193,8 @@ async function main(): Promise<void> {
     const { startOverviewRunner, stopOverviewRunner } = await import("./jarvis-overview.mjs");
     const { startPrsRunner, stopPrsRunner } = await import("./jarvis-prs.mjs");
     const { startValidationRunner, stopValidationRunner } = await import("./jarvis-validation.mjs");
+    const { startPrCommentsRunner, stopPrCommentsRunner } = await import("./jarvis-pr-comments.mjs");
+    const { startPrBuildsRunner, stopPrBuildsRunner } = await import("./jarvis-pr-builds.mjs");
     const { startCommsRunner, stopCommsRunner } = await import("./comms.mjs");
     const { startMaintenance, stopMaintenance } = await import("./maintenance.mjs");
     const { stopCopilotClient, warmCopilot } = await import("./copilot-runtime.mjs");
@@ -268,6 +270,8 @@ async function main(): Promise<void> {
                 const closing = running.close();
                 await Promise.all([stopReviewRunner(), stopPipelineRunner(), stopOverviewRunner(), stopPrsRunner(), stopCommsRunner(), stopMaintenance()]);
                 stopValidationRunner();
+                stopPrCommentsRunner();
+                stopPrBuildsRunner();
                 await Promise.all([closeAllReviewerSessions(), closeAllWorkers(), closeLead()]);
                 await stopCopilotClient();
                 await closing;
@@ -286,6 +290,8 @@ async function main(): Promise<void> {
     startOverviewRunner();
     startPrsRunner();
     startValidationRunner();
+    startPrCommentsRunner();
+    startPrBuildsRunner();
     startCommsRunner();
     startMaintenance();
     writeInfo(info);
