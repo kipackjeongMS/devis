@@ -3612,7 +3612,8 @@ svg.chain-edges { position: absolute; overflow: visible; pointer-events: none; }
 
 /* ---------- The Workspace (jarvis.ts) ----------
    Devis's chat in the centre, and a quiet rail on the right: Needs you, Tasks, Communication,
-   Meetings, To-dos and Note. A task, Communication or Meetings opens as a drawer over the chat;
+   Meetings, To-dos and Note. Drag the border between them to resize. A task, Communication or
+   Meetings opens as a drawer over the chat;
    the rail stays put. Under 1024px the rail turns into a sheet from the right, and under 600px
    the drawer fills the view. */
 .jarvis-view { display: none; }
@@ -3630,6 +3631,35 @@ body[data-feature="jarvis"]:not([data-page="settings"]) .jarvis-view {
 @media (max-width: 1279.98px) {
   .jarvis-view { --rail-w: 300px; }
 }
+/* The border between Devis and the rail: drag it (or arrow keys on it) to resize; double-click
+   resets. jarvis.ts sets --rail-w; the handle sits on the rail's left edge, outside the rail so
+   the rail's zoom doesn't move it. */
+.jv-split {
+  position: absolute;
+  top: 0;
+  right: calc(var(--rail-w, 340px) - 5px);
+  bottom: 0;
+  z-index: 4;
+  width: 9px;
+  cursor: col-resize;
+  touch-action: none;
+}
+.jv-split::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  width: 1px;
+  background: transparent;
+  transition: background var(--t-fast) linear, box-shadow var(--t-fast) linear;
+}
+.jv-split:hover::before,
+.jarvis-view.splitting .jv-split::before { left: 3px; width: 3px; background: var(--accent); box-shadow: 0 0 8px var(--accent-glow); }
+.jv-split:focus-visible { outline: none; }
+.jv-split:focus-visible::before { left: 3px; width: 3px; background: var(--focus); }
+.jarvis-view.splitting { cursor: col-resize; user-select: none; }
+.jarvis-view.splitting * { cursor: col-resize; }
 
 /* Centre: the Lead's chat, read in a 720px column whatever the window. */
 .jv-center {
@@ -4098,6 +4128,7 @@ button.rr-main { cursor: pointer; }
 @media (max-width: 1023.98px) {
   /* clip, not hidden: the closed sheet sits off to the right and must never widen or scroll the view. */
   body[data-feature="jarvis"]:not([data-page="settings"]) .jarvis-view { grid-template-columns: minmax(0, 1fr); overflow: clip; }
+  .jv-split { display: none; }
   .jv-tools { flex: none; height: 44px; padding: 0 12px; }
   .jv-center > .chat > .chat-head { min-height: 40px; padding-right: 20px; }
   .jv-rail {

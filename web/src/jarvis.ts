@@ -2,7 +2,8 @@
 //   Devis   — the Lead console, one persistent Copilot session that watches the Workspace and
 //             keeps its history. "Today so far" is pinned over its thread.
 //   Rail    — the day at a glance: Needs you, Tasks (with reviews), Communication, Meetings,
-//             the user's own to-dos and a quick note. Each section folds. The to-dos and note
+//             the user's own to-dos and a quick note. Each section folds, and the border
+//             between it and Devis drags to resize. The to-dos and note
 //             belong to no day; Devis and the workers can read them when asked. On a narrow
 //             window the rail is a sheet behind the Overview button.
 //   Drawer  — opens over Devis, the rail staying in view: a task (its timeline and its Copilot
@@ -38,6 +39,7 @@ import { sendPrsToCopilot } from "./bridge.js";
 import { requestNotifyPermission } from "./notifyWatch.js";
 import { closeTaskModal, openTaskModal, pruneTaskModalState, reposFromCard, requestCardHtml, updateTaskModal, warnUnsaved, type LeftTab, type TaskModalHost } from "./jarvisTask.js";
 import { initViewZoom, zoomable } from "./viewZoom.js";
+import { attachSplitter } from "./splitter.js";
 import { meetingDetailHtml, meetingsHtml, meetingsRail, meetingsSig, meetingsSub, pruneMeetingsState, selectMeeting, toggleDay, toggleNote, type MeetingsView } from "./meetingsView.js";
 import {
   communicationDetailHtml,
@@ -169,6 +171,9 @@ const RAIL_FOLD_KEY = "adoPrOps.workspace.railFolded";
 /** The drawer's width, in px, as the user last dragged it. */
 const DRAWER_WIDTH_KEY = "adoPrOps.workspace.drawerWidth";
 const DRAWER_MIN = 560;
+/** The narrowest Devis's chat and the rail get when the border between them is dragged. */
+const LEAD_MIN = 420;
+const RAIL_MIN = 280;
 const SERVICE_KEY = "adoPrOps.jarvis.service";
 const OVERVIEW_KEY = "adoPrOps.jarvis.overviewCollapsed";
 const DONE_TODOS_KEY = "adoPrOps.workspace.showDoneTodos";
@@ -513,6 +518,7 @@ function mount(): void {
       </div>
       <footer class="today-status"><span class="today-status-dot"></span><span class="today-status-text"></span></footer>
     </aside>
+    <div class="jv-split" role="separator" aria-orientation="vertical" tabindex="0" aria-label="Resize Devis and the overview" title="Drag to resize · double-click to reset"></div>
     <div class="jv-sheet-scrim" data-act="rail-close"></div>`;
 
   const q = <T extends Element>(sel: string): T => root!.querySelector<T>(sel)!;
@@ -563,6 +569,19 @@ function mount(): void {
   drawerBackBtn = q('[data-act="drawer-back"]');
   drawerBody = q(".jv-dbody");
   wireGrip(q<HTMLElement>(".jv-grip"));
+  // Devis and the rail split the way they were last left: drag the border between them.
+  attachSplitter({
+    container: root,
+    handle: q<HTMLElement>(".jv-split"),
+    left: center,
+    view: "workspace",
+    minLeft: LEAD_MIN,
+    minRight: RAIL_MIN,
+    apply: (share) =>
+      share === null
+        ? root!.style.removeProperty("--rail-w")
+        : root!.style.setProperty("--rail-w", `clamp(${RAIL_MIN}px, ${((1 - share) * 100).toFixed(2)}%, calc(100% - ${LEAD_MIN}px))`),
+  });
 
   // Ctrl +/−/0 zoom what you're in: Devis's chat or the rail (the drawer zooms on its own).
   zoomable(leadPane.root, "lead");
