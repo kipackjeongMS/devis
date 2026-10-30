@@ -22,7 +22,13 @@ import { statusBadge, voteBadge, myActionBadge } from "./prStatus.js";
 import { initials, prAuthorMarkup } from "./prAuthor.js";
 import { mountPrComments, unmountPrComments } from "./prComments.js";
 import { hydratePrDescriptionImages } from "./prDescriptionImages.js";
-import { closePrActionMenu, mountDecisionMenu, mountLifecycleMenu } from "./prActions.js";
+import {
+  closePrActionMenu,
+  mountApproveButton,
+  mountDecisionMenu,
+  mountLifecycleMenu,
+  mountMoreMenu,
+} from "./prActions.js";
 
 // Closing the reading pane: stop the review poll and drop the current selection.
 function onDetailClose(): void {
@@ -178,6 +184,13 @@ function buildDetail(container: HTMLElement, pr: PR, detail: Detail): void {
   adoLink.addEventListener("click", () => window.open(pr.url, "_blank", "noopener"));
   actions.appendChild(adoLink);
   actions.appendChild(mountPrComments(pr, detail.threads));
+  // Narrow windows only: other votes, lifecycle actions, refresh and the ADO link under ⋯ (responsive.css).
+  actions.appendChild(
+    mountMoreMenu(pr, detail, reloadAfterAction, [
+      { label: "Refresh", run: () => refreshBtn.click() },
+      { label: "Open in Azure DevOps", run: () => adoLink.click() },
+    ])
+  );
   sub.appendChild(actions);
   head.appendChild(sub);
 
@@ -253,6 +266,11 @@ function buildDetail(container: HTMLElement, pr: PR, detail: Detail): void {
   }
   container.appendChild(files);
   sections.push({ label: "Files", count: detail.files.length, target: files });
+
+  // Narrow windows only: Approve sticks to the bottom of the pane (responsive.css).
+  const actionBar = el(`<div class="detail-actionbar"></div>`);
+  actionBar.appendChild(mountApproveButton(pr, detail, reloadAfterAction));
+  container.appendChild(actionBar);
 
   mountSectionNav(head, sections);
 }

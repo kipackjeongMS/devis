@@ -1,9 +1,10 @@
-// A task opened as a modal: on the left, tabs for its status timeline, its
-// details and its Artifacts (note.md, recap.md and any other notes); on the
-// right, a chat with its workers. The chat runs the Copilot CLI's slash
-// commands and the user's skills behind "/". Today's polling keeps it live; the
-// modal re-renders only the regions whose data changed, so typing and focus
-// survive every poll.
+// A task: on the left, tabs for its status timeline, its details and its
+// Artifacts (note.md, recap.md and any other notes); on the right, a chat with
+// its workers. It opens in the Workspace drawer, or as a modal over the page.
+// On a narrow surface the two sides take turns behind a Task / Workers switch.
+// The chat runs the Copilot CLI's slash commands and the user's skills behind
+// "/". Today's polling keeps it live; it re-renders only the regions whose data
+// changed, so typing and focus survive every poll.
 
 import { getJSON, postJSON } from "./api.js";
 import { esc } from "./util.js";
@@ -101,6 +102,8 @@ export interface TaskModalHost {
   deleteTask(task: TodayTask): void;
   /** Close the task and open the PR in the app's own PR view. */
   openPr(ref: { org: string; project: string; repoId: string; prId: number }): Promise<void>;
+  /** Close the task when it's mounted in the host's own surface (the Workspace drawer); the host then calls closeTaskModal. */
+  close?(): void;
 }
 
 const svg = (name: IconName): string => icon(name);
@@ -305,7 +308,10 @@ type Popup =
 interface Modal {
   taskId: string;
   host: TaskModalHost;
+  /** The overlay over the page, or the holder inside the host's surface when mounted there. */
   overlay: HTMLElement;
+  /** Mounted inside the host's surface: no overlay, focus trap or page-wide keys; the host closes it. */
+  embedded: boolean;
   dialog: HTMLElement;
   head: HTMLElement;
   ltabs: HTMLElement;
@@ -373,19 +379,29 @@ export function isTaskModalOpen(): boolean {
 
 // ---- open and close -----------------------------------------------------------------
 
-export function openTaskModal(taskId: string, host: TaskModalHost, tab?: LeftTab): void {
+/**
+ * Open a task: over the page by default, or inside `mountIn` (the Workspace drawer), which
+ * then owns closing it, its focus and its keys. On a narrow surface the task panel and the
+ * worker chat take turns, behind a Task / Workers switch.
+ */
+export function openTaskModal(taskId: string, host: TaskModalHost, tab?: LeftTab, mountIn?: HTMLElement): void {
   const task = host.task(taskId);
   if (!task) return;
   if (modal) closeTaskModal();
-  const returnFocus = document.activeElement as HTMLElement | null;
+  const embedded = !!mountIn;
+  const returnFocus = embedded ? null : (document.activeElement as HTMLElement | null);
   const overlay = document.createElement("div");
-  overlay.className = "ask-overlay tm-overlay";
+  overlay.className = embedded ? "tm-mount" : "ask-overlay tm-overlay";
   const tabButton = (id: LeftTab, label: string, extra = "") =>
     `<button type="button" class="tm-ltab" role="tab" id="tm-lt-${id}" aria-controls="tm-lp-${id}" data-ltab="${id}" aria-selected="false" tabindex="-1">${label}${extra}</button>`;
   overlay.innerHTML = `
-    <div class="tm" role="dialog" aria-modal="true" aria-labelledby="tm-title" tabindex="-1">
+    <div class="tm${embedded ? " is-embedded" : ""}" ${embedded ? 'role="region"' : 'role="dialog" aria-modal="true"'} aria-labelledby="tm-title" tabindex="-1">
       <header class="tm-head"></header>
-      <div class="tm-body">
+      <div class="tm-switch" role="group" aria-label="Show">
+        <button type="button" class="tm-switch-btn" data-act="tm-side" data-side="left" aria-pressed="true">Task</button>
+        <button type="button" class="tm-switch-btn" data-act="tm-side" data-side="chat" aria-pressed="false">Workers<span class="tm-switch-n"></span></button>
+      </div>
+      <div class="tm-body" data-side="left">
         <section class="tm-left" aria-label="Task">
           <div class="tm-ltabs" role="tablist" aria-label="Task">
             ${tabButton("status", "Status")}${tabButton("devops", "Azure DevOps", '<span class="tm-ltab-count tm-dv-count"></span>')}${tabButton("validation", "Validation", '<span class="tm-ltab-dot tm-val-dot" hidden></span>')}${tabButton("artifacts", "Artifacts", '<span class="tm-ltab-count tm-arts-count"></span>')}
@@ -417,13 +433,14 @@ export function openTaskModal(taskId: string, host: TaskModalHost, tab?: LeftTab
         </section>
       </div>
     </div>`;
-  document.body.appendChild(overlay);
+  (mountIn || document.body).appendChild(overlay);
   const q = <T extends Element>(sel: string): T => overlay.querySelector<T>(sel)!;
   const pane = chatPaneRefs(overlay);
   modal = {
     taskId,
     host,
     overlay,
+    embedded,
     dialog: q(".tm"),
     head: q(".tm-head"),
     ltabs: q(".tm-ltabs"),
@@ -506,7 +523,7 @@ export function openTaskModal(taskId: string, host: TaskModalHost, tab?: LeftTab
     panel: m.panels.validation,
     badge: q(".tm-val-dot"),
     refresh: () => m.host.refresh(),
-    close: () => modal === m && closeTaskModal(),
+    close: () => modal === m && dismiss(),
     visible: () => modal === m && m.leftTab === "validation",
   });
   m.sessionId = pickWorker(task);
@@ -526,14 +543,22 @@ export function openTaskModal(taskId: string, host: TaskModalHost, tab?: LeftTab
   m.input.addEventListener("blur", () => window.setTimeout(() => modal === m && document.activeElement !== m.input && hidePopup(), 150));
   // Picking from the list keeps the cursor in the box.
   m.popupEl.addEventListener("mousedown", (e) => e.preventDefault());
-  overlay.addEventListener("mousedown", (e) => {
-    if (e.target === overlay) closeTaskModal();
-  });
-  document.addEventListener("keydown", onDocumentKey, true);
+  if (!embedded) {
+    overlay.addEventListener("mousedown", (e) => {
+      if (e.target === overlay) closeTaskModal();
+    });
+    document.addEventListener("keydown", onDocumentKey, true);
+  }
   selectLeftTab(tab || leftTabByTask.get(taskId) || "status");
+  // Asked for a worker's chat on a narrow surface: show the chat side.
+  setSide(tab ? "left" : sideByTask.get(taskId) || "left");
   render();
   autoSize(m.input);
-  requestAnimationFrame(() => (tab ? m.ltabs.querySelector<HTMLElement>(`[data-ltab="${tab}"]`)! : m.sessionId && !m.input.disabled ? m.input : m.dialog).focus());
+  requestAnimationFrame(() => {
+    if (modal !== m) return;
+    const chatShown = m.dialog.querySelector<HTMLElement>(".tm-body")!.dataset.side === "chat" || !narrowTask();
+    (tab ? m.ltabs.querySelector<HTMLElement>(`[data-ltab="${tab}"]`)! : chatShown && m.sessionId && !m.input.disabled ? m.input : m.dialog).focus();
+  });
 }
 
 export function closeTaskModal(): void {
@@ -544,21 +569,57 @@ export function closeTaskModal(): void {
   clearTimeout(m.liveTimer);
   document.removeEventListener("keydown", onDocumentKey, true);
   m.overlay.remove();
+  // The host that mounted the task puts focus back itself.
+  if (m.embedded) return;
   // Today repaints while the modal is open, so the button that opened it may be a new node.
   const back = m.returnFocus?.isConnected
     ? m.returnFocus
-    : document.querySelector<HTMLElement>(`article.task-card[data-task="${CSS.escape(m.taskId)}"] .task-open`);
+    : document.querySelector<HTMLElement>(`[data-task-row="${CSS.escape(m.taskId)}"]`);
   back?.focus();
+}
+
+/** Close the task the way it was opened: the host closes its own surface. */
+function dismiss(): void {
+  const m = modal;
+  if (!m) return;
+  if (m.embedded && m.host.close) m.host.close();
+  else closeTaskModal();
 }
 
 /** Today reloaded: repaint what changed, or close if the task is gone. */
 export function updateTaskModal(): void {
   if (!modal) return;
   if (!modal.host.task(modal.taskId)) {
-    closeTaskModal();
+    dismiss();
     return;
   }
   render();
+}
+
+// ---- narrow: the task panel or the worker chat ----------------------------------------
+
+type Side = "left" | "chat";
+/** The side each task last showed on a narrow surface. */
+const sideByTask = new Map<string, Side>();
+/** Under this width the task panel and the worker chat take turns: the window's, or the drawer's when embedded (see .tm-mount in style.css). */
+const narrowTaskQuery = window.matchMedia("(max-width: 899px)");
+const narrowTask = (): boolean => (modal?.embedded ? modal.dialog.getBoundingClientRect().width < 900 : narrowTaskQuery.matches);
+
+function setSide(side: Side): void {
+  const m = modal;
+  if (!m) return;
+  sideByTask.set(m.taskId, side);
+  m.dialog.querySelector<HTMLElement>(".tm-body")!.dataset.side = side;
+  for (const b of m.dialog.querySelectorAll<HTMLElement>(".tm-switch-btn")) b.setAttribute("aria-pressed", String(b.dataset.side === side));
+}
+
+/** The Workers switch counts the workers, and flags one that waits on the user. */
+function renderSwitch(task: TodayTask): void {
+  const n = modal!.dialog.querySelector<HTMLElement>(".tm-switch-n")!;
+  const asks = task.workers.some((w) => w.requests.length > 0);
+  const text = task.workers.length ? ` ${task.workers.length}` : "";
+  if (n.textContent !== text) n.textContent = text;
+  n.classList.toggle("is-asking", asks);
 }
 
 /** The worker to show: the last one picked, else one that needs the user, is working, or moved last. */
@@ -742,6 +803,7 @@ function render(): void {
   syncArtifacts(task);
   paintArts();
   region("tabs", JSON.stringify([task.workers.map((w) => [w.sessionId, w.label, workerState(shown(w))]), m.sessionId, task.status]), () => renderTabs(task));
+  renderSwitch(task);
   const w = currentWorker();
   if (w) syncLog(w);
   syncLive(w);
@@ -2067,7 +2129,13 @@ function onClick(e: MouseEvent): void {
   if (!node) return;
   switch (node.dataset.act) {
     case "close":
-      return closeTaskModal();
+      return dismiss();
+    case "tm-side": {
+      const side = node.dataset.side === "chat" ? "chat" : "left";
+      setSide(side);
+      if (side === "chat" && m.sessionId && !m.input.disabled) m.input.focus();
+      return;
+    }
     case "done":
     case "reopen":
       return void withButton(node, async () => {
@@ -2215,10 +2283,10 @@ function onKeydown(e: KeyboardEvent): void {
     if (m.arts.mode === "new" && m.artsEl.contains(target)) return cancelNewArt();
     if (!m.dvLink.hidden && m.dvLink.contains(target)) return showLinkForm(false);
     if (m.validation?.escape(target)) return;
-    return closeTaskModal();
+    return dismiss();
   }
   if (target.closest("[data-ltab]") && onLeftTabKey(e)) return;
-  if (e.key === "Tab" && !(target === m.input && m.popup)) return trapFocus(e);
+  if (e.key === "Tab" && !m.embedded && !(target === m.input && m.popup)) return trapFocus(e);
   if (target === m.input) {
     const p = m.popup;
     if (p && (e.key === "ArrowDown" || e.key === "ArrowUp")) {

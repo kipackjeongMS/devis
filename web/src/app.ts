@@ -227,9 +227,13 @@ function setupFilters(): void {
 }
 
 // A scope picker with a single choice is noise: hide it, and the row when both are.
+// Narrow windows fold the pickers behind #scopeToggle; its dot marks a narrowed scope.
 function syncScopeFields(): void {
   const fields = [orgFilter, projectFilter].map((select) => select.closest<HTMLElement>(".filter-field")!);
   scopeFields.hidden = fields.every((field) => field.hidden);
+  const toggle = $<HTMLButtonElement>("#scopeToggle");
+  toggle.hidden = scopeFields.hidden;
+  toggle.classList.toggle("is-scoped", state.org !== "all" || state.project !== "all");
 }
 
 function populateOrgFilter(): void {
@@ -616,8 +620,36 @@ orgFilter.addEventListener("change", () => {
 });
 projectFilter.addEventListener("change", () => {
   state.project = projectFilter.value;
+  syncScopeFields();
   renderList();
 });
+$("#scopeToggle").addEventListener("click", () => {
+  const open = filterbar.classList.toggle("scope-open");
+  $("#scopeToggle").setAttribute("aria-expanded", String(open));
+});
+// Phone-width bottom tab bar: each button forwards to the title bar control it mirrors,
+// so feature switching stays in one place. aria-current follows the body's page/feature.
+function initTabbar(): void {
+  const bar = $("nav.tabbar");
+  bar.addEventListener("click", (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLElement>(".tabbar-btn");
+    if (!btn) return;
+    if (btn.dataset.action === "settings") $<HTMLButtonElement>("#btnSettings").click();
+    else $<HTMLButtonElement>(`.feature-tab[data-feature="${asFeature(btn.dataset.feature)}"]`).click();
+  });
+  const sync = (): void => {
+    const onSettings = document.body.dataset.page === "settings";
+    const feature = currentFeature();
+    for (const btn of bar.querySelectorAll<HTMLElement>(".tabbar-btn")) {
+      const on = btn.dataset.action === "settings" ? onSettings : !onSettings && btn.dataset.feature === feature;
+      if (on) btn.setAttribute("aria-current", "page");
+      else btn.removeAttribute("aria-current");
+    }
+  };
+  new MutationObserver(sync).observe(document.body, { attributes: true, attributeFilter: ["data-feature", "data-page"] });
+  sync();
+}
+initTabbar();
 queueTabs.addEventListener("click", (e) => {
   const tab = (e.target as HTMLElement).closest<HTMLElement>("[data-view]");
   if (tab) setQueueView(tab.dataset.view === "all" ? "all" : "feed");
