@@ -3718,8 +3718,11 @@ body[data-feature="jarvis"]:not([data-page="settings"]) .jarvis-view {
 .jv-center > .chat .chat-compose { width: min(720px, calc(100% - 40px)); margin-inline: auto; }
 .jv-center > .chat .chat-requests { padding-inline: 0; }
 
-/* The overview: a plain card at the top of the chat. */
-.jv-overview { margin-bottom: 16px; }
+/* The overview: a plain card pinned over the chat, so it stays put while the thread scrolls.
+   A long write-up scrolls inside the card instead of pushing the chat down. */
+.jv-overview { flex: none; width: min(720px, calc(100% - 40px)); margin: 0 auto 8px; }
+.jv-overview .ov { margin: 0; }
+.jv-overview .ov-narrative { max-height: min(30vh, 220px); padding-right: 6px; overflow-y: auto; overscroll-behavior: contain; }
 .jv-overview:empty { display: none; }
 .jv-overview .ov { padding: 12px 16px 10px; border: 1px solid var(--stroke-card); border-radius: 12px; background: var(--card); }
 .jv-overview .ov::before { display: none; }
@@ -4132,7 +4135,9 @@ button.rr-main { cursor: pointer; }
   .jv-center > .chat .chat-requests,
   .jv-center > .chat .chat-tools,
   .jv-center > .chat .chat-compose,
+  .jv-overview,
   .jv-banner { width: calc(100% - 24px); }
+  .jv-overview .ov-narrative { max-height: min(24vh, 160px); }
   .jv-drawer,
   .jv-drawer[data-kind="task"] { width: 100%; max-width: 100%; border-left: 0; }
   .jv-grip { display: none; }

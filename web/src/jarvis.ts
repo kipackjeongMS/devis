@@ -1,6 +1,6 @@
 // The Workspace: Devis in the center, a quiet rail on the right, and a drawer over the center.
 //   Devis   — the Lead console, one persistent Copilot session that watches the Workspace and
-//             keeps its history. "Today so far" leads its thread.
+//             keeps its history. "Today so far" is pinned over its thread.
 //   Rail    — the day at a glance: Needs you, Tasks (with reviews), Communication, Meetings,
 //             the user's own to-dos and a quick note. Each section folds. The to-dos and note
 //             belong to no day; Devis and the workers can read them when asked. On a narrow
@@ -268,7 +268,7 @@ let railButton: HTMLButtonElement;
 let railBadge: HTMLElement;
 /** The needs line over Devis on a narrow window. */
 let needsBanner: HTMLElement;
-/** "Today so far", kept as the first thing in Devis's thread. */
+/** "Today so far", pinned over Devis's thread so it stays in view while the chat scrolls. */
 let overviewEl: HTMLElement;
 /** Devis's line under the hello: what it watches. */
 let leadWatch: HTMLElement;
@@ -533,7 +533,7 @@ function mount(): void {
   leadPane.steer.addEventListener("click", () => void sendToLead(leadPane.input.value, "now"));
   void loadModelCatalog().then(() => renderLeadPicker());
   overviewEl = el('<div class="jv-overview"></div>');
-  leadPane.log.prepend(overviewEl);
+  leadPane.log.before(overviewEl);
 
   railButton = q(".jv-railbtn");
   railBadge = q(".jv-badge");
@@ -847,8 +847,6 @@ function renderLead(): void {
     ),
   };
   paintChatLog(leadPane.log, spec);
-  // Today's overview leads the chat; a log repainted from scratch takes it back.
-  if (overviewEl.parentNode !== leadPane.log) leadPane.log.prepend(overviewEl);
   setComposer(leadPane, {
     placeholder: working ? "Queue a message for after this turn, or send it now…" : "Ask or direct Devis…",
     disabled: false,
