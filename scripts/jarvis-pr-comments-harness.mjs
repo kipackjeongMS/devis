@@ -284,7 +284,7 @@ advance(1);
 say(4, "Bo", "Or at least alias it?");
 assert.match(await call({ action: "propose", items: items() }), /^New comments came in while you read \(thread 4\)/);
 await call({ action: "threads" });
-assert.equal(await call({ action: "propose", summary: "Two fixes, a question, one no.", items: items() }), "Saved. The user reviews it in the task's Comments tab; nothing is posted or changed until they accept. End your turn now with one line.");
+assert.equal(await call({ action: "propose", summary: "Two fixes, a question, one no.", items: items() }), "Saved. The user reviews it in the task's Pull requests tab; nothing is posted or changed until they accept. End your turn now with one line.");
 assert.match(await call({ action: "propose", items: items() }), /only when the app asks you/, "one proposal per audit");
 await finishTurn();
 

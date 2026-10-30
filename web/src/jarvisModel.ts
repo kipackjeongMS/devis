@@ -447,7 +447,7 @@ export interface PrCommentsPr {
   apply: PrApplyState | null;
 }
 
-/** The task's Comments tab. */
+/** The comment side of the task's Pull requests tab. */
 export interface PrCommentsView {
   auto: boolean;
   prs: PrCommentsPr[];
@@ -490,7 +490,7 @@ export function prCommentsNeedText(s: PrCommentSummary): string {
 
 const REVIEW_RANK: Record<PrReviewState, number> = { error: 0, awaiting: 1, applying: 2, auditing: 3, collecting: 4, watching: 5 };
 
-/** The card chip and Comments tab badge: the PR review that matters most right now. */
+/** The card chip and Pull requests tab dot: the PR review that matters most right now. */
 export function prCommentsChip(list: PrCommentSummary[] | null | undefined): { text: string; tone: Tone } | null {
   const top = (list || []).slice().sort((a, b) => REVIEW_RANK[a.state] - REVIEW_RANK[b.state])[0];
   if (!top) return null;
@@ -595,7 +595,7 @@ export interface PrBuildsPr {
   apply: BuildApplyState | null;
 }
 
-/** The build side of the task's PR feedback tab. */
+/** The build side of the task's Pull requests tab. */
 export interface PrBuildsView {
   auto: boolean;
   prs: PrBuildsPr[];

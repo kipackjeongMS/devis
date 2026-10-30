@@ -1,7 +1,8 @@
-// The task sheet's PR feedback tab: per PR, its failed blocking builds (taskPrBuilds.ts) and
-// its review comments, the worker's plan for each one, and the user's call on it. Nothing is
-// posted, rerun or changed until the user accepts; replies and reruns go out now, approved
-// changes go to the worker.
+// The task sheet's Pull requests tab: every PR linked to the task, each with its state in Azure
+// DevOps and what it needs, then its failed blocking builds (taskPrBuilds.ts) and its review
+// comments, the worker's plan for each one, and the user's call on it. Nothing is posted, rerun
+// or changed until the user accepts; replies and reruns go out now, approved changes go to the
+// worker. The tab's head (freshness, refresh, Link PR) is jarvisTask.ts's.
 
 import { getJSON, postJSON } from "./api.js";
 import { esc } from "./util.js";
@@ -12,8 +13,12 @@ import { openActionDialog } from "./prActions.js";
 import { createBuildsPart } from "./taskPrBuilds.js";
 import {
   agoPhrase,
+  groupTaskPrs,
   prBuildsChip,
   prCommentsChip,
+  prSignals,
+  prSourceText,
+  prState,
   type PrBuildsPr,
   type PrBuildsView,
   type PrCommentProposal,
@@ -24,8 +29,17 @@ import {
   type PrProposalItem,
   type PrReviewState,
   type PrThreadStatus,
+  type TaskPr,
   type TodayTask,
 } from "./jarvisModel.js";
+
+/** The task's PRs as Azure DevOps last showed them; null while they're first read. */
+export interface LinkedPrs {
+  prs: TaskPr[] | null;
+  showFinished: boolean;
+  /** The task has a work item, so its PRs in Azure DevOps show here too. */
+  workItem: boolean;
+}
 
 export interface PrCommentsHost {
   taskId: string;
@@ -35,15 +49,20 @@ export interface PrCommentsHost {
   /** Reload Today now. */
   refresh(): Promise<void>;
   visible(): boolean;
+  linked(): LinkedPrs;
 }
 
 export interface PrCommentsPanel {
   sync(task: TodayTask): void;
   /** The tab was just selected. */
   shown(task: TodayTask): void;
+  /** The linked PRs changed: draw them again. */
+  repaint(): void;
   /** Escape inside the panel: true when it closed something of its own. */
   escape(target: HTMLElement): boolean;
 }
+
+type Feedback = { c?: PrCommentsPr; b?: PrBuildsPr };
 
 const svg = (name: IconName): string => icon(name);
 
@@ -222,7 +241,8 @@ export function createPrCommentsPanel(host: PrCommentsHost): PrCommentsPanel {
     host.badge.className = `tm-ltab-dot tm-prc-dot${chip ? ` tone-${chip.tone}` : ""}`;
     host.badge.hidden = !chip;
     host.badge.title = chips.map((c) => c.text).join("\n");
-    if (!host.visible()) return;
+    // Hidden, it still draws the PRs it has, so the tab opens on them; feedback loads when shown.
+    if (!host.visible()) return paint();
     const sig = JSON.stringify([
       (task.prComments || []).map((s) => [s.org, s.prId, s.state, s.at, s.attention, s.note]),
       (task.prBuilds || []).map((s) => [s.org, s.prId, s.state, s.at, s.attention, s.note, s.failed]),
@@ -249,8 +269,8 @@ export function createPrCommentsPanel(host: PrCommentsHost): PrCommentsPanel {
   // ---- paint ----------------------------------------------------------------------------
 
   /** Each PR once, with its comments and its builds: the comments' order, then any PR only the builds know. */
-  function merged(): { c?: PrCommentsPr; b?: PrBuildsPr }[] {
-    const rows = new Map<string, { c?: PrCommentsPr; b?: PrBuildsPr }>();
+  function merged(): Feedback[] {
+    const rows = new Map<string, Feedback>();
     for (const c of view?.prs || []) rows.set(prKey(c), { c });
     for (const b of bview?.prs || []) {
       const row = rows.get(prKey(b));
@@ -263,40 +283,76 @@ export function createPrCommentsPanel(host: PrCommentsHost): PrCommentsPanel {
   function paint(): void {
     const minute = Math.floor(Date.now() / 60_000);
     const mine = [...drafts].filter(([k]) => k.startsWith(`${host.taskId}|`));
-    const sig = JSON.stringify([view, bview, error, berror, workers, open, mine, builds.drafts(), minute]);
+    const linked = host.linked();
+    const sig = JSON.stringify([view, bview, error, berror, workers, open, mine, builds.drafts(), linked, minute]);
     if (sig === paintedSig) return;
     paintedSig = sig;
-    if (!view && !bview) {
-      const err = error || berror;
-      patchHtml(host.panel, err ? `<p class="tm-muted err">${esc(err)}</p>` : `<p class="tm-muted"><span class="spinner"></span> Loading PR feedback…</p>`);
+    const now = Date.now();
+    const loaded = !!(view || bview);
+    const feedback = merged();
+    const byKey = new Map(feedback.map((f) => [prKey((f.c || f.b)!), f]));
+    // Open PRs first (needing attention on top), then finished ones still carrying feedback,
+    // then any PR only the feedback knows; the rest of the finished ones fold away.
+    const { open: openPrs, finished } = groupTaskPrs(linked.prs || []);
+    const seen = new Set<string>();
+    const cards: string[] = [];
+    const folded: TaskPr[] = [];
+    for (const p of openPrs) {
+      seen.add(prKey(p));
+      cards.push(cardHtml(p, byKey.get(prKey(p)), now));
+    }
+    for (const p of finished) {
+      seen.add(prKey(p));
+      const f = byKey.get(prKey(p));
+      if (f) cards.push(cardHtml(p, f, now));
+      else folded.push(p);
+    }
+    for (const f of feedback) if (!seen.has(prKey((f.c || f.b)!))) cards.push(cardHtml(undefined, f, now));
+    const any = cards.length + folded.length > 0;
+
+    if (!linked.prs && !cards.length) {
+      patchHtml(host.panel, `<p class="tm-muted" data-key="loading"><span class="spinner"></span> Loading pull requests…</p>`);
       return;
     }
-    const rows = merged();
-    const auto = !!(view?.auto ?? bview?.auto);
     const parts: string[] = [];
     if (error) parts.push(`<p class="tm-muted err" data-key="err">Couldn't read the comments: ${esc(error)}</p>`);
     if (berror) parts.push(`<p class="tm-muted err" data-key="berr">Couldn't read the builds: ${esc(berror)}</p>`);
-    if (!open)
+    if (!open && any)
       parts.push(
         `<p class="tv-note" data-key="done">${svg("warning")}<span>The task is done, so comments and builds on its PRs aren't reviewed. Reopen it to start again.</span></p>`
       );
-    else if (!workers && rows.length)
+    else if (open && !workers && feedback.length)
       parts.push(
         `<p class="tv-note" data-key="noworker">${svg("warning")}<span>Start a worker on this task. It reviews the comments and failed builds and makes the fixes you approve.</span></p>`
       );
-    if (rows.length) parts.push(...rows.map((r) => prHtml(r.c, r.b)));
-    else parts.push(emptyHtml());
-    parts.push(
-      `<label class="tv-opt tv-auto" data-key="auto"><input type="checkbox" data-copt="auto"${auto ? " checked" : ""}><span>For every task: have the worker review new comments once reviewers have been quiet for 10 minutes, and failed blocking builds once they all finish, then propose what to do</span></label>`
-    );
+    if (!loaded && !error && !berror && cards.length)
+      parts.push(`<p class="tm-muted" data-key="reading"><span class="spinner"></span> Reading comments and builds…</p>`);
+    if (!any) parts.push(emptyHtml(linked.workItem));
+    else if (!cards.length) parts.push(`<p class="tm-muted" data-key="none-open">No open pull requests.</p>`);
+    parts.push(...cards);
+    if (folded.length) {
+      parts.push(
+        `<button type="button" class="tm-pr-fold" data-key="fold" data-act="pr-finished" aria-expanded="${linked.showFinished}">${svg("chevron")}<span>${folded.length} finished</span></button>`
+      );
+      if (linked.showFinished) parts.push(`<div class="tpc-finished" data-key="finished">${folded.map((p) => cardHtml(p, undefined, now)).join("")}</div>`);
+    }
+    if (loaded) {
+      const auto = !!(view?.auto ?? bview?.auto);
+      parts.push(
+        `<label class="tv-opt tv-auto" data-key="auto"><input type="checkbox" data-copt="auto"${auto ? " checked" : ""}><span>For every task: have the worker review new comments once reviewers have been quiet for 10 minutes, and failed blocking builds once they all finish, then propose what to do</span></label>`
+      );
+    }
     patchHtml(host.panel, parts.join(""));
   }
 
-  function emptyHtml(): string {
+  function emptyHtml(workItem: boolean): string {
     return `
-      <section class="tv-card tv-empty" data-key="empty" aria-label="PR feedback">
-        <p class="tv-lead">No active PRs of yours on this task.</p>
-        <p class="tm-muted">The worker watches the PRs you opened and linked to this task. When reviewers comment or a blocking build fails, it reads the comments, the build logs and the code, and proposes what to do. You decide here. Nothing is posted, rerun or changed until you accept.</p>
+      <section class="tv-card tv-empty" data-key="empty" aria-label="Pull requests">
+        <p class="tv-lead">No pull requests yet.</p>
+        <p class="tm-muted tm-dv-empty">${
+          workItem ? "PRs linked to the work item in Azure DevOps show here, and so do the ones this task's workers open." : "PRs this task's workers open show here."
+        } You can also link one yourself.</p>
+        <p class="tm-muted">When reviewers comment on one of yours or a blocking build fails, the worker reads the comments, the build logs and the code, and proposes what to do. You decide here. Nothing is posted, rerun or changed until you accept.</p>
       </section>`;
   }
 
@@ -305,31 +361,82 @@ export function createPrCommentsPanel(host: PrCommentsHost): PrCommentsPanel {
     return `<button type="button" class="btn sm${primary ? " accent" : " ghost"}" data-cact="audit"${off ? ` disabled title="${off}"` : ""}>${svg("sparkle")}<span>${label}</span></button>`;
   }
 
-  function prHtml(c?: PrCommentsPr, b?: PrBuildsPr): string {
-    const pr = (c || b)!;
-    const split = !!b && (builds.shows(b) || !c);
-    const head = split ? null : STATE[c!.state];
+  /**
+   * One PR: its state in Azure DevOps and what it needs, then its failed builds and its review
+   * comments. `p` is the PR as linked to the task; `f` is what the worker tracks on it. Either
+   * can be missing: a PR nobody's watching, or one the worker watches that isn't linked yet.
+   */
+  function cardHtml(p: TaskPr | undefined, f: Feedback | undefined, now: number): string {
+    const c = f?.c;
+    const b = f?.b;
+    const fb = c || b;
+    const org = p?.org ?? fb!.org;
+    const prId = p?.prId ?? fb!.prId;
+    const s = p?.snapshot ?? null;
+    const title = s?.title || fb?.title || `Pull request ${prId}`;
+    const url = s?.url || fb?.url || "";
+    const meta = s
+      ? [
+          s.repo,
+          `PR ${prId}`,
+          s.sourceRef && s.targetRef ? `${shortBranch(s.sourceRef)} → ${shortBranch(s.targetRef)}` : "",
+          s.status === "completed" && s.closed
+            ? `merged ${agoPhrase(s.closed, now)}`
+            : s.status === "abandoned" && s.closed
+              ? `abandoned ${agoPhrase(s.closed, now)}`
+              : s.created
+                ? `opened ${agoPhrase(s.created, now)}${s.author ? ` by ${s.author}` : ""}`
+                : "",
+        ].filter(Boolean)
+      : fb
+        ? [fb.repo, `PR ${prId}`, shortBranch(fb.branch)].filter(Boolean)
+        : [`${org} · PR ${prId}`];
+    const state = p ? prState(p) : null;
+    const signals = p
+      ? prSignals(p)
+          .map((sig) => `<span class="tm-sig tone-${sig.tone}">${esc(sig.text)}</span>`)
+          .join("")
+      : "";
+    const canOpen = !!(s?.project && s.repoId);
     const worker = c?.worker || b?.worker;
-    const meta = [pr.repo, shortBranch(pr.branch), worker ? `Worker: ${worker}` : ""].filter(Boolean).join(" · ");
+    const source = [p ? prSourceText(p.source) : "", worker ? `Worker: ${worker}` : ""].filter(Boolean).join(" · ");
+    const unlink = !!p && p.source !== "workitem";
     const part = (key: string, label: string, st: { label: string; tone: string }, body: string): string => `
       <div class="tpc-part" data-key="${key}">
         <div class="tpc-part-h"><p class="tv-sub">${label}</p><span class="tm-pr-state tone-${st.tone}">${st.label}</span></div>
         ${body}
       </div>`;
-    let body = c ? bodyHtml(c) : "";
-    if (split) {
-      const bbody = builds.shows(b!) ? builds.html(b!) : `<p class="tpc-line tm-muted">No failed blocking builds.</p>`;
-      body = part("builds", "Builds", builds.state(b!), bbody) + (c ? part("comments", "Comments", STATE[c.state], body) : "");
+    let parts = "";
+    if (b && (builds.shows(b) || !c)) {
+      parts += part("builds", "Builds", builds.state(b), builds.shows(b) ? builds.html(b) : `<p class="tpc-line tm-muted">No failed blocking builds.</p>`);
     }
+    if (c) parts += part("comments", "Comments", STATE[c.state], bodyHtml(c));
+    const key = esc(JSON.stringify([org, prId]));
     return `
-      <section class="tv-card tpc-pr" data-key="pr:${esc(prKey(pr))}" data-org="${esc(pr.org)}" data-pr="${pr.prId}" aria-label="PR ${pr.prId}">
-        <div class="tm-dv-bar">
-          <h4 class="tm-dv-h tpc-title" title="${esc(pr.title)}">PR ${pr.prId} · ${esc(pr.title)}</h4>
-          ${head ? `<span class="tm-pr-state tone-${head.tone}">${head.label}</span>` : ""}
-          ${pr.url ? `<a class="btn sm ghost" href="${esc(pr.url)}" target="_blank" rel="noopener">${svg("external")}<span>Open</span></a>` : ""}
+      <section class="tv-card tpc-pr" data-key="pr:${esc(prKey({ org, prId }))}" data-pr-key="${key}" data-org="${esc(org)}" data-pr="${prId}" aria-label="PR ${prId}">
+        <div class="tpc-status">
+          <div class="tm-pr-top">
+            ${state ? `<span class="tm-pr-state tone-${state.tone}">${esc(state.label)}</span>` : ""}
+            ${
+              canOpen
+                ? `<button type="button" class="tm-pr-title" data-act="pr-open" title="Open in the app">${esc(title)}</button>`
+                : `<span class="tm-pr-title">${esc(title)}</span>`
+            }
+            ${url ? `<a class="icon-btn tm-pr-ext" data-act="pr-ext" href="${esc(url)}" target="_blank" rel="noopener" title="Open in Azure DevOps" aria-label="Open PR ${prId} in Azure DevOps">${svg("external")}</a>` : ""}
+          </div>
+          <p class="tm-pr-meta" title="${esc(meta.join(" · "))}">${esc(meta.join(" · "))}</p>
+          ${signals ? `<div class="tm-pr-signals">${signals}</div>` : ""}
+          ${p?.error ? `<p class="tm-muted err">${esc(p.error)}</p>` : ""}
+          ${
+            source || unlink
+              ? `<div class="tm-pr-foot">
+                  <span class="tm-pr-src">${esc(source)}</span>
+                  ${unlink ? `<button type="button" class="btn sm ghost tm-pr-unlink" data-act="pr-unlink" aria-label="Unlink PR ${prId}">Unlink</button>` : ""}
+                </div>`
+              : ""
+          }
         </div>
-        ${meta ? `<p class="tv-block-meta">${esc(meta)}</p>` : ""}
-        ${body}
+        ${parts}
       </section>`;
   }
 
@@ -677,5 +784,5 @@ export function createPrCommentsPanel(host: PrCommentsHost): PrCommentsPanel {
     await Promise.all([load(), host.refresh()]);
   }
 
-  return { sync, shown, escape };
+  return { sync, shown, repaint: paint, escape };
 }

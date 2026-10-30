@@ -41,14 +41,10 @@ import {
   agoPhrase,
   artifactRole,
   formatBytes,
-  groupTaskPrs,
   isMarkdownName,
   mergeStatuses,
   newArtifactText,
   nextArtifactName,
-  prSignals,
-  prSourceText,
-  prState,
   recapLine,
   statusDays,
   taskMeta,
@@ -242,8 +238,14 @@ export function pruneTaskModalState(taskIds: Set<string>, sessionIds: Set<string
   for (const id of [...leftTabByTask.keys()]) if (!taskIds.has(id)) leftTabByTask.delete(id);
 }
 
-export type LeftTab = "status" | "devops" | "validation" | "comments" | "artifacts";
-const LEFT_TABS: readonly LeftTab[] = ["status", "devops", "validation", "comments", "artifacts"];
+export type LeftTab = "status" | "prs" | "validation" | "artifacts";
+const LEFT_TABS: readonly LeftTab[] = ["status", "prs", "validation", "artifacts"];
+
+/** A tab asked for by name. The old Azure DevOps and PR feedback tabs are now Pull requests. */
+function leftTabOf(tab: string | undefined): LeftTab | undefined {
+  if (tab === "devops" || tab === "comments") return "prs";
+  return LEFT_TABS.find((t) => t === tab);
+}
 
 interface Devops {
   /** The task's PRs as last read; Today's copy until the first read. */
@@ -324,12 +326,12 @@ interface Modal {
   statusList: HTMLElement;
   statusInput: HTMLInputElement;
   timeline: Timeline;
+  /** The task's facts atop Status: work item, service, folder, worktrees, description. */
+  facts: HTMLElement;
   dvCount: HTMLElement;
-  dvWi: HTMLElement;
   dvHead: HTMLElement;
   dvLink: HTMLFormElement;
   dvLinkInput: HTMLInputElement;
-  dvList: HTMLElement;
   devops: Devops;
   artsEl: HTMLElement;
   arts: Arts;
@@ -406,27 +408,26 @@ export function openTaskModal(taskId: string, host: TaskModalHost, tab?: LeftTab
       <div class="tm-body" data-side="left">
         <section class="tm-left" aria-label="Task">
           <div class="tm-ltabs" role="tablist" aria-label="Task">
-            ${tabButton("status", "Status")}${tabButton("devops", "Azure DevOps", '<span class="tm-ltab-count tm-dv-count"></span>')}${tabButton("validation", "Validation", '<span class="tm-ltab-dot tm-val-dot" hidden></span>')}${tabButton("comments", "PR feedback", '<span class="tm-ltab-dot tm-prc-dot" hidden></span>')}${tabButton("artifacts", "Artifacts", '<span class="tm-ltab-count tm-arts-count"></span>')}
+            ${tabButton("status", "Status")}${tabButton("prs", "Pull requests", '<span class="tm-ltab-count tm-dv-count"></span><span class="tm-ltab-dot tm-prc-dot" hidden></span>')}${tabButton("validation", "Validation", '<span class="tm-ltab-dot tm-val-dot" hidden></span>')}${tabButton("artifacts", "Artifacts", '<span class="tm-ltab-count tm-arts-count"></span>')}
           </div>
           <div class="tm-lpanel" role="tabpanel" id="tm-lp-status" aria-labelledby="tm-lt-status" hidden>
+            <div class="tm-facts"></div>
             <form class="tl-post tm-status-form" data-form="status">
               <input type="text" maxlength="160" placeholder="Post a status… (Enter to post)" aria-label="Post a status" autocomplete="off">
               <button type="submit" class="btn sm">Post</button>
             </form>
             <div class="tm-status-list"></div>
           </div>
-          <div class="tm-lpanel tm-dv" role="tabpanel" id="tm-lp-devops" aria-labelledby="tm-lt-devops" hidden>
-            <div class="tm-dv-wi"></div>
+          <div class="tm-lpanel tm-dv" role="tabpanel" id="tm-lp-prs" aria-labelledby="tm-lt-prs" hidden>
             <div class="tm-dv-head"></div>
             <form class="tm-dv-link" data-form="pr-link" hidden>
               <input type="text" spellcheck="false" autocomplete="off" placeholder="Paste a pull request link" aria-label="Pull request link">
               <button type="submit" class="btn sm accent">Link</button>
               <button type="button" class="btn sm ghost" data-act="pr-link-cancel">Cancel</button>
             </form>
-            <div class="tm-dv-list"></div>
+            <div class="tm-prs-list"></div>
           </div>
           <div class="tm-lpanel tm-val" role="tabpanel" id="tm-lp-validation" aria-labelledby="tm-lt-validation" hidden></div>
-          <div class="tm-lpanel tm-prc" role="tabpanel" id="tm-lp-comments" aria-labelledby="tm-lt-comments" hidden></div>
           <div class="tm-lpanel tm-arts" role="tabpanel" id="tm-lp-artifacts" aria-labelledby="tm-lt-artifacts" hidden></div>
           <div class="tm-split" role="separator" aria-orientation="vertical" tabindex="0" aria-label="Resize the task and chat panels" title="Drag to resize · double-click to reset"></div>
         </section>
@@ -447,20 +448,19 @@ export function openTaskModal(taskId: string, host: TaskModalHost, tab?: LeftTab
     dialog: q(".tm"),
     head: q(".tm-head"),
     ltabs: q(".tm-ltabs"),
-    panels: { status: q("#tm-lp-status"), devops: q("#tm-lp-devops"),     validation: q("#tm-lp-validation"), comments: q("#tm-lp-comments"), artifacts: q("#tm-lp-artifacts") },
+    panels: { status: q("#tm-lp-status"), prs: q("#tm-lp-prs"), validation: q("#tm-lp-validation"), artifacts: q("#tm-lp-artifacts") },
     leftTab: "status",
     validation: null,
-        prComments: null,
+    prComments: null,
     artsCount: q(".tm-arts-count"),
     statusList: q(".tm-status-list"),
     statusInput: q(".tm-status-form input"),
     timeline: { items: null, hasMore: false, pagedBack: false, error: "", sig: "", token: 0 },
+    facts: q(".tm-facts"),
     dvCount: q(".tm-dv-count"),
-    dvWi: q(".tm-dv-wi"),
     dvHead: q(".tm-dv-head"),
     dvLink: q(".tm-dv-link"),
     dvLinkInput: q(".tm-dv-link input"),
-    dvList: q(".tm-dv-list"),
     devops: { prs: task.prs ? [...task.prs] : null, syncing: false, syncedAt: null, error: "", token: 0, loadedAt: 0, todaySig: "", showFinished: false },
     artsEl: q(".tm-arts"),
     arts: {
@@ -530,12 +530,15 @@ export function openTaskModal(taskId: string, host: TaskModalHost, tab?: LeftTab
     close: () => modal === m && dismiss(),
     visible: () => modal === m && m.leftTab === "validation",
   });
+  // The Pull requests tab: the head and Link PR are drawn here; the list, each PR with its
+  // comments and builds, is the panel's.
   m.prComments = createPrCommentsPanel({
     taskId,
-    panel: m.panels.comments,
+    panel: q(".tm-prs-list"),
     badge: q(".tm-prc-dot"),
     refresh: () => m.host.refresh(),
-    visible: () => modal === m && m.leftTab === "comments",
+    visible: () => modal === m && m.leftTab === "prs",
+    linked: () => ({ prs: m.devops.prs, showFinished: m.devops.showFinished, workItem: !!m.host.task(taskId)?.workItem }),
   });
   m.sessionId = pickWorker(task);
   m.input.value = (m.sessionId && draftsBySession.get(m.sessionId)) || "";
@@ -560,15 +563,16 @@ export function openTaskModal(taskId: string, host: TaskModalHost, tab?: LeftTab
     });
     document.addEventListener("keydown", onDocumentKey, true);
   }
-  selectLeftTab(tab || leftTabByTask.get(taskId) || "status");
+  const asked = leftTabOf(tab);
+  selectLeftTab(asked || leftTabByTask.get(taskId) || "status");
   // Asked for a worker's chat on a narrow surface: show the chat side.
-  setSide(tab ? "left" : sideByTask.get(taskId) || "left");
+  setSide(asked ? "left" : sideByTask.get(taskId) || "left");
   render();
   autoSize(m.input);
   requestAnimationFrame(() => {
     if (modal !== m) return;
     const chatShown = m.dialog.querySelector<HTMLElement>(".tm-body")!.dataset.side === "chat" || !narrowTask();
-    (tab ? m.ltabs.querySelector<HTMLElement>(`[data-ltab="${tab}"]`)! : chatShown && m.sessionId && !m.input.disabled ? m.input : m.dialog).focus();
+    (asked ? m.ltabs.querySelector<HTMLElement>(`[data-ltab="${asked}"]`)! : chatShown && m.sessionId && !m.input.disabled ? m.input : m.dialog).focus();
   });
 }
 
@@ -804,14 +808,14 @@ function render(): void {
   syncTimeline(task);
   paintTimeline(now);
   region(
-    "dv-wi",
+    "facts",
     JSON.stringify([task.workItem, task.org, task.project, task.createdAt, task.description, task.folder, task.workers.map((w) => [w.label, w.worktrees])]),
-    () => renderWorkItem(task)
+    () => renderFacts(task)
   );
   syncDevops(task);
+  m.prComments?.sync(task);
   paintDevops(now);
   m.validation?.sync(task);
-  m.prComments?.sync(task);
   syncArtifacts(task);
   paintArts();
   region("tabs", JSON.stringify([task.workers.map((w) => [w.sessionId, w.label, workerState(shown(w))]), m.sessionId, task.status]), () => renderTabs(task));
@@ -941,8 +945,8 @@ function paintTimeline(now: number): void {
   });
 }
 
-/** The work item behind the task (or that it's a custom task), its service and when it was added. */
-function renderWorkItem(task: TodayTask): void {
+/** Atop Status: the work item behind the task (or that it's a custom task), its service, when it was added, where it works and what it's for. */
+function renderFacts(task: TodayTask): void {
   const rows: string[] = [];
   const wi = task.workItem;
   if (wi) {
@@ -974,7 +978,7 @@ function renderWorkItem(task: TodayTask): void {
   if (task.description) {
     rows.push(`<div class="tm-desc"><span class="tm-desc-h">Description</span><div class="tm-desc-body md">${renderMarkdown(task.description)}</div></div>`);
   }
-  modal!.dvWi.innerHTML = rows.join("");
+  modal!.facts.innerHTML = rows.join("");
 }
 
 // ---- the task's pull requests -------------------------------------------------------
@@ -1040,85 +1044,15 @@ function paintDevops(now: number): void {
       ${d.error ? `<p class="tm-muted err">${esc(d.error)}</p>` : ""}`
     );
   });
-  region("dv-list", JSON.stringify([prs, d.showFinished, minute]), () => {
-    if (!prs) {
-      patchHtml(m.dvList, `<p class="tm-muted"><span class="spinner"></span> Loading pull requests…</p>`);
-      return;
-    }
-    if (!prs.length) {
-      const task = currentTask();
-      patchHtml(
-        m.dvList,
-        `<p class="tm-muted tm-dv-empty">No pull requests yet. ${
-          task?.workItem ? "PRs linked to the work item in Azure DevOps show here, and so do the ones" : "The ones"
-        } this task's workers open. You can also link one yourself.</p>`
-      );
-      return;
-    }
-    const { open, finished } = groupTaskPrs(prs);
-    const rows = (list: TaskPr[]) => list.map((p) => prRowHtml(p, now)).join("");
-    patchHtml(
-      m.dvList,
-      `
-      ${open.length ? `<ul class="tm-pr-list">${rows(open)}</ul>` : `<p class="tm-muted">No open pull requests.</p>`}
-      ${
-        finished.length
-          ? `<button type="button" class="tm-pr-fold" data-act="pr-finished" aria-expanded="${d.showFinished}">${svg("chevron")}<span>${finished.length} finished</span></button>
-             ${d.showFinished ? `<ul class="tm-pr-list is-finished">${rows(finished)}</ul>` : ""}`
-          : ""
-      }`
-    );
-  });
-}
-
-function prRowHtml(p: TaskPr, now: number): string {
-  const s = p.snapshot;
-  const state = prState(p);
-  const key = esc(JSON.stringify([p.org, p.prId]));
-  const title = s?.title || `Pull request ${p.prId}`;
-  const meta = s
-    ? [
-        s.repo,
-        `PR ${p.prId}`,
-        s.sourceRef && s.targetRef ? `${s.sourceRef} → ${s.targetRef}` : "",
-        s.status === "completed" && s.closed
-          ? `merged ${agoPhrase(s.closed, now)}`
-          : s.status === "abandoned" && s.closed
-            ? `abandoned ${agoPhrase(s.closed, now)}`
-            : s.created
-              ? `opened ${agoPhrase(s.created, now)}${s.author ? ` by ${s.author}` : ""}`
-              : "",
-      ].filter(Boolean)
-    : [`${p.org} · PR ${p.prId}`];
-  const signals = prSignals(p)
-    .map((sig) => `<span class="tm-sig tone-${sig.tone}">${esc(sig.text)}</span>`)
-    .join("");
-  const canOpen = !!(s?.project && s.repoId);
-  return `<li class="tm-pr" data-key="pr:${key}" data-pr-key="${key}">
-      <div class="tm-pr-top">
-        <span class="tm-pr-state tone-${state.tone}">${esc(state.label)}</span>
-        ${
-          canOpen
-            ? `<button type="button" class="tm-pr-title" data-act="pr-open" title="Open in the app">${esc(title)}</button>`
-            : `<span class="tm-pr-title">${esc(title)}</span>`
-        }
-        ${s?.url ? `<a class="icon-btn tm-pr-ext" data-act="pr-ext" href="${esc(s.url)}" target="_blank" rel="noopener" title="Open in Azure DevOps" aria-label="Open PR ${p.prId} in Azure DevOps">${svg("external")}</a>` : ""}
-      </div>
-      <p class="tm-pr-meta" title="${esc(meta.join(" · "))}">${esc(meta.join(" · "))}</p>
-      ${signals ? `<div class="tm-pr-signals">${signals}</div>` : ""}
-      ${p.error ? `<p class="tm-muted err">${esc(p.error)}</p>` : ""}
-      <div class="tm-pr-foot">
-        <span class="tm-pr-src">${esc(prSourceText(p.source))}</span>
-        ${p.source === "workitem" ? "" : `<button type="button" class="btn sm ghost tm-pr-unlink" data-act="pr-unlink" aria-label="Unlink PR ${p.prId}">Unlink</button>`}
-      </div>
-    </li>`;
+  // The list (each PR's state with its comments and builds) is the PR feedback panel's to draw.
+  region("dv-list", JSON.stringify([prs, d.showFinished, minute]), () => m.prComments?.repaint());
 }
 
 function prOfNode(node: HTMLElement): TaskPr | undefined {
   const raw = node.closest<HTMLElement>("[data-pr-key]")?.dataset.prKey;
   if (!raw || !modal?.devops.prs) return undefined;
   const [org, prId] = JSON.parse(raw) as [string, number];
-  return modal.devops.prs.find((p) => p.org === org && p.prId === prId);
+  return modal.devops.prs.find((p) => p.org.toLowerCase() === org.toLowerCase() && p.prId === prId);
 }
 
 function showLinkForm(show: boolean): void {
@@ -1190,7 +1124,7 @@ function selectLeftTab(tab: LeftTab, focus = false): void {
   if (tab === "artifacts" && m.arts.mode === "view") void loadArtifacts();
   const task = currentTask();
   if (tab === "validation" && task) m.validation?.shown(task);
-  if (tab === "comments" && task) m.prComments?.shown(task);
+  if (tab === "prs" && task) m.prComments?.shown(task);
 }
 
 /** Arrow keys, Home and End move between the left tabs. */

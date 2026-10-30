@@ -3,7 +3,7 @@
 // Only PRs the user opened, linked to an open task with a worker, are watched. When reviewers
 // go quiet for a while, the PR's worker gets a read-only turn to audit the new threads and
 // propose, per thread, a fix, a choice of fixes, a question or no change, each with a reply.
-// Nothing reaches the PR or the code until the user accepts it in the task's Comments tab:
+// Nothing reaches the PR or the code until the user accepts it in the task's Pull requests tab:
 // replies go out then, and approved fixes go back to the worker, which changes, checks, pushes
 // and reports. The app then posts the replies and resolves the threads, if the commit stayed
 // inside the approved files.
@@ -684,7 +684,7 @@ async function proposeAction(worker: JarvisWorker, a: { prId?: unknown; summary?
         taskId: worker.taskId,
         sessionId: worker.sessionId,
     });
-    return "Saved. The user reviews it in the task's Comments tab; nothing is posted or changed until they accept. End your turn now with one line.";
+    return "Saved. The user reviews it in the task's Pull requests tab; nothing is posted or changed until they accept. End your turn now with one line.";
 }
 
 const countText = (items: Array<unknown>) => `${items.length} review comment${items.length === 1 ? "" : "s"}`;
@@ -1353,7 +1353,7 @@ export interface PrCommentsView {
     }>;
 }
 
-/** The task's Comments tab: every watched PR, with its proposal and what's being applied. */
+/** The comment side of the task's Pull requests tab: every watched PR, with its proposal and what's being applied. */
 export async function prCommentsView(taskIdValue: unknown): Promise<PrCommentsView> {
     const task = await requireTask(taskIdValue);
     const labels = new Map((await listWorkers(task.id)).map((w) => [w.sessionId, w.label]));

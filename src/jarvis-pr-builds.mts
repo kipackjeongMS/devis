@@ -4,7 +4,7 @@
 // Once every blocking build on the PR's newest commit has finished and at least one failed, the
 // PR's worker gets a read-only turn to read the failures and propose, per build, a fix (or a
 // choice of fixes), a rerun when it isn't the PR's fault, or that it can't tell. Nothing changes
-// until the user accepts it in the task's PR feedback tab: reruns are queued then, approved fixes
+// until the user accepts it in the task's Pull requests tab: reruns are queued then, approved fixes
 // go back to the worker, which changes, checks, pushes and reports; the push reruns the builds.
 // A commit gets two reviews at most; after that the user decides.
 
@@ -697,7 +697,7 @@ async function proposeAction(worker: JarvisWorker, a: { prId?: unknown; summary?
         `${worker.label} proposed how to handle ${plural(items.length, "failed build")} on !${pr.prId}${task ? ` (${describeTask(task)})` : ""}`,
         { taskId: worker.taskId, sessionId: worker.sessionId },
     );
-    return "Saved. The user reviews it in the task's PR feedback tab; nothing is rerun or changed until they accept. End your turn now with one line.";
+    return "Saved. The user reviews it in the task's Pull requests tab; nothing is rerun or changed until they accept. End your turn now with one line.";
 }
 
 // ---- the user's decisions -----------------------------------------------------------------------
@@ -1348,7 +1348,7 @@ export interface PrBuildsView {
     }>;
 }
 
-/** The task's PR feedback tab, build side: every watched PR with its failed builds, proposal and fix under way. */
+/** The build side of the task's Pull requests tab: every watched PR with its failed builds, proposal and fix under way. */
 export async function prBuildsView(taskIdValue: unknown): Promise<PrBuildsView> {
     const task = await requireTask(taskIdValue);
     const labels = new Map((await listWorkers(task.id)).map((w) => [w.sessionId, w.label]));

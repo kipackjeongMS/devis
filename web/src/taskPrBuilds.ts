@@ -1,4 +1,4 @@
-// The build side of the task's PR feedback tab: a PR's failed blocking builds, the worker's
+// The build side of the task's Pull requests tab: a PR's failed blocking builds, the worker's
 // plan for each one (a fix or a rerun), and the user's call on it. Nothing reruns and no code
 // changes until the user accepts; reruns go out now, approved fixes go to the worker.
 

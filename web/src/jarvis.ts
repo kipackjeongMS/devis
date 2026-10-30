@@ -2296,7 +2296,7 @@ function taskMenu(task: TodayTask, anchor: HTMLElement): void {
     { label: "Open", icon: "panel", run: open() },
     { label: "Artifacts", icon: "file", run: open("artifacts") },
     { label: "Status updates", icon: "clock", run: open("status") },
-    { label: "Pull requests", icon: "pullRequest", run: open("devops") },
+    { label: "Pull requests", icon: "pullRequest", run: open("prs") },
     { label: "Validation", icon: "flow", run: open("validation") },
   ];
   if (taskNeeds([task]).length) entries.unshift({ label: "Show what it needs", icon: "warning", run: () => jumpToNeed(task.id) });
@@ -2345,7 +2345,7 @@ async function act(button: HTMLElement | null, run: () => Promise<unknown>): Pro
 }
 
 /** The task drawer's tab each of a task row's actions opens. */
-const TASK_TAB: Record<string, LeftTab | undefined> = { artifacts: "artifacts", "all-updates": "status", "task-prs": "devops", "task-validation": "validation", "task-comments": "comments" };
+const TASK_TAB: Record<string, LeftTab | undefined> = { artifacts: "artifacts", "all-updates": "status", "task-prs": "prs", "task-validation": "validation", "task-comments": "prs" };
 
 /** After picking a conversation or meeting, the keyboard follows it to the detail. */
 function focusDetail(): void {

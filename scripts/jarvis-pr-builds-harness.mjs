@@ -334,7 +334,7 @@ assert.equal(
         ],
         "One real break, one flaky agent.",
     ),
-    "Saved. The user reviews it in the task's PR feedback tab; nothing is rerun or changed until they accept. End your turn now with one line.",
+    "Saved. The user reviews it in the task's Pull requests tab; nothing is rerun or changed until they accept. End your turn now with one line.",
 );
 assert.match(await propose([fixItem(), rerunItem()]), /^You propose only when the app asks you/, "one proposal per review");
 await finishTurn();

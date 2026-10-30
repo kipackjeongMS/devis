@@ -4627,7 +4627,7 @@ button.rr-main { cursor: pointer; }
   white-space: nowrap;
 }
 .task-workers { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-/* A task's pull requests on its card: state and what it needs, opens the task's Azure DevOps tab. */
+/* A task's pull requests on its card: state and what it needs, opens the task's Pull requests tab. */
 .task-prs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .pr-chip {
   display: inline-flex;
@@ -5095,8 +5095,9 @@ select.jv-field { width: 100%; }
 /* While dragging, text doesn't select and the cursor stays the resize one over either panel. */
 .tm-body.splitting { cursor: col-resize; user-select: none; }
 .tm-body.splitting * { cursor: col-resize; }
-.tm-ltabs { display: flex; flex: none; gap: 2px; padding: 6px 14px 0 14px; border-bottom: 1px solid var(--divider); }
+.tm-ltabs { display: flex; flex: none; gap: 2px; padding: 6px 14px 0 14px; overflow-x: auto; border-bottom: 1px solid var(--divider); scrollbar-width: none; }
 .tm-ltab {
+  flex: none;
   height: 36px;
   padding: 0 10px;
   border: 0;
@@ -5104,7 +5105,13 @@ select.jv-field { width: 100%; }
   background: transparent;
   color: var(--text-3);
   font: 600 var(--fs-caption)/18px var(--font);
+  white-space: nowrap;
   transition: color var(--t-fast) linear, background var(--t-fast) linear, box-shadow var(--t-fast) linear;
+}
+.tm-ltab:focus-visible { outline-offset: -2px; }
+@media (max-width: 480px) {
+  .tm-ltabs { padding: 6px 8px 0; }
+  .tm-ltab { padding: 0 8px; }
 }
 .tm-ltab:hover { color: var(--text-1); background: var(--fill-hover); }
 .tm-ltab[aria-selected="true"] { color: var(--text-1); box-shadow: inset 0 -2px 0 var(--accent); }
@@ -5156,8 +5163,11 @@ select.jv-field { width: 100%; }
 .tm-note-text { width: 100%; min-height: 260px; }
 .tm-note-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
 
-/* Azure DevOps: the work item, then the task's pull requests. */
-.tm-dv-wi { padding-bottom: 12px; border-bottom: 1px solid var(--divider); }
+/* Status opens on the task's facts (work item, service, folder, worktrees), then the timeline. */
+.tm-facts { margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--divider); }
+.tm-facts:empty { display: none; }
+/* Pull requests: the refresh bar and Link PR, then a card per PR. */
+.tm-dv-head > .tm-dv-bar { margin-top: 0; }
 .tm-kv-muted { color: var(--text-3) !important; }
 .tm-dv-bar { display: flex; align-items: center; gap: 8px; min-height: 30px; margin: 12px 0 6px; }
 .tm-dv-h { flex: none; margin: 0; color: var(--text-3); font: 600 var(--fs-readout)/16px var(--mono); letter-spacing: .06em; text-transform: uppercase; }
@@ -5180,9 +5190,6 @@ select.jv-field { width: 100%; }
 }
 .tm-dv-link input:focus { outline: none; background: var(--input-active); box-shadow: inset 0 -2px 0 var(--accent), 0 6px 14px -10px var(--accent-glow); }
 .tm-dv-empty { display: block; }
-.tm-pr-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin: 0; padding: 0; list-style: none; }
-.tm-pr-list.is-finished { margin-top: 6px; opacity: .85; }
-.tm-pr { min-width: 0; padding: 8px 10px; border: 1px solid var(--stroke-card); border-radius: var(--r-control); background: var(--well); }
 .tm-pr-top { display: flex; align-items: flex-start; gap: 8px; }
 .tm-pr-state {
   flex: none;
@@ -5283,10 +5290,10 @@ button.tm-pr-title:hover { color: var(--accent-text); text-decoration: underline
 .tv-dismiss textarea { width: 100%; min-height: 52px; padding: 6px 8px; border: 1px solid var(--stroke-control); border-radius: var(--r-control); background: var(--control); color: var(--text-1); font: inherit; font-size: var(--fs-label); resize: vertical; }
 .tv-confirm-list { margin: 10px 0 0; padding-left: 20px; color: var(--text-2); font-size: var(--fs-label); line-height: 22px; }
 
-/* PR comments: per PR, the worker's proposal for each new reviewer comment, decided one by one. */
-.tpc-pr > .tm-dv-bar { margin: 0; }
-.tm-dv-h.tpc-title { flex: 1 1 auto; min-width: 0; overflow: hidden; color: var(--text-1); font: 600 var(--fs-label)/20px var(--font); letter-spacing: 0; text-overflow: ellipsis; text-transform: none; white-space: nowrap; }
-.tpc-pr > .tv-block-meta { margin: -6px 0 0; }
+/* Pull requests: per PR, its state in Azure DevOps, then the worker's proposals on its builds and comments. */
+.tpc-status { min-width: 0; }
+.tpc-status > .tm-muted.err { margin-top: 4px; }
+.tpc-finished { margin-top: 10px; opacity: .85; }
 .tpc-line { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--text-2); font-size: var(--fs-label); line-height: 20px; }
 .tpc-line code { font: var(--fs-readout)/18px var(--mono); }
 .tpc-proposal { display: flex; flex-direction: column; gap: 10px; }
@@ -5316,6 +5323,7 @@ button.tm-pr-title:hover { color: var(--accent-text); text-decoration: underline
 .tpc-reply:focus, .tpc-note:focus { outline: none; border-color: var(--accent); }
 .tpc-applying { display: flex; flex-direction: column; gap: 4px; margin: 0; padding-left: 18px; color: var(--text-2); font-size: var(--fs-caption); line-height: var(--lh-caption); overflow-wrap: anywhere; }
 .tpc-part { display: flex; flex-direction: column; gap: 10px; }
+.tpc-status + .tpc-part,
 .tpc-part + .tpc-part { padding-top: 10px; border-top: 1px solid var(--divider); }
 .tpc-part-h { display: flex; align-items: center; gap: 8px; }
 .tpc-part-h > .tv-sub { flex: 1 1 auto; margin: 0; }
