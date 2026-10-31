@@ -3610,65 +3610,267 @@ svg.chain-edges { position: absolute; overflow: visible; pointer-events: none; }
   .chain-picker { flex-basis: 160px; }
 }
 
-/* ---------- The Workspace (jarvis.ts) ----------
-   Devis's chat in the centre, and a quiet rail on the right: Needs you, Tasks, Communication,
-   Meetings, To-dos and Note. Drag the border between them to resize. A task, Communication or
-   Meetings opens as a drawer over the chat;
-   the rail stays put. Under 1024px the rail turns into a sheet from the right, and under 600px
-   the drawer fills the view. */
+/* ---------- The Workspace (jarvis.ts, workspaceGrid.ts) ----------
+   Columns of panels: Devis's chat and the sections (Needs you, Tasks, Communication, Meetings,
+   To-dos, Note). Drag a panel by its grip to move it, drag the gaps to resize, and Edit layout
+   (in the titlebar) to add columns. A task, Communication or Meetings opens as a drawer over
+   Devis's column. When the window is too narrow for the columns (.flat) Devis takes the view
+   and the sections become a sheet from the right; under 600px the drawer fills the view. */
 .jarvis-view { display: none; }
 .jarvis-view:focus { outline: none; }
 body[data-feature="jarvis"]:not([data-page="settings"]) .workspace { display: none; }
+/* clip, not hidden: the closed sheet sits off to the right and must never widen or scroll the view. */
 body[data-feature="jarvis"]:not([data-page="settings"]) .jarvis-view {
   position: relative;
-  display: grid;
+  display: flex;
   flex: 1 1 auto;
-  grid-template-columns: minmax(0, 1fr) var(--rail-w, 340px);
-  grid-template-rows: minmax(0, 1fr);
+  flex-direction: column;
   min-height: 0;
+  overflow: clip;
   order: 2;
 }
-@media (max-width: 1279.98px) {
-  .jarvis-view { --rail-w: 300px; }
+
+/* Edit layout: the titlebar button, only on the Workspace. */
+#btnLayout { display: none; }
+body[data-feature="jarvis"]:not([data-page="settings"]) #btnLayout:not([hidden]) { display: inline-grid; }
+#btnLayout.on { background: var(--accent-tint); color: var(--accent-text); }
+
+.jv-editbar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  height: 42px;
+  padding: 0 10px 0 16px;
+  border-bottom: 1px solid rgba(76, 214, 255, .22);
+  background: linear-gradient(90deg, rgba(76, 214, 255, .10), rgba(76, 214, 255, .03));
+  color: var(--accent-text);
+  font-size: 12.5px;
+  white-space: nowrap;
 }
-/* The border between Devis and the rail: drag it (or arrow keys on it) to resize; double-click
-   resets. jarvis.ts sets --rail-w; the handle sits on the rail's left edge, outside the rail so
-   the rail's zoom doesn't move it. */
-.jv-split {
-  position: absolute;
-  top: 0;
-  right: calc(var(--rail-w, 340px) - 5px);
-  bottom: 0;
-  z-index: 4;
-  width: 9px;
-  cursor: col-resize;
+.jv-editbar > svg.ic { flex: none; width: 16px; height: 16px; }
+.jv-editbar b { font-weight: 600; }
+.jv-editbar .muted { display: inline-flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; color: var(--text-2); text-overflow: ellipsis; }
+.jv-editbar .muted svg.ic { flex: none; width: 14px; height: 14px; }
+.jv-editbar-sp { flex: 1 1 auto; }
+.jv-editbar .btn { flex: none; }
+@media (max-width: 1279.98px) {
+  .jv-editbar .muted:nth-of-type(n + 2) { display: none; }
+}
+
+/* The columns. Until a gap is dragged, Devis's column takes what the others leave; after, each
+   column keeps its share (--w). */
+.jv-cols {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 8px;
+  overflow: clip;
+}
+.jv-col {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: clip;
+}
+.jv-col.has-devis { flex: 1 1 0; min-width: 420px; }
+.jv-col:not(.has-devis) { flex: 0 1 340px; min-width: 280px; }
+.jv-cols.measured > .jv-col { flex: var(--w) 1 0; }
+@media (max-width: 1279.98px) {
+  .jv-cols:not(.measured) > .jv-col:not(.has-devis) { flex-basis: 300px; }
+}
+
+/* A panel: a quiet card, its header always in view, its body scrolling on its own. Until a gap in
+   its column is dragged the panels fit their content (Devis takes what's left); after, each keeps
+   its share (--g). */
+.pn {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 36px;
+  overflow: clip;
+  border: 1px solid var(--divider);
+  border-radius: 10px;
+  background: #111114;
+}
+.pn-devis { flex: 3 1 0; border-color: rgba(255, 255, 255, .11); background: #0b0b0d; }
+.jv-col > .pn-devis { min-height: min(240px, 30vh); }
+.jv-col > .pn:not(.pn-devis, .folded) { min-height: min(120px, 14vh); }
+/* Until a gap is dragged, a section sharing Devis's column fits its content but leaves Devis most of the room. */
+.jv-col.has-devis:not(.sized) > .pn:not(.pn-devis) { flex-grow: 0; max-height: 40%; }
+.jv-col.sized > .pn { flex: var(--g, 1) 1 0; }
+.jv-col > .pn.folded { flex: none; }
+.jv-col > .today-status { flex: none; padding: 6px 4px 0; border-top: 0; }
+
+/* A panel's grip: drag it to move the panel, or click it for Move to… */
+.pn-grip {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 18px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-3);
+  cursor: grab;
   touch-action: none;
 }
-.jv-split::before {
+.pn-grip svg.ic { width: 14px; height: 14px; }
+.pn-grip:hover { background: rgba(255, 255, 255, .07); color: var(--text-1); }
+.pn-grip:focus-visible { outline: 2px solid var(--focus); outline-offset: 0; }
+@media (hover: hover) and (pointer: fine) {
+  .pn-grip { opacity: 0; transition: opacity var(--t-fast) linear; }
+  .rs-h:hover .pn-grip,
+  .rs-h:focus-within .pn-grip,
+  .chat-head:hover .pn-grip,
+  .chat-head:focus-within .pn-grip,
+  .jarvis-view.editing .pn-grip { opacity: 1; }
+}
+.pn-lifted .pn-grip { opacity: 1; color: var(--accent-text); cursor: grabbing; }
+.jarvis-view.pn-sorting,
+.jarvis-view.pn-sorting *,
+.jv-rscroll.pn-sorting,
+.jv-rscroll.pn-sorting * { cursor: grabbing; user-select: none; }
+
+/* Moving a panel: it stays in place, hatched, while a label follows the pointer and a line shows
+   where it will land. A drop the column can't hold shows in the caution colour. */
+.jarvis-view:not(.flat) .pn.pn-lifted {
+  border-style: dashed;
+  border-color: rgba(76, 214, 255, .4);
+  background: repeating-linear-gradient(135deg, rgba(76, 214, 255, .05) 0 8px, transparent 8px 16px);
+}
+.jarvis-view:not(.flat) .pn.pn-lifted > * { opacity: .35; }
+.pn-ghost {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 1000;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px 6px 8px;
+  border-radius: 8px;
+  background: #17171b;
+  box-shadow: 0 24px 56px rgba(0, 0, 0, .65), 0 0 0 1px rgba(76, 214, 255, .55);
+  color: var(--text-1);
+  font: 600 12.5px/18px var(--font);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.pn-ghost svg.ic { width: 14px; height: 14px; color: var(--accent-text); }
+.jv-drop { position: absolute; z-index: 6; height: 0; pointer-events: none; }
+.jv-drop::after {
   content: "";
   position: absolute;
-  top: 0;
-  bottom: 0;
+  top: -1.5px;
+  right: 4px;
   left: 4px;
-  width: 1px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 14px rgba(76, 214, 255, .8);
+}
+.jv-drop::before {
+  content: "";
+  position: absolute;
+  top: -4px;
+  left: 0;
+  z-index: 1;
+  width: 8px;
+  height: 8px;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  background: var(--ink);
+}
+.jv-drop.no::after { background: var(--caution); box-shadow: 0 0 14px color-mix(in srgb, var(--caution) 70%, transparent); }
+.jv-drop.no::before { border-color: var(--caution); }
+
+/* The gaps: drag to resize, double-click (or Enter) to share alike, arrows to nudge. */
+.jv-vsash,
+.jv-hsash { position: relative; flex: none; touch-action: none; }
+.jv-vsash { width: 8px; cursor: col-resize; }
+.jv-hsash { height: 8px; cursor: row-resize; }
+.jv-vsash::after,
+.jv-hsash::after {
+  content: "";
+  position: absolute;
+  border-radius: 1px;
   background: transparent;
   transition: background var(--t-fast) linear, box-shadow var(--t-fast) linear;
 }
-.jv-split:hover::before,
-.jarvis-view.splitting .jv-split::before { left: 3px; width: 3px; background: var(--accent); box-shadow: 0 0 8px var(--accent-glow); }
-.jv-split:focus-visible { outline: none; }
-.jv-split:focus-visible::before { left: 3px; width: 3px; background: var(--focus); }
-.jarvis-view.splitting { cursor: col-resize; user-select: none; }
-.jarvis-view.splitting * { cursor: col-resize; }
+.jv-vsash::after { top: 14px; bottom: 14px; left: 3.5px; width: 1px; }
+.jv-hsash::after { top: 3.5px; right: 14px; left: 14px; height: 1px; }
+.jarvis-view.editing .jv-vsash::after,
+.jarvis-view.editing .jv-hsash::after { background: rgba(255, 255, 255, .12); }
+.jv-vsash:hover::after,
+.jv-hsash:hover::after,
+.jv-vsash.hot::after,
+.jv-hsash.hot::after { background: var(--accent); box-shadow: 0 0 8px rgba(76, 214, 255, .8); }
+.jv-vsash:focus-visible,
+.jv-hsash:focus-visible { outline: none; }
+.jv-vsash:focus-visible::after,
+.jv-hsash:focus-visible::after { background: var(--focus); box-shadow: 0 0 8px var(--accent-glow); }
+.jv-hsash.inert { cursor: default; pointer-events: none; }
+.jv-hsash.inert::after { display: none; }
+.jarvis-view.sizing-x,
+.jarvis-view.sizing-x * { cursor: col-resize; user-select: none; }
+.jarvis-view.sizing-y,
+.jarvis-view.sizing-y * { cursor: row-resize; user-select: none; }
 
-/* Centre: the Lead's chat, read in a 720px column whatever the window. */
+/* Edit layout: outlined panels, an empty column's drop slot, and the New column strip. */
+.jarvis-view.editing .pn:not(.pn-lifted) { border-style: dashed; border-color: rgba(76, 214, 255, .28); }
+.jv-slot {
+  display: grid;
+  flex: 1 1 0;
+  place-items: center;
+  min-height: 36px;
+  border: 1.5px dashed rgba(255, 255, 255, .12);
+  border-radius: 10px;
+  background: repeating-linear-gradient(135deg, rgba(255, 255, 255, .018) 0 8px, transparent 8px 16px);
+  color: var(--text-3);
+  font-size: 12px;
+}
+.jv-addcol {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 34px;
+  margin-left: 8px;
+  padding: 0;
+  border: 1px dashed var(--edge);
+  border-radius: 10px;
+  background: none;
+  color: var(--text-2);
+  font-size: 12px;
+  cursor: pointer;
+}
+.jv-addcol span { writing-mode: vertical-rl; }
+.jv-addcol svg.ic { width: 14px; height: 14px; }
+.jv-addcol:hover { border-color: rgba(76, 214, 255, .45); color: var(--accent-text); }
+.jv-addcol:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.jv-slot.hot,
+.jv-addcol.hot { border-color: var(--accent); background: rgba(76, 214, 255, .06); color: var(--accent-text); }
+.jv-slot.no,
+.jv-addcol.no { border-color: var(--caution); background: var(--caution-tint); color: var(--caution); }
+
+/* Devis: the Lead's chat, read in a 720px column whatever the panel's width. */
 .jv-center {
   position: relative;
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
+  overflow: clip;
 }
 .jv-tools { display: flex; align-items: center; gap: 4px; }
 .jv-sp { flex: 1 1 auto; }
@@ -3723,12 +3925,8 @@ body[data-feature="jarvis"]:not([data-page="settings"]) .jarvis-view {
 .jv-banner-go { flex: none; color: var(--accent-text); }
 .jv-banner:hover .jv-banner-go { text-decoration: underline; text-underline-offset: 3px; }
 .jv-banner:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-@media (min-width: 1024px) {
-  .jv-tools { position: absolute; top: 8px; right: 12px; z-index: 2; }
-  .jv-railbtn,
-  .jv-sp,
-  .jv-banner { display: none; }
-}
+.jarvis-view:not(.flat) .jv-tools { position: absolute; top: 8px; right: 12px; z-index: 2; }
+.jarvis-view:not(.flat) :is(.jv-railbtn, .jv-sp, .jv-banner) { display: none; }
 
 .jv-center > .chat > .chat-head {
   min-height: 48px;
@@ -3736,6 +3934,9 @@ body[data-feature="jarvis"]:not([data-page="settings"]) .jarvis-view {
   border-bottom: 0;
   font: var(--fs-caption)/18px var(--font);
 }
+.jarvis-view:not(.flat) .jv-center > .chat > .chat-head { padding-left: 8px; }
+.jv-center > .chat > .chat-head > .pn-grip { margin-right: -8px; }
+.jarvis-view.flat .jv-center .pn-grip { display: none; }
 .jv-who { display: inline-flex; align-items: center; gap: 8px; min-width: 0; color: var(--text-1); }
 .jv-who svg.ic { flex: none; width: 16px; height: 16px; color: var(--accent); filter: drop-shadow(0 0 6px var(--accent-glow)); }
 .jv-who b { font: 600 var(--fs-subhead)/22px var(--font-display); }
@@ -3759,57 +3960,21 @@ body[data-feature="jarvis"]:not([data-page="settings"]) .jarvis-view {
 .jv-overview .ov-title { color: var(--text-3); font: 500 12px/18px var(--font); letter-spacing: 0; text-transform: none; }
 .jv-overview .ov-narrative li::marker { color: var(--text-3); }
 
-/* The rail: one quiet line per thing. */
-.jv-rail {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  border-left: 1px solid var(--divider);
-  background: rgba(10, 10, 12, .6);
-}
-.jv-rail:focus { outline: none; }
+/* The overview sheet: only when the window is too narrow for columns (.flat). */
+.jv-rail,
 .jv-rhead,
 .jv-sheet-scrim { display: none; }
+.jv-rail:focus { outline: none; }
 .jv-rscroll { position: relative; flex: 1 1 auto; min-height: 0; padding: 10px 14px 16px; overflow-y: auto; overscroll-behavior: contain; }
-.jv-rail > .today-status { flex: none; padding: 8px 14px; }
-.jv-rail .today-status-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jarvis-view .today-status-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* A section: its header (grip, fold toggle, tools) and its body. */
 .rs { position: relative; }
-.rs + .rs { margin-top: 6px; }
 .rs-h { display: flex; align-items: center; gap: 4px; min-height: 30px; }
-/* The grip sits in the rail's left gutter, so names don't shift when it shows. */
-.rs-grip {
-  position: absolute;
-  top: 5px;
-  left: -14px;
-  display: grid;
-  place-items: center;
-  width: 14px;
-  height: 20px;
-  padding: 0;
-  border: 0;
-  border-radius: 4px;
-  background: none;
-  color: var(--text-3);
-  cursor: grab;
-  touch-action: none;
-}
-.rs-grip svg.ic { width: 12px; height: 12px; }
-.rs-grip:hover { color: var(--text-1); }
-.rs-grip:focus-visible { outline: 2px solid var(--focus); outline-offset: 0; }
-@media (hover: hover) and (pointer: fine) {
-  .rs-grip { opacity: 0; transition: opacity var(--t-fast) linear; }
-  .rs-h:hover .rs-grip,
-  .rs-h:focus-within .rs-grip { opacity: 1; }
-}
-@media (pointer: coarse) {
-  .rs-grip { position: static; order: 1; width: 32px; height: 30px; }
-  .rs-grip svg.ic { width: 14px; height: 14px; }
-}
+.jarvis-view:not(.flat) .rs-h { flex: none; gap: 2px; height: 34px; padding: 0 6px 0 3px; }
+.jarvis-view:not(.flat) .rs-b { flex: 1 1 auto; min-height: 0; padding: 0 12px 10px; overflow-y: auto; overscroll-behavior: contain; }
+.jarvis-view:not(.flat) .rs-b:focus { outline: none; }
 .rs-sorting { user-select: none; }
-.rs-lifted { opacity: .4; }
-.rs-lifted .rs-grip { opacity: 1; color: var(--accent-text); cursor: grabbing; }
 .rs-drop {
   position: absolute;
   right: 14px;
@@ -3838,6 +4003,8 @@ body[data-feature="jarvis"]:not([data-page="settings"]) .jarvis-view {
 .rs-t:focus-visible { border-radius: 4px; outline: 2px solid var(--focus); outline-offset: 1px; }
 .rs-t svg.ic { flex: none; width: 12px; height: 12px; color: var(--text-3); transition: transform var(--t-fast) var(--ease); }
 .rs-t[aria-expanded="true"] svg.ic { transform: rotate(90deg); }
+.jarvis-view:not(.flat) .rs-t { color: var(--text-1); font: 600 12.5px/18px var(--font); }
+.jarvis-view:not(.flat) .rs-t:hover { color: #fff; }
 .rs-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rs.has-needs .rs-name { color: var(--caution); }
 .rs-n { color: var(--text-3); font: 400 12px/18px var(--mono); }
@@ -3878,7 +4045,7 @@ body[data-feature="jarvis"]:not([data-page="settings"]) .jarvis-view {
 }
 .rs-more:hover { text-decoration: underline; text-underline-offset: 3px; }
 .rs-more:focus-visible { border-radius: 4px; outline: 2px solid var(--focus); outline-offset: 1px; }
-.jv-rail .need { margin: 0 0 6px; padding: 6px 10px 8px 8px; }
+.jarvis-view .rs-b .need { margin: 0 0 6px; padding: 6px 10px 8px 8px; }
 .note-foot { display: flex; align-items: center; gap: 6px; margin: 4px 0 0; color: var(--text-3); font-size: 12px; line-height: 18px; }
 
 /* A rail row: dot, title, time. Its actions take the time's place on hover. */
@@ -3939,6 +4106,7 @@ button.rr-main { cursor: pointer; }
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  max-width: 100%;
   height: 20px;
   padding: 0 7px;
   border: 0;
@@ -3949,7 +4117,8 @@ button.rr-main { cursor: pointer; }
   line-height: 20px;
   cursor: pointer;
 }
-.rr-chip svg.ic { width: 12px; height: 12px; }
+.rr-chip svg.ic { flex: none; width: 12px; height: 12px; }
+.rr-chip > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rr-chip:hover { filter: brightness(1.15); }
 .rr-chip:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 .rr-ask { display: inline-flex; align-items: center; gap: 4px; color: var(--accent-text); text-decoration: none; }
@@ -4166,38 +4335,53 @@ button.rr-main { cursor: pointer; }
   .today-empty.ld-none { margin: 20px; }
 }
 
-/* ---------- Under 1024px: the rail is a sheet from the right ---------- */
-@media (max-width: 1023.98px) {
-  /* clip, not hidden: the closed sheet sits off to the right and must never widen or scroll the view. */
-  body[data-feature="jarvis"]:not([data-page="settings"]) .jarvis-view { grid-template-columns: minmax(0, 1fr); overflow: clip; }
-  .jv-split { display: none; }
-  .jv-tools { flex: none; height: 44px; padding: 0 12px; }
-  .jv-center > .chat > .chat-head { min-height: 40px; padding-right: 20px; }
-  .jv-rail {
-    position: absolute;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 30;
-    width: min(360px, 92vw);
-    border-left: 1px solid var(--edge);
-    background: #0f0f12;
-    box-shadow: var(--shadow-dialog);
-    transform: translateX(100%);
-    visibility: hidden;
-    transition: transform .22s cubic-bezier(.2, .8, .2, 1), visibility 0s linear .22s;
-  }
-  .jarvis-view.sheet-open .jv-rail { transform: none; visibility: visible; transition: transform .22s cubic-bezier(.2, .8, .2, 1); }
-  .jv-rhead { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 8px; min-height: 48px; padding: 0 8px 0 14px; border-bottom: 1px solid var(--divider); }
-  .jv-rhead b { font: 600 16px/22px var(--font-display); }
-  .jarvis-view.sheet-open .jv-sheet-scrim {
-    position: absolute;
-    inset: 0;
-    z-index: 29;
-    display: block;
-    background: rgba(5, 5, 6, .5);
-    animation: fade-in .22s ease-out;
-  }
+/* ---------- Too narrow for columns (.flat): Devis takes the view, the sections are a sheet ----------
+   Under 1024px, or whenever the window can't hold the saved columns at their minimum widths. */
+.jarvis-view.flat .jv-cols { padding: 0; }
+.jarvis-view.flat .jv-col { flex: 1 1 0; min-width: 0; }
+.jarvis-view.flat .pn-devis { border: 0; border-radius: 0; }
+.jarvis-view.flat .jv-tools { flex: none; height: 44px; padding: 0 12px; }
+.jarvis-view.flat .jv-center > .chat > .chat-head { min-height: 40px; padding-right: 20px; }
+.jarvis-view.flat .jv-rail {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  width: min(360px, 92vw);
+  min-height: 0;
+  border-left: 1px solid var(--edge);
+  background: #0f0f12;
+  box-shadow: var(--shadow-dialog);
+  transform: translateX(100%);
+  visibility: hidden;
+  transition: transform .22s cubic-bezier(.2, .8, .2, 1), visibility 0s linear .22s;
+}
+.jarvis-view.flat.sheet-open .jv-rail { transform: none; visibility: visible; transition: transform .22s cubic-bezier(.2, .8, .2, 1); }
+.jarvis-view.flat .jv-rhead { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 8px; min-height: 48px; padding: 0 8px 0 14px; border-bottom: 1px solid var(--divider); }
+.jarvis-view.flat .jv-rhead b { font: 600 16px/22px var(--font-display); }
+.jarvis-view.flat.sheet-open .jv-sheet-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 29;
+  display: block;
+  background: rgba(5, 5, 6, .5);
+  animation: fade-in .22s ease-out;
+}
+.jarvis-view.flat .jv-rail > .today-status { flex: none; padding: 8px 14px; }
+/* In the sheet the sections are plain rows, not cards, and the grip sits in the left gutter so
+   names don't shift when it shows. */
+.jarvis-view.flat .jv-rscroll { display: flex; flex-direction: column; gap: 6px; }
+.jarvis-view.flat .pn:not(.pn-devis) { flex: none; min-height: 0; overflow: visible; border: 0; border-radius: 0; background: none; }
+.jarvis-view.flat .pn-grip { position: absolute; top: 5px; left: -14px; width: 14px; height: 20px; }
+.jarvis-view.flat .pn-grip:hover { background: none; }
+.jarvis-view.flat .pn-grip svg.ic { width: 12px; height: 12px; }
+.jarvis-view.flat .pn-lifted { opacity: .4; }
+@media (pointer: coarse) {
+  .jarvis-view.flat .pn-grip { position: static; order: 1; width: 32px; height: 30px; }
+  .jarvis-view.flat .pn-grip svg.ic { width: 14px; height: 14px; }
 }
 
 /* ---------- Under 600px: phone width ---------- */
@@ -4222,12 +4406,12 @@ button.rr-main { cursor: pointer; }
 @media (max-width: 599.98px) and (pointer: coarse) {
   .rr-main,
   .rs-t,
-  .rs-grip,
+  .jarvis-view.flat .pn-grip,
   .ld-item,
   .ld-day,
   .rr2 { min-height: 44px; }
   :is(.jv-rail, .jv-drawer, .jv-tools) .icon-btn { min-width: 44px; min-height: 44px; }
-  .rs-grip { min-width: 44px; }
+  .jarvis-view.flat .pn-grip { min-width: 44px; }
 }
 
 .streaming::after { content: "▍"; margin-left: 2px; color: var(--accent); animation: caret 1s steps(2) infinite; }
