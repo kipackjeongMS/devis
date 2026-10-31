@@ -56,6 +56,7 @@ const PATHS = {
   image: '<rect x="2.25" y="2.75" width="11.5" height="10.5" rx="1.5"/><circle cx="6" cy="6.25" r="1.25"/><path d="M2.75 12 6.5 8.5 9 10.75l1.75-1.5 2.5 2.25"/>',
   mail: '<rect x="2" y="3.5" width="12" height="9" rx="1.5"/><path d="m2.5 4.5 5.5 4.25 5.5-4.25"/>',
   diff: '<path d="M3.75 1.75h5.5l3 3v9.5h-8.5z"/><path d="M9.25 1.75v3h3M8 5.75v4M6 7.75h4M6 12h4"/>',
+  grip: '<circle cx="6" cy="3.75" r=".6"/><circle cx="10" cy="3.75" r=".6"/><circle cx="6" cy="8" r=".6"/><circle cx="10" cy="8" r=".6"/><circle cx="6" cy="12.25" r=".6"/><circle cx="10" cy="12.25" r=".6"/>',
 } as const;
 
 export type IconName = keyof typeof PATHS;

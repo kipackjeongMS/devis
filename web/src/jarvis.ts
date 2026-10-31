@@ -2,8 +2,8 @@
 //   Devis   — the Lead console, one persistent Copilot session that watches the Workspace and
 //             keeps its history. "Today so far" is pinned over its thread.
 //   Rail    — the day at a glance: Needs you, Tasks (with reviews), Communication, Meetings,
-//             the user's own to-dos and a quick note. Each section folds, and the border
-//             between it and Devis drags to resize. The to-dos and note
+//             the user's own to-dos and a quick note. Each section folds and moves (drag its
+//             grip, or Alt+Up/Down), and the border between it and Devis drags to resize. The to-dos and note
 //             belong to no day; Devis and the workers can read them when asked. On a narrow
 //             window the rail is a sheet behind the Overview button.
 //   Drawer  — opens over Devis, the rail staying in view: a task (its timeline and its Copilot
@@ -54,7 +54,7 @@ import {
   toggleQuietMail,
   type CommunicationView,
 } from "./communicationView.js";
-import { openContextMenu, type ContextMenuEntry } from "./contextMenu.js";
+import { closeContextMenu, openContextMenu, type ContextMenuEntry } from "./contextMenu.js";
 import { isOutlookLink, isTeamsLink, unseenRecaps, type ChatsInfo, type CommsChat, type CommsMail, type CommsMeeting, type MeetingScanInfo } from "./commsModel.js";
 import {
   ALL_SERVICES,
@@ -151,7 +151,7 @@ export interface JarvisHooks {
   openSettings: () => void;
 }
 
-/** The rail's sections, top to bottom. */
+/** The rail's sections, top to bottom until the user moves them. */
 type RailSection = "needs" | "tasks" | "comms" | "meetings" | "todos" | "note";
 const RAIL_SECTIONS: readonly RailSection[] = ["needs", "tasks", "comms", "meetings", "todos", "note"];
 const RAIL_NAME: Record<RailSection, string> = {
@@ -168,6 +168,10 @@ type Drawer = { kind: "task"; taskId: string; tab?: LeftTab } | { kind: "comms" 
 
 /** The rail's folded sections. */
 const RAIL_FOLD_KEY = "adoPrOps.workspace.railFolded";
+/** The rail's sections in the order the user put them. */
+const RAIL_ORDER_KEY = "adoPrOps.workspace.railOrder";
+/** How far the pointer goes on a section's grip before it's a drag rather than a click. */
+const RAIL_DRAG_PX = 4;
 /** The drawer's width, in px, as the user last dragged it. */
 const DRAWER_WIDTH_KEY = "adoPrOps.workspace.drawerWidth";
 const DRAWER_MIN = 560;
@@ -230,6 +234,9 @@ const drafts = new Map<string, string>();
 let overviewCollapsed = readPref(OVERVIEW_KEY, "0") === "1";
 let overviewRefreshing = false;
 let railFolded = readRailFolded();
+let railOrder = readRailOrder();
+/** When a section's drag last ended: the click that follows it isn't a click on the grip. */
+let railDragEndedAt = 0;
 
 // The to-dos come with every Today poll. A poll that was on its way while a to-do
 // changed carries the list from before, so it's ignored: `todoRev` moves on each change.
@@ -352,6 +359,18 @@ function readRailFolded(): Set<RailSection> {
   return new Set<RailSection>(["note"]);
 }
 
+/** The rail's order as the user left it. A section it doesn't name (a new one) goes at the end. */
+function readRailOrder(): RailSection[] {
+  let saved: unknown = null;
+  try {
+    saved = JSON.parse(readPref(RAIL_ORDER_KEY, "null"));
+  } catch {
+    /* unreadable: the default */
+  }
+  const order = Array.isArray(saved) ? [...new Set(saved.filter(isRailSection))] : [];
+  return [...order, ...RAIL_SECTIONS.filter((sec) => !order.includes(sec))];
+}
+
 const svg = (name: IconName): string => icon(name);
 
 // ---- public API ---------------------------------------------------------------------
@@ -459,11 +478,12 @@ window.addEventListener("ado-pr-updated", () => {
 const iconBtn = (act: string, name: IconName, label: string): string =>
   `<button type="button" class="icon-btn" data-act="${act}" title="${esc(label)}" aria-label="${esc(label)}">${svg(name)}</button>`;
 
-/** A rail section: a fold toggle with its name and count, its own tools, and its body. */
+/** A rail section: a grip to move it, a fold toggle with its name and count, its own tools, and its body. */
 function railSectionHtml(sec: RailSection, tools = ""): string {
   const fold = railFolded.has(sec);
   return `<section class="rs${fold ? " folded" : ""}" data-rs="${sec}">
       <div class="rs-h">
+        <button type="button" class="rs-grip" data-act="rs-move" aria-haspopup="menu" aria-label="Move ${RAIL_NAME[sec]}" title="Drag to move · Alt+↑↓">${svg("grip")}</button>
         <button type="button" class="rs-t" data-act="rs-fold" aria-expanded="${!fold}" aria-controls="rs-b-${sec}">${svg("chevron")}<span class="rs-name">${RAIL_NAME[sec]}</span><span class="rs-n"></span><span class="rs-new" hidden></span></button>
         ${tools ? `<span class="rs-ha">${tools}</span>` : ""}
       </div>
@@ -473,6 +493,11 @@ function railSectionHtml(sec: RailSection, tools = ""): string {
 
 function mount(): void {
   root = document.getElementById("jarvisView")!;
+  const railTools: Partial<Record<RailSection, string>> = {
+    tasks: `<select class="filter-select today-service" aria-label="Service"></select>${iconBtn("history", "clock", "History")}${iconBtn("new-task", "add", "New task")}`,
+    comms: iconBtn("comms-scan", "sync", "Read Teams and email now"),
+    meetings: iconBtn("meetings-scan", "sync", "Read the calendar now"),
+  };
   root.innerHTML = `
     <section class="jv-center" data-pane-el="lead" aria-label="Devis, the Lead">
       <div class="jv-tools">
@@ -506,16 +531,9 @@ function mount(): void {
     <aside class="jv-rail" aria-label="Overview" tabindex="-1">
       <div class="jv-rhead"><b>Overview</b>${iconBtn("rail-close", "dismiss", "Close the overview")}</div>
       <div class="jv-rscroll">
-        ${railSectionHtml("needs")}
-        ${railSectionHtml(
-          "tasks",
-          `<select class="filter-select today-service" aria-label="Service"></select>${iconBtn("history", "clock", "History")}${iconBtn("new-task", "add", "New task")}`
-        )}
-        ${railSectionHtml("comms", iconBtn("comms-scan", "sync", "Read Teams and email now"))}
-        ${railSectionHtml("meetings", iconBtn("meetings-scan", "sync", "Read the calendar now"))}
-        ${railSectionHtml("todos")}
-        ${railSectionHtml("note")}
+        ${railOrder.map((sec) => railSectionHtml(sec, railTools[sec])).join("")}
       </div>
+      <div class="visually-hidden rs-live" aria-live="polite"></div>
       <footer class="today-status"><span class="today-status-dot"></span><span class="today-status-text"></span></footer>
     </aside>
     <div class="jv-split" role="separator" aria-orientation="vertical" tabindex="0" aria-label="Resize Devis and the overview" title="Drag to resize · double-click to reset"></div>
@@ -569,6 +587,7 @@ function mount(): void {
   drawerBackBtn = q('[data-act="drawer-back"]');
   drawerBody = q(".jv-dbody");
   wireGrip(q<HTMLElement>(".jv-grip"));
+  wireRailDrag(q<HTMLElement>(".jv-rscroll"));
   // Devis and the rail split the way they were last left: drag the border between them.
   attachSplitter({
     container: root,
@@ -785,6 +804,147 @@ function revealRail(sec: RailSection): void {
     root!.classList.add("sheet-open");
     railButton.setAttribute("aria-expanded", "true");
   }
+}
+
+const isDefaultRailOrder = (): boolean => railOrder.every((sec, i) => sec === RAIL_SECTIONS[i]);
+
+/**
+ * Put the rail's sections in `order` and keep it. The section boxes move rather than
+ * re-render, so what's in them (a to-do being typed, the note) stays as it is.
+ */
+function setRailOrder(order: RailSection[], announce?: RailSection): void {
+  railOrder = order;
+  if (isDefaultRailOrder()) {
+    try {
+      localStorage.removeItem(RAIL_ORDER_KEY);
+    } catch {
+      /* private mode */
+    }
+  } else writePref(RAIL_ORDER_KEY, JSON.stringify(order));
+  const scroll = rail.querySelector<HTMLElement>(".jv-rscroll")!;
+  const focused = document.activeElement instanceof HTMLElement && scroll.contains(document.activeElement) ? document.activeElement : null;
+  for (const sec of order) {
+    const box = scroll.querySelector<HTMLElement>(`:scope > [data-rs="${sec}"]`);
+    if (box) scroll.appendChild(box);
+  }
+  if (focused?.isConnected && document.activeElement !== focused) focused.focus({ preventScroll: true });
+  if (!announce) return;
+  scroll.querySelector<HTMLElement>(`:scope > [data-rs="${announce}"]`)?.scrollIntoView({ block: "nearest" });
+  rail.querySelector<HTMLElement>(".rs-live")!.textContent =
+    `${RAIL_NAME[announce]} moved to ${order.indexOf(announce) + 1} of ${order.length}.`;
+}
+
+/** Move a rail section so it ends up `to`th from the top. */
+function moveRailSection(sec: RailSection, to: number): void {
+  const rest = railOrder.filter((s) => s !== sec);
+  const at = Math.max(0, Math.min(rest.length, to));
+  if (at === railOrder.indexOf(sec)) return;
+  rest.splice(at, 0, sec);
+  setRailOrder(rest, sec);
+}
+
+/** The grip's menu: the moves a drag makes, for the keyboard, touch and anyone who'd rather not drag. */
+function railSectionMenu(sec: RailSection, x: number, y: number, anchor: HTMLElement): void {
+  const at = railOrder.indexOf(sec);
+  const last = railOrder.length - 1;
+  const entries: ContextMenuEntry[] = [];
+  if (at > 0) entries.push({ label: "Move up", run: () => moveRailSection(sec, at - 1) });
+  if (at < last) entries.push({ label: "Move down", run: () => moveRailSection(sec, at + 1) });
+  if (at > 1) entries.push({ label: "Move to the top", run: () => moveRailSection(sec, 0) });
+  if (at < last - 1) entries.push({ label: "Move to the bottom", run: () => moveRailSection(sec, last) });
+  if (!isDefaultRailOrder()) entries.push({ label: "Reset the order", run: () => setRailOrder([...RAIL_SECTIONS], sec) });
+  openContextMenu(x, y, `Move ${RAIL_NAME[sec]}`, entries, () => anchor.isConnected && anchor.focus({ preventScroll: true }));
+}
+
+/**
+ * A section's grip drags it up or down the rail. A line shows where it will land, the rail
+ * scrolls when the pointer nears its edge, and Esc puts it back. Without a drag, the grip's
+ * click opens its menu. A right-click on a section's header opens the same menu.
+ */
+function wireRailDrag(scroll: HTMLElement): void {
+  scroll.addEventListener("contextmenu", (e) => {
+    const head = (e.target as HTMLElement).closest<HTMLElement>(".rs-h");
+    const sec = head?.closest<HTMLElement>("[data-rs]")?.dataset.rs;
+    if (!head || !isRailSection(sec) || (e.target as HTMLElement).closest("select")) return;
+    e.preventDefault();
+    railSectionMenu(sec, e.clientX, e.clientY, head.querySelector<HTMLElement>(".rs-grip")!);
+  });
+  scroll.addEventListener("pointerdown", (e) => {
+    const grip = (e.target as HTMLElement).closest<HTMLElement>(".rs-grip");
+    const box = grip?.closest<HTMLElement>("[data-rs]");
+    const sec = box?.dataset.rs;
+    if (!grip || !box || !isRailSection(sec) || e.button !== 0) return;
+    e.preventDefault();
+    grip.setPointerCapture(e.pointerId);
+    const startY = e.clientY;
+    let y = e.clientY;
+    let dragging = false;
+    let to = -1;
+    let frame = 0;
+    let line: HTMLElement | null = null;
+
+    // Where the section would land: before the first other section whose middle is below the pointer.
+    const place = (): void => {
+      const others = [...scroll.querySelectorAll<HTMLElement>(":scope > .rs")].filter((b) => b !== box);
+      const rects = others.map((b) => b.getBoundingClientRect());
+      const i = rects.findIndex((r) => y < r.top + r.height / 2);
+      to = i < 0 ? others.length : i;
+      const gap = to < rects.length ? rects[to]!.top - 3 : rects[rects.length - 1]!.bottom + 3;
+      line!.style.top = `${gap - scroll.getBoundingClientRect().top + scroll.scrollTop - 1}px`;
+      line!.hidden = to === railOrder.indexOf(sec);
+    };
+    const edgeScroll = (): void => {
+      const r = scroll.getBoundingClientRect();
+      const edge = 40;
+      const over = y < r.top + edge ? y - (r.top + edge) : y > r.bottom - edge ? y - (r.bottom - edge) : 0;
+      if (over) {
+        scroll.scrollTop += Math.max(-18, Math.min(18, over / 2));
+        place();
+      }
+      frame = requestAnimationFrame(edgeScroll);
+    };
+    const start = (): void => {
+      dragging = true;
+      closeContextMenu();
+      box.classList.add("rs-lifted");
+      scroll.classList.add("rs-sorting");
+      line = el('<div class="rs-drop" aria-hidden="true"></div>');
+      scroll.appendChild(line);
+      place();
+      frame = requestAnimationFrame(edgeScroll);
+    };
+    const move = (ev: PointerEvent): void => {
+      y = ev.clientY;
+      if (!dragging && Math.abs(y - startY) >= RAIL_DRAG_PX) start();
+      if (dragging) place();
+    };
+    const end = (commit: boolean): void => {
+      grip.removeEventListener("pointermove", move);
+      grip.removeEventListener("pointerup", up);
+      grip.removeEventListener("pointercancel", cancel);
+      document.removeEventListener("keydown", onKey, true);
+      if (grip.hasPointerCapture(e.pointerId)) grip.releasePointerCapture(e.pointerId);
+      if (!dragging) return;
+      cancelAnimationFrame(frame);
+      line?.remove();
+      box.classList.remove("rs-lifted");
+      scroll.classList.remove("rs-sorting");
+      railDragEndedAt = performance.now();
+      if (commit && to >= 0) moveRailSection(sec, to);
+    };
+    const up = (): void => end(true);
+    const cancel = (): void => end(false);
+    const onKey = (ev: KeyboardEvent): void => {
+      if (ev.key !== "Escape" || !dragging) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      end(false);
+    };
+    grip.addEventListener("pointermove", move);
+    grip.addEventListener("pointerup", up);
+    grip.addEventListener("pointercancel", cancel);
+    document.addEventListener("keydown", onKey, true);
+  });
 }
 
 // ---- the Lead -----------------------------------------------------------------------
@@ -2416,6 +2576,12 @@ function onClick(e: MouseEvent): void {
       if (sec) setRailFold(sec, !railFolded.has(sec));
       return;
     }
+    case "rs-move": {
+      const sec = node.closest<HTMLElement>("[data-rs]")?.dataset.rs;
+      if (!isRailSection(sec) || performance.now() - railDragEndedAt < 400) return;
+      const r = node.getBoundingClientRect();
+      return railSectionMenu(sec, r.left, r.bottom + 4, node);
+    }
     case "drawer-close":
       return closeDrawer();
     case "drawer-back":
@@ -2648,6 +2814,15 @@ function onKeydown(e: KeyboardEvent): void {
     if (e.key === "Enter" || e.key === "Escape") {
       e.preventDefault();
       endTodoEdit(e.key === "Enter", true);
+    }
+    return;
+  }
+  // Alt+Up/Down on a rail section's header moves the section (a select keeps Alt+Down to open).
+  if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown") && target.closest(".rs-h") && !(target instanceof HTMLSelectElement)) {
+    const sec = target.closest<HTMLElement>("[data-rs]")?.dataset.rs;
+    if (isRailSection(sec)) {
+      e.preventDefault();
+      moveRailSection(sec, railOrder.indexOf(sec) + (e.key === "ArrowUp" ? -1 : 1));
     }
     return;
   }

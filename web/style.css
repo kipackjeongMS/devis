@@ -3771,12 +3771,54 @@ body[data-feature="jarvis"]:not([data-page="settings"]) .jarvis-view {
 .jv-rail:focus { outline: none; }
 .jv-rhead,
 .jv-sheet-scrim { display: none; }
-.jv-rscroll { flex: 1 1 auto; min-height: 0; padding: 10px 14px 16px; overflow-y: auto; overscroll-behavior: contain; }
+.jv-rscroll { position: relative; flex: 1 1 auto; min-height: 0; padding: 10px 14px 16px; overflow-y: auto; overscroll-behavior: contain; }
 .jv-rail > .today-status { flex: none; padding: 8px 14px; }
 .jv-rail .today-status-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+.rs { position: relative; }
 .rs + .rs { margin-top: 6px; }
 .rs-h { display: flex; align-items: center; gap: 4px; min-height: 30px; }
+/* The grip sits in the rail's left gutter, so names don't shift when it shows. */
+.rs-grip {
+  position: absolute;
+  top: 5px;
+  left: -14px;
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-3);
+  cursor: grab;
+  touch-action: none;
+}
+.rs-grip svg.ic { width: 12px; height: 12px; }
+.rs-grip:hover { color: var(--text-1); }
+.rs-grip:focus-visible { outline: 2px solid var(--focus); outline-offset: 0; }
+@media (hover: hover) and (pointer: fine) {
+  .rs-grip { opacity: 0; transition: opacity var(--t-fast) linear; }
+  .rs-h:hover .rs-grip,
+  .rs-h:focus-within .rs-grip { opacity: 1; }
+}
+@media (pointer: coarse) {
+  .rs-grip { position: static; order: 1; width: 32px; height: 30px; }
+  .rs-grip svg.ic { width: 14px; height: 14px; }
+}
+.rs-sorting { user-select: none; }
+.rs-lifted { opacity: .4; }
+.rs-lifted .rs-grip { opacity: 1; color: var(--accent-text); cursor: grabbing; }
+.rs-drop {
+  position: absolute;
+  right: 14px;
+  left: 14px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  pointer-events: none;
+}
 .rs-t {
   display: flex;
   flex: 1 1 auto;
@@ -4180,10 +4222,12 @@ button.rr-main { cursor: pointer; }
 @media (max-width: 599.98px) and (pointer: coarse) {
   .rr-main,
   .rs-t,
+  .rs-grip,
   .ld-item,
   .ld-day,
   .rr2 { min-height: 44px; }
   :is(.jv-rail, .jv-drawer, .jv-tools) .icon-btn { min-width: 44px; min-height: 44px; }
+  .rs-grip { min-width: 44px; }
 }
 
 .streaming::after { content: "▍"; margin-left: 2px; color: var(--accent); animation: caret 1s steps(2) infinite; }
