@@ -16,6 +16,7 @@ import {
   groupTaskPrs,
   prBuildsChip,
   prCommentsChip,
+  prNeedsAttention,
   prSignals,
   prSourceText,
   prState,
@@ -64,7 +65,64 @@ export interface PrCommentsPanel {
 
 type Feedback = { c?: PrCommentsPr; b?: PrBuildsPr };
 
+/** A PR card to draw: the PR as linked, what the worker tracks on it, and whether it sits under "N finished". */
+interface Entry {
+  p?: TaskPr;
+  f?: Feedback;
+  fin?: boolean;
+}
+
 const svg = (name: IconName): string => icon(name);
+
+// ---- folds ----------------------------------------------------------------------------
+
+// Which PR cards the user opened or closed, by task and PR. Cards without a choice open when
+// the PR needs the user. The oldest choices go once there are too many.
+const FOLDS_KEY = "adoPrOps.taskPrFolds";
+const FOLDS_MAX = 300;
+const folds: Record<string, boolean> = readFolds();
+
+function readFolds(): Record<string, boolean> {
+  try {
+    const saved: unknown = JSON.parse(localStorage.getItem(FOLDS_KEY) || "{}");
+    return saved && typeof saved === "object" && !Array.isArray(saved) ? (saved as Record<string, boolean>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function setFold(key: string, open: boolean): void {
+  delete folds[key];
+  folds[key] = open;
+  const keys = Object.keys(folds);
+  for (const k of keys.slice(0, Math.max(0, keys.length - FOLDS_MAX))) delete folds[k];
+}
+
+function saveFolds(): void {
+  try {
+    localStorage.setItem(FOLDS_KEY, JSON.stringify(folds));
+  } catch {
+    // Storage blocked or full: the fold still works for this session.
+  }
+}
+
+/** A folded card's status line names what's waiting inside it. */
+const COMMENT_CHIP: Partial<Record<PrReviewState, string>> = {
+  collecting: "New comments",
+  auditing: "Reviewing comments",
+  awaiting: "Comment plan ready",
+  applying: "Applying comment fixes",
+  error: "Comment review went wrong",
+};
+
+const BUILD_CHIP: Record<string, string> = {
+  watching: "Builds still running",
+  failed: "Builds failed",
+  auditing: "Reviewing builds",
+  awaiting: "Build plan ready",
+  applying: "Fixing builds",
+  error: "Build review went wrong",
+};
 
 const STATE: Record<PrReviewState, { label: string; tone: string }> = {
   watching: { label: "Watching", tone: "idle" },
@@ -280,6 +338,18 @@ export function createPrCommentsPanel(host: PrCommentsHost): PrCommentsPanel {
     return [...rows.values()];
   }
 
+  const idOf = (e: Entry): { org: string; prId: number } => e.p ?? (e.f!.c || e.f!.b)!;
+  const foldKey = (e: Entry): string => `${host.taskId}|${prKey(idOf(e))}`;
+
+  /** The PR needs the user: rejected, waiting on them, failing, in conflict, or a plan or failure to look at. */
+  function needsYou(e: Entry): boolean {
+    if (e.p && prNeedsAttention(e.p)) return true;
+    const c = e.f?.c;
+    const b = e.f?.b;
+    if (c && (c.state === "awaiting" || c.state === "error" || (c.state === "collecting" && !view?.auto))) return true;
+    return !!b && (b.state === "awaiting" || b.state === "error" || (b.state === "failed" && !b.handled));
+  }
+
   function paint(): void {
     const minute = Math.floor(Date.now() / 60_000);
     const mine = [...drafts].filter(([k]) => k.startsWith(`${host.taskId}|`));
@@ -295,20 +365,29 @@ export function createPrCommentsPanel(host: PrCommentsHost): PrCommentsPanel {
     // then any PR only the feedback knows; the rest of the finished ones fold away.
     const { open: openPrs, finished } = groupTaskPrs(linked.prs || []);
     const seen = new Set<string>();
-    const cards: string[] = [];
+    const entries: Entry[] = [];
     const folded: TaskPr[] = [];
     for (const p of openPrs) {
       seen.add(prKey(p));
-      cards.push(cardHtml(p, byKey.get(prKey(p)), now));
+      entries.push({ p, f: byKey.get(prKey(p)) });
     }
     for (const p of finished) {
       seen.add(prKey(p));
       const f = byKey.get(prKey(p));
-      if (f) cards.push(cardHtml(p, f, now));
+      if (f) entries.push({ p, f });
       else folded.push(p);
     }
-    for (const f of feedback) if (!seen.has(prKey((f.c || f.b)!))) cards.push(cardHtml(undefined, f, now));
-    const any = cards.length + folded.length > 0;
+    for (const f of feedback) if (!seen.has(prKey((f.c || f.b)!))) entries.push({ f });
+    const any = entries.length + folded.length > 0;
+    if (linked.showFinished) for (const p of folded) entries.push({ p, fin: true });
+    // A lone PR opens; otherwise only the ones that need the user do, unless they chose.
+    const lone = entries.filter((e) => !e.fin).length + folded.length === 1;
+    const states = entries.map((e) => {
+      const needs = needsYou(e);
+      return { ...e, needs, open: folds[foldKey(e)] ?? (needs || lone) };
+    });
+    const main = states.filter((s) => !s.fin);
+    const cards = main.map((s) => cardHtml(s.p, s.f, now, s.open));
 
     if (!linked.prs && !cards.length) {
       patchHtml(host.panel, `<p class="tm-muted" data-key="loading"><span class="spinner"></span> Loading pull requests…</p>`);
@@ -327,6 +406,15 @@ export function createPrCommentsPanel(host: PrCommentsHost): PrCommentsPanel {
       );
     if (!loaded && !error && !berror && cards.length)
       parts.push(`<p class="tm-muted" data-key="reading"><span class="spinner"></span> Reading comments and builds…</p>`);
+    if (main.length && states.length > 1) {
+      const need = main.filter((s) => s.needs).length;
+      const closed = states.some((s) => !s.open);
+      parts.push(`
+        <div class="tpc-bar" data-key="bar">
+          ${need ? `<span class="tm-sig tone-warn">${need} ${need === 1 ? "needs" : "need"} you</span>` : `<span class="tpc-bar-quiet">Nothing needs you</span>`}
+          <button type="button" class="btn sm ghost" data-fold-all="bar">${closed ? "Expand all" : "Collapse all"}</button>
+        </div>`);
+    }
     if (!any) parts.push(emptyHtml(linked.workItem));
     else if (!cards.length) parts.push(`<p class="tm-muted" data-key="none-open">No open pull requests.</p>`);
     parts.push(...cards);
@@ -334,7 +422,13 @@ export function createPrCommentsPanel(host: PrCommentsHost): PrCommentsPanel {
       parts.push(
         `<button type="button" class="tm-pr-fold" data-key="fold" data-act="pr-finished" aria-expanded="${linked.showFinished}">${svg("chevron")}<span>${folded.length} finished</span></button>`
       );
-      if (linked.showFinished) parts.push(`<div class="tpc-finished" data-key="finished">${folded.map((p) => cardHtml(p, undefined, now)).join("")}</div>`);
+      if (linked.showFinished)
+        parts.push(
+          `<div class="tpc-finished" data-key="finished">${states
+            .filter((s) => s.fin)
+            .map((s) => cardHtml(s.p, undefined, now, s.open))
+            .join("")}</div>`
+        );
     }
     if (loaded) {
       const auto = !!(view?.auto ?? bview?.auto);
@@ -362,11 +456,12 @@ export function createPrCommentsPanel(host: PrCommentsHost): PrCommentsPanel {
   }
 
   /**
-   * One PR: its state in Azure DevOps and what it needs, then its failed builds and its review
-   * comments. `p` is the PR as linked to the task; `f` is what the worker tracks on it. Either
-   * can be missing: a PR nobody's watching, or one the worker watches that isn't linked yet.
+   * One PR: a head that always shows (its state in Azure DevOps, title, where it stands and what
+   * it needs), then a body that folds: its failed builds, its review comments and where it came
+   * from. `p` is the PR as linked to the task; `f` is what the worker tracks on it. Either can be
+   * missing: a PR nobody's watching, or one the worker watches that isn't linked yet.
    */
-  function cardHtml(p: TaskPr | undefined, f: Feedback | undefined, now: number): string {
+  function cardHtml(p: TaskPr | undefined, f: Feedback | undefined, now: number, expanded: boolean): string {
     const c = f?.c;
     const b = f?.b;
     const fb = c || b;
@@ -392,11 +487,15 @@ export function createPrCommentsPanel(host: PrCommentsHost): PrCommentsPanel {
         ? [fb.repo, `PR ${prId}`, shortBranch(fb.branch)].filter(Boolean)
         : [`${org} · PR ${prId}`];
     const state = p ? prState(p) : null;
-    const signals = p
-      ? prSignals(p)
-          .map((sig) => `<span class="tm-sig tone-${sig.tone}">${esc(sig.text)}</span>`)
-          .join("")
-      : "";
+    const chip = (text: string, tone: string): string => `<span class="tm-sig tone-${tone}">${esc(text)}</span>`;
+    // Folded, the status line also names what's waiting in the body.
+    const inside = expanded
+      ? []
+      : [
+          b && builds.shows(b) ? chip(BUILD_CHIP[b.state] || "Builds", builds.state(b).tone) : "",
+          c && c.state !== "watching" ? chip(COMMENT_CHIP[c.state] || "Comments", STATE[c.state].tone) : "",
+        ];
+    const signals = [...inside, ...(p ? prSignals(p).map((sig) => chip(sig.text, sig.tone)) : [])].join("");
     const canOpen = !!(s?.project && s.repoId);
     const worker = c?.worker || b?.worker;
     const source = [p ? prSourceText(p.source) : "", worker ? `Worker: ${worker}` : ""].filter(Boolean).join(" · ");
@@ -406,37 +505,55 @@ export function createPrCommentsPanel(host: PrCommentsHost): PrCommentsPanel {
         <div class="tpc-part-h"><p class="tv-sub">${label}</p><span class="tm-pr-state tone-${st.tone}">${st.label}</span></div>
         ${body}
       </div>`;
+    // Nothing to decide: one line instead of a header, a sentence and a button row.
+    const quiet = (key: string, label: string, text: string, action = ""): string => `
+      <div class="tpc-part tpc-quiet" data-key="${key}">
+        <p class="tv-sub">${label}</p><p class="tpc-line tm-muted">${text}</p>${action}
+      </div>`;
     let parts = "";
     if (b && (builds.shows(b) || !c)) {
-      parts += part("builds", "Builds", builds.state(b), builds.shows(b) ? builds.html(b) : `<p class="tpc-line tm-muted">No failed blocking builds.</p>`);
+      parts += builds.shows(b) ? part("builds", "Builds", builds.state(b), builds.html(b)) : quiet("builds", "Builds", "No failed blocking builds.");
     }
-    if (c) parts += part("comments", "Comments", STATE[c.state], bodyHtml(c));
+    if (c) {
+      parts +=
+        c.state === "watching"
+          ? quiet("comments", "Comments", "No open comments waiting on you.", auditButton("Review now"))
+          : part("comments", "Comments", STATE[c.state], bodyHtml(c));
+    }
+    const foot =
+      source || unlink
+        ? `<div class="tm-pr-foot" data-key="foot">
+            <span class="tm-pr-src">${esc(source)}</span>
+            ${unlink ? `<button type="button" class="btn sm ghost tm-pr-unlink" data-act="pr-unlink" aria-label="Unlink PR ${prId}">Unlink</button>` : ""}
+          </div>`
+        : "";
+    const body = parts + foot;
+    const bodyId = `tpc-b-${`${host.taskId}-${org}-${prId}`.replace(/[^\w-]/g, "_")}`;
     const key = esc(JSON.stringify([org, prId]));
     return `
-      <section class="tv-card tpc-pr" data-key="pr:${esc(prKey({ org, prId }))}" data-pr-key="${key}" data-org="${esc(org)}" data-pr="${prId}" aria-label="PR ${prId}">
-        <div class="tpc-status">
-          <div class="tm-pr-top">
-            ${state ? `<span class="tm-pr-state tone-${state.tone}">${esc(state.label)}</span>` : ""}
-            ${
-              canOpen
-                ? `<button type="button" class="tm-pr-title" data-act="pr-open" title="Open in the app">${esc(title)}</button>`
-                : `<span class="tm-pr-title">${esc(title)}</span>`
-            }
-            ${url ? `<a class="icon-btn tm-pr-ext" data-act="pr-ext" href="${esc(url)}" target="_blank" rel="noopener" title="Open in Azure DevOps" aria-label="Open PR ${prId} in Azure DevOps">${svg("external")}</a>` : ""}
-          </div>
-          <p class="tm-pr-meta" title="${esc(meta.join(" · "))}">${esc(meta.join(" · "))}</p>
-          ${signals ? `<div class="tm-pr-signals">${signals}</div>` : ""}
-          ${p?.error ? `<p class="tm-muted err">${esc(p.error)}</p>` : ""}
+      <section class="tpc-pr${expanded ? " is-open" : ""}" data-key="pr:${esc(prKey({ org, prId }))}" data-pr-key="${key}" data-org="${esc(org)}" data-pr="${prId}" aria-label="PR ${prId}">
+        <div class="tpc-head" data-key="head">
           ${
-            source || unlink
-              ? `<div class="tm-pr-foot">
-                  <span class="tm-pr-src">${esc(source)}</span>
-                  ${unlink ? `<button type="button" class="btn sm ghost tm-pr-unlink" data-act="pr-unlink" aria-label="Unlink PR ${prId}">Unlink</button>` : ""}
-                </div>`
-              : ""
+            body
+              ? `<button type="button" class="tpc-fold" data-fold="pr" aria-expanded="${expanded}" aria-controls="${bodyId}" aria-label="Details for PR ${prId}">${svg("chevron")}</button>`
+              : `<span class="tpc-fold-sp" aria-hidden="true"></span>`
           }
+          <div class="tpc-head-main">
+            <div class="tm-pr-top">
+              ${state ? `<span class="tm-pr-state tone-${state.tone}">${esc(state.label)}</span>` : ""}
+              ${
+                canOpen
+                  ? `<button type="button" class="tm-pr-title" data-act="pr-open" title="${esc(title)}">${esc(title)}</button>`
+                  : `<span class="tm-pr-title" title="${esc(title)}">${esc(title)}</span>`
+              }
+              ${url ? `<a class="icon-btn tm-pr-ext" data-act="pr-ext" href="${esc(url)}" target="_blank" rel="noopener" title="Open in Azure DevOps" aria-label="Open PR ${prId} in Azure DevOps">${svg("external")}</a>` : ""}
+            </div>
+            <p class="tm-pr-meta" title="${esc(meta.join(" · "))}">${esc(meta.join(" · "))}</p>
+            ${signals ? `<div class="tm-pr-signals">${signals}</div>` : ""}
+            ${p?.error ? `<p class="tm-muted err">${esc(p.error)}</p>` : ""}
+          </div>
         </div>
-        ${parts}
+        ${body ? `<div class="tpc-body" id="${bodyId}" data-key="body"${expanded ? "" : " hidden"}>${body}</div>` : ""}
       </section>`;
   }
 
@@ -643,8 +760,41 @@ export function createPrCommentsPanel(host: PrCommentsHost): PrCommentsPanel {
     });
   }
 
+  /** A click on a PR's head, away from its links, buttons and selected text, folds it like the chevron. */
+  function headFold(t: HTMLElement): HTMLElement | null {
+    const head = t.closest<HTMLElement>(".tpc-head");
+    if (!head || t.closest("a, button, input, select, textarea, label")) return null;
+    if (window.getSelection()?.toString()) return null;
+    return head.querySelector<HTMLElement>("[data-fold]");
+  }
+
+  function repaintFolds(): void {
+    saveFolds();
+    paintedSig = "";
+    paint();
+  }
+
+  function toggleFold(btn: HTMLElement): void {
+    const sec = btn.closest<HTMLElement>("section[data-pr]");
+    if (!sec) return;
+    setFold(`${host.taskId}|${prKey({ org: sec.dataset.org || "", prId: Number(sec.dataset.pr) })}`, btn.getAttribute("aria-expanded") !== "true");
+    repaintFolds();
+  }
+
+  function foldAll(openAll: boolean): void {
+    for (const sec of host.panel.querySelectorAll<HTMLElement>("section[data-pr]")) {
+      if (sec.querySelector("[data-fold]")) setFold(`${host.taskId}|${prKey({ org: sec.dataset.org || "", prId: Number(sec.dataset.pr) })}`, openAll);
+    }
+    repaintFolds();
+  }
+
   function onClick(e: MouseEvent): void {
-    const bnode = (e.target as HTMLElement).closest<HTMLElement>("[data-bact]");
+    const t = e.target as HTMLElement;
+    const all = t.closest<HTMLElement>("[data-fold-all]");
+    if (all) return foldAll(!!host.panel.querySelector('[data-fold][aria-expanded="false"]'));
+    const fold = t.closest<HTMLElement>("[data-fold]") || headFold(t);
+    if (fold) return toggleFold(fold);
+    const bnode = t.closest<HTMLElement>("[data-bact]");
     if (bnode) {
       const bpr = buildsPrOf(bnode);
       if (bpr) builds.onClick(bnode, bpr);

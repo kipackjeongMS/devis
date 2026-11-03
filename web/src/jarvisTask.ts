@@ -737,7 +737,7 @@ function selectWorker(sessionId: string): void {
 
 /** A control's identity across repaints: what it does and what it belongs to. */
 function focusKey(node: HTMLElement): string {
-  const own = ["data-act", "data-ide", "popovertarget", "data-tab", "data-ltab", "data-name", "data-decide", "data-choice", "data-repos", "data-run", "data-draft"].map((a) => node.getAttribute(a) || "");
+  const own = ["data-act", "data-ide", "popovertarget", "data-tab", "data-ltab", "data-name", "data-decide", "data-choice", "data-repos", "data-run", "data-draft", "data-fold", "data-fold-all"].map((a) => node.getAttribute(a) || "");
   // Controls repeated per request or per PR row belong to that row.
   const owner =
     node.closest<HTMLElement>("[data-request]")?.dataset.request || node.closest<HTMLElement>("[data-pr-key]")?.dataset.prKey || "";

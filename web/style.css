@@ -5518,9 +5518,42 @@ button.tm-pr-title:hover { color: var(--accent-text); text-decoration: underline
 .tv-dismiss textarea { width: 100%; min-height: 52px; padding: 6px 8px; border: 1px solid var(--stroke-control); border-radius: var(--r-control); background: var(--control); color: var(--text-1); font: inherit; font-size: var(--fs-label); resize: vertical; }
 .tv-confirm-list { margin: 10px 0 0; padding-left: 20px; color: var(--text-2); font-size: var(--fs-label); line-height: 22px; }
 
-/* Pull requests: per PR, its state in Azure DevOps, then the worker's proposals on its builds and comments. */
-.tpc-status { min-width: 0; }
-.tpc-status > .tm-muted.err { margin-top: 4px; }
+/* Pull requests: one card per PR. Its head (state, title, where it stands, what's waiting) always
+   shows; its body (builds, comments, where it came from) folds. */
+.tpc-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 28px; margin-bottom: 8px; }
+.tpc-bar-quiet { color: var(--text-3); font-size: var(--fs-caption); line-height: 18px; }
+.tpc-pr { display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--stroke-card); border-radius: var(--r-surface); background: var(--card); }
+.tpc-pr + .tpc-pr { margin-top: 8px; }
+.tpc-head { display: flex; align-items: flex-start; gap: 6px; padding: 10px 12px 10px 6px; border-radius: calc(var(--r-surface) - 1px); cursor: pointer; transition: background-color var(--t-fast) var(--ease); }
+.tpc-head:hover { background: var(--fill-hover); }
+.tpc-pr.is-open > .tpc-head { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.tpc-fold {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin-top: -2px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-control);
+  background: none;
+  color: var(--text-3);
+}
+.tpc-fold:hover { background: var(--fill-hover); color: var(--text-1); }
+.tpc-fold svg.ic { width: 14px; height: 14px; transition: transform var(--t-normal) var(--ease); }
+.tpc-fold[aria-expanded="true"] svg.ic { transform: rotate(90deg); }
+.tpc-fold-sp { flex: none; width: 24px; }
+.tpc-head-main { flex: 1 1 auto; min-width: 0; }
+.tpc-head-main > .tm-muted.err { margin-top: 4px; }
+.tpc-pr:not(.is-open) .tm-pr-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; overflow-wrap: normal; }
+.tpc-body { display: flex; flex-direction: column; gap: 10px; padding: 10px 12px 12px 36px; border-top: 1px solid var(--divider); }
+.tpc-pr .tv-block { border-left-width: 1px; border-left-color: var(--stroke-card); }
+.tpc-part + .tm-pr-foot { margin-top: 0; padding-top: 8px; border-top: 1px solid var(--divider); }
+.tpc-pr ~ .tv-auto { margin-top: 14px; }
+@container tmleft (max-width: 479px) {
+  .tpc-body { padding-left: 12px; }
+}
 .tpc-finished { margin-top: 10px; opacity: .85; }
 .tpc-line { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--text-2); font-size: var(--fs-label); line-height: 20px; }
 .tpc-line code { font: var(--fs-readout)/18px var(--mono); }
@@ -5551,8 +5584,10 @@ button.tm-pr-title:hover { color: var(--accent-text); text-decoration: underline
 .tpc-reply:focus, .tpc-note:focus { outline: none; border-color: var(--accent); }
 .tpc-applying { display: flex; flex-direction: column; gap: 4px; margin: 0; padding-left: 18px; color: var(--text-2); font-size: var(--fs-caption); line-height: var(--lh-caption); overflow-wrap: anywhere; }
 .tpc-part { display: flex; flex-direction: column; gap: 10px; }
-.tpc-status + .tpc-part,
 .tpc-part + .tpc-part { padding-top: 10px; border-top: 1px solid var(--divider); }
+.tpc-quiet { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.tpc-quiet > .tv-sub { flex: none; margin: 0; }
+.tpc-quiet > .tpc-line { flex: 1 1 160px; min-width: 0; }
 .tpc-part-h { display: flex; align-items: center; gap: 8px; }
 .tpc-part-h > .tv-sub { flex: 1 1 auto; margin: 0; }
 .tpb-fails { display: flex; flex-direction: column; gap: 4px; margin: 0; padding-left: 18px; color: var(--text-2); font-size: var(--fs-caption); line-height: var(--lh-caption); overflow-wrap: anywhere; }
@@ -6036,6 +6071,9 @@ body.layout-stacked { --pane-pad: 16px; }
   .detail-icon-btn { min-width: 44px; }
   .chain-port { opacity: 1; }
   .chain-block-action { height: 32px; padding: 0 12px 0 10px; border-radius: 16px; }
+  .tpc-fold { width: 44px; height: 44px; margin: -10px -2px -10px -8px; }
+  .tpc-fold-sp { width: 34px; }
+  .tpc-body { padding-left: 12px; }
 }
 
 @media (forced-colors: active) {
