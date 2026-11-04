@@ -716,6 +716,12 @@ async function readLive(sessionId: string): Promise<void> {
   }
 }
 
+/** Show this worker's chat next time the task opens (or now, if it's already open), e.g. from its code window. */
+export function preferWorker(taskId: string, sessionId: string): void {
+  selectedByTask.set(taskId, sessionId);
+  if (modal?.taskId === taskId) selectWorker(sessionId);
+}
+
 function selectWorker(sessionId: string): void {
   const m = modal;
   if (!m || m.sessionId === sessionId) return;

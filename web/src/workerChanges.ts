@@ -3,6 +3,8 @@
 // API, so the main window never has to push anything here. The URL hash keeps the
 // comparison and the file, so a reload (or a service restart on a new port) lands on the
 // same spot. Below about 900px the tree folds into a file picker (CSS picks the layout).
+// askQueue.ts adds "Ask <worker>" on top: line and file selection, a queue, and Send all.
+import { mountAskQueue, type AskQueue } from "./askQueue.js";
 import { diffTable } from "./diffTable.js";
 import { icon, type IconName } from "./icons.js";
 import { closeIdePicker, idePickerHtml } from "./idePicker.js";
@@ -40,7 +42,7 @@ export interface RepoChanges {
 export interface WorkerChanges {
   mode: ChangesMode;
   at: string;
-  worker: { name: string; task: string; busy: boolean; state: string };
+  worker: { name: string; task: string; busy: boolean; state: string; taskId?: string };
   repos: RepoChanges[];
 }
 
@@ -156,6 +158,7 @@ async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
 const nf = new Intl.NumberFormat("en-US");
 const num = (v: number): string => nf.format(v);
 const svg = (name: IconName): string => icon(name);
+const PICK_CHECK = icon("check").replace('class="ic ic-check"', 'class="ic ic-check cw-pickck"');
 const isMode = (v: unknown): v is ChangesMode => MODES.some((m) => m.id === v);
 const byName = (a: string, b: string): number => a.localeCompare(b, undefined, { sensitivity: "base", numeric: true });
 const shortSha = (sha: string | null): string => (sha ? sha.slice(0, 7) : "");
@@ -309,6 +312,7 @@ export function mountWorkerChanges(root: HTMLElement, options: ChangesOptions): 
   const opening = new Set<string>();
   let pickKeys: string[] = [];
   let pickActive = 0;
+  let ask: AskQueue | null = null;
 
   root.classList.add("cw");
   root.innerHTML = `
@@ -457,7 +461,7 @@ export function mountWorkerChanges(root: HTMLElement, options: ChangesOptions): 
       added += f.file.added || 0;
       removedLines += f.file.removed || 0;
     }
-    totals.innerHTML = `${filesWord(files.length)} ${counts(added, removedLines)}`;
+    totals.innerHTML = `<span class="cw-tot-files">${filesWord(files.length)}</span> ${counts(added, removedLines)}`;
   }
 
   function renderUpdated(): void {
@@ -549,8 +553,8 @@ export function mountWorkerChanges(root: HTMLElement, options: ChangesOptions): 
     return (
       `<div class="cw-row cw-file${x.status === "D" ? " del" : ""}" role="treeitem" aria-level="${level}" aria-selected="false" ` +
       `aria-label="${esc(parts.join(", "))}" data-key="${esc(f.key)}" tabindex="-1" title="${esc(title)}" style="--d:${level - 1}">` +
-      `<span class="cw-twist"></span>${svg("file")}<span class="cw-nm">${esc(f.name)}</span>` +
-      `<span class="cw-r">${x.binary ? `<span class="cw-n">bin</span>` : counts(x.added, x.removed)}<b class="cw-st cw-st-${x.status}" aria-hidden="true">${x.status}</b></span>` +
+      `<span class="cw-twist"></span>${svg("file")}${PICK_CHECK}<span class="cw-nm">${esc(f.name)}</span>` +
+      `<span class="cw-r"><span class="cw-qmark" hidden></span>${x.binary ? `<span class="cw-n">bin</span>` : counts(x.added, x.removed)}<b class="cw-st cw-st-${x.status}" aria-hidden="true">${x.status}</b></span>` +
       `</div>`
     );
   }
@@ -641,6 +645,7 @@ export function mountWorkerChanges(root: HTMLElement, options: ChangesOptions): 
       if (on && reveal) r.scrollIntoView({ block: "nearest" });
     }
     applyRoving();
+    ask?.syncTree();
   }
 
   function focusRow(row: HTMLElement | undefined | null): void {
@@ -678,6 +683,7 @@ export function mountWorkerChanges(root: HTMLElement, options: ChangesOptions): 
     activeKey = key;
     const f = fileByKey.get(key);
     if (f) {
+      if (ask?.treeClick(e, row)) return;
       select(f);
       row.focus({ preventScroll: true });
     } else {
@@ -686,9 +692,13 @@ export function mountWorkerChanges(root: HTMLElement, options: ChangesOptions): 
   }
 
   function onTreeKey(e: KeyboardEvent): void {
-    if (e.altKey || e.ctrlKey || e.metaKey) return;
     const row = (e.target as HTMLElement).closest<HTMLElement>('[role="treeitem"]');
     if (!row || e.target !== row) return;
+    if (ask?.treeKey(e, row)) {
+      e.preventDefault();
+      return;
+    }
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
     const rows = treeRows();
     const i = rows.indexOf(row);
     const key = row.dataset.key || "";
@@ -726,8 +736,10 @@ export function mountWorkerChanges(root: HTMLElement, options: ChangesOptions): 
       case "Enter":
       case " ": {
         const f = fileByKey.get(key);
-        if (f) select(f);
-        else toggle(key);
+        if (f) {
+          ask?.clearPicks();
+          select(f);
+        } else toggle(key);
         break;
       }
       default:
@@ -896,6 +908,7 @@ export function mountWorkerChanges(root: HTMLElement, options: ChangesOptions): 
       `<span class="cw-counts">${x.binary ? "" : counts(x.added, x.removed)}</span>` +
       `<span class="cw-sp"></span>` +
       `<span class="cw-pos">${num(i + 1)} of ${num(files.length)}</span>` +
+      askFileButton("btn sm ghost cw-askfile") +
       `<span class="cw-nav">` +
       `<button type="button" class="btn sm ghost cw-icon" data-act="prev" aria-label="Previous file" title="Previous file (Alt+\u2191)"${i <= 0 ? " disabled" : ""}>${svg("up")}</button>` +
       `<button type="button" class="btn sm ghost cw-icon" data-act="next" aria-label="Next file" title="Next file (Alt+\u2193)"${i >= files.length - 1 ? " disabled" : ""}>${svg("down")}</button>` +
@@ -919,6 +932,13 @@ export function mountWorkerChanges(root: HTMLElement, options: ChangesOptions): 
     window.clearTimeout(skeletonTimer);
     body.classList.remove("cw-pending");
     body.innerHTML = html;
+    ask?.afterDiff();
+  }
+
+  function askFileButton(cls: string): string {
+    if (removed) return "";
+    const nm = esc(workerName());
+    return `<button type="button" class="${cls}" data-act="ask-file" title="Ask ${nm} about this file">${svg("ask")}<span>Ask ${nm}</span></button>`;
   }
 
   /** The diff pane when no file is picked: loading, nothing to show, or why. */
@@ -1040,13 +1060,13 @@ export function mountWorkerChanges(root: HTMLElement, options: ChangesOptions): 
           : x.status === "D"
             ? `${bytes(d.oldSize)}, now deleted`
             : `${bytes(d.oldSize)} \u2192 ${bytes(d.newSize)}`;
-      setBody(stateHtml({ icon: "file", title: "Binary file, no text diff", text: `<span class="cw-mono">${esc(f.name)} \u00b7 ${esc(size)}</span>`, actions: ideButtons() }));
+      setBody(stateHtml({ icon: "file", title: "Binary file, no text diff", text: `<span class="cw-mono">${esc(f.name)} \u00b7 ${esc(size)}</span>`, actions: ideButtons() + askFileButton("btn sm") }));
       return;
     }
     if (d.tooLarge) {
       const lines = Math.max(d.oldCount || 0, d.newCount || 0);
       const why = lines > LINE_LIMIT ? `${num(lines)} lines. The limit is ${num(LINE_LIMIT)} per side.` : `${bytes(Math.max(d.oldSize || 0, d.newSize || 0))}. The limit is ${bytes(BYTE_LIMIT)}.`;
-      setBody(stateHtml({ icon: "warning", tone: "caution", title: "This diff is too big to show here", text: esc(why), actions: ideButtons() }));
+      setBody(stateHtml({ icon: "warning", tone: "caution", title: "This diff is too big to show here", text: esc(why), actions: ideButtons() + askFileButton("btn sm") }));
       return;
     }
     const hunks = d.hunks || [];
@@ -1072,6 +1092,7 @@ export function mountWorkerChanges(root: HTMLElement, options: ChangesOptions): 
     const { table } = diffTable(hunks);
     setBody(x.status === "D" ? `<p class="cw-dnote">${svg("trash")}<span>Deleted in this comparison. These are the lines it had.</span></p>` : "");
     body.append(table);
+    ask?.afterDiff();
   }
 
   function renderStatus(): void {
@@ -1123,6 +1144,7 @@ export function mountWorkerChanges(root: HTMLElement, options: ChangesOptions): 
     renderPicker();
     renderStatus();
     syncDiff();
+    ask?.update();
   }
 
   function scheduleNext(): void {
@@ -1162,6 +1184,7 @@ export function mountWorkerChanges(root: HTMLElement, options: ChangesOptions): 
     renderChip();
     renderBanner();
     renderUpdated();
+    ask?.update();
   }
 
   async function refresh(): Promise<void> {
@@ -1346,6 +1369,9 @@ export function mountWorkerChanges(root: HTMLElement, options: ChangesOptions): 
       case "ide":
         void openIde(act.dataset.ide || "");
         break;
+      case "ask-file":
+        ask?.askFile(act);
+        break;
       case "dismiss":
         notice = "";
         renderBanner();
@@ -1382,6 +1408,8 @@ export function mountWorkerChanges(root: HTMLElement, options: ChangesOptions): 
       } else if (!dd.hidden) {
         e.preventDefault();
         closePicker(true);
+      } else if (!e.defaultPrevented && ask?.escape()) {
+        e.preventDefault();
       }
       return;
     }
@@ -1434,6 +1462,32 @@ export function mountWorkerChanges(root: HTMLElement, options: ChangesOptions): 
   window.addEventListener("resize", onResize);
   const ticker = window.setInterval(renderUpdated, iv.tick);
 
+  ask = mountAskQueue({
+    root,
+    refreshBtn,
+    split,
+    side: root.querySelector<HTMLElement>(".cw-side")!,
+    tree,
+    body,
+    sessionId: worker,
+    name: () => data?.worker.name ?? "",
+    busy: () => !!data?.worker.busy,
+    taskId: () => data?.worker.taskId,
+    modeLabel: () => MODES.find((m) => m.id === mode)?.label ?? "",
+    multiRepo: () => repoNodes.length > 1,
+    alive: () => !removed && !destroyed,
+    fileByKey: (k) => {
+      const f = fileByKey.get(k);
+      return f ? { key: f.key, path: f.file.path, repoName: f.repo.name } : undefined;
+    },
+    currentKey: () => current()?.key,
+    open: (k) => {
+      const f = fileByKey.get(k);
+      if (f) select(f);
+    },
+    focusRow: (row) => focusRow(row),
+  });
+
   setTreeWidth(preferred, false);
   renderModes();
   renderTree();
@@ -1444,6 +1498,7 @@ export function mountWorkerChanges(root: HTMLElement, options: ChangesOptions): 
     refresh,
     destroy(): void {
       destroyed = true;
+      ask?.destroy();
       window.clearTimeout(timer);
       window.clearTimeout(noticeTimer);
       window.clearTimeout(skeletonTimer);

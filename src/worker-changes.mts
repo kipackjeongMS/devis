@@ -45,7 +45,7 @@ export interface RepoChanges {
 export interface WorkerChanges {
     mode: ChangesMode;
     at: string;
-    worker: { name: string; task: string; busy: boolean; state: string };
+    worker: { name: string; task: string; busy: boolean; state: string; taskId: string };
     repos: RepoChanges[];
 }
 
@@ -421,7 +421,7 @@ export async function listWorkerChanges(sessionId: unknown, modeValue: unknown):
     return {
         mode,
         at: new Date().toISOString(),
-        worker: { name: worker.label, task: task?.title || "", busy: isWorkerBusy(worker.sessionId), state: worker.state },
+        worker: { name: worker.label, task: task?.title || "", busy: isWorkerBusy(worker.sessionId), state: worker.state, taskId: worker.taskId },
         repos,
     };
 }

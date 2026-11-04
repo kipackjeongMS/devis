@@ -39,6 +39,18 @@ export function codeWindowUrl(origin: string, worker: string, hash = ""): string
     return `${origin}/code.html?worker=${encodeURIComponent(worker)}${keep}`;
 }
 
+/** A code window asking to bring the main window forward (`/?focus=main` on the service's own origin). */
+export function isFocusMainUrl(url: string, origin: string): boolean {
+    if (!origin) return false;
+    let parsed: URL;
+    try {
+        parsed = new URL(url);
+    } catch {
+        return false;
+    }
+    return parsed.origin === origin && parsed.pathname === "/" && parsed.searchParams.get("focus") === "main";
+}
+
 /** Saved bounds read back from disk, or null when they're missing or malformed. */
 export function parsePlacement(value: unknown): SavedPlacement | null {
     if (!value || typeof value !== "object") return null;

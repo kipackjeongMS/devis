@@ -60,6 +60,11 @@ const PATHS = {
   layout: '<rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M7 3v10M7 8h6.5"/>',
   col: '<rect x="2.5" y="2.5" width="11" height="11" rx="1.5"/><path d="M8 2.5v11"/>',
   reset: '<path d="M3 8a5 5 0 1 0 1.5-3.5M3 2.5V5h2.5"/>',
+  ask: '<path d="M2.75 3.25h10.5v7.5h-6l-3 2.5v-2.5h-1.5z"/><path d="M5.5 6.25h5M5.5 8.25h3"/>',
+  queue: '<path d="M5.5 4h8M5.5 8h8M5.5 12h5M2.5 4h.5M2.5 8h.5M2.5 12h.5"/>',
+  send: '<path d="M2.5 7.75 13.5 2.5 9.5 13.5 7.5 8.5z"/><path d="M7.5 8.5 13.5 2.5"/>',
+  files: '<path d="M5.75 1.75h4.5l2.5 2.5v7.5h-7z"/><path d="M3.25 4.25v10h6.5"/>',
+  lines: '<path d="M2.5 4h11M2.5 8h11M2.5 12h7"/>',
 } as const;
 
 export type IconName = keyof typeof PATHS;

@@ -507,7 +507,7 @@ Every new task gets a place on disk, and every worker gets its own copy of the c
 
 #### A worker's changes
 
-**View changes**, beside **Open in** in a worker's chat, opens what that worker changed in a window of its own. The task sheet keeps its panes as they are, and the code gets the full width. It's read-only for now: edits happen in the IDE.
+**View changes**, beside **Open in** in a worker's chat, opens what that worker changed in a window of its own. The task sheet keeps its panes as they are, and the code gets the full width. It doesn't edit files: edits happen in the IDE, or you [ask the worker](#asking-the-worker).
 
 - **The window:** one per worker. Opening it again brings it forward. A new one opens where the last one closed, at the same size, and maximized if that one was; with another code window already there, it steps 28px down and right. It can't go below 480 × 360. The title names the worker and the task. Closing the main window closes every code window. A worker on an older task, with no folder of its own, has the button disabled and says why.
 - **Compare:** three choices in the toolbar.
@@ -519,6 +519,18 @@ Every new task gets a place on disk, and every worker gets its own copy of the c
 - **Keeping up:** the window reads the list every 10 seconds while the worker is working and every 30 when it's idle, once more just after a turn ends, and on focus. F5 or Ctrl+R reads it now. The toolbar says when it last read ("Updated just now"). A read that fails keeps what's shown, dimmed, and retries, from 3 seconds up to 15. A removed worker leaves the window open, saying so, with **Close window**.
 - **The splitter:** drag the line between the tree and the diff, or focus it and use the arrow keys (Shift for bigger steps, Home and End). The tree is 200px to half the window, 300px by default, and double-click resets it. The width is kept for the next window.
 - **Narrow windows:** under 900px the tree becomes a file picker over the diff, with Prev, Next and a filter box, and the comparison becomes a dropdown. Under 600px the "Updated" time goes and the worker's state shows only as its dot, with the state in the tooltip and for screen readers.
+
+#### Asking the worker
+
+In the code window you collect questions and change requests about what the worker changed, then send them all as one message. The worker gets the whole picture in one turn, instead of one interruption per question.
+
+- **Picking lines:** click a line number, then Shift+click or drag to extend. On touch, tap a second line to extend, and tap a selected line to clear. Selecting code text with the mouse works too. An **Ask atlas** pill sits by the selection.
+- **Picking files:** Ctrl+click files in the tree to pick several (the open file comes along, as in VS Code), or Shift+click for a range. Each file's header also has **Ask atlas** for the whole file.
+- **The menu:** right-click lines or picked files for **Ask atlas about L12–14…** or **Ask atlas about 3 files…**, plus copying the lines or paths.
+- **The ask box:** a small box by the selection that names what it's about. Enter adds the ask to the queue, Shift+Enter starts a new line and Escape cancels.
+- **The queue:** **Queue** in the toolbar shows the count and opens the queue beside the diff. Each ask is numbered and shows its lines (an excerpt of up to 12) or its files; click it to jump there, or edit or remove it. Lines with a queued ask are marked in the gutter, and files with one get a dot in the tree. **Preview message** shows exactly what the worker gets. The queue is kept per worker, so closing the window doesn't lose it.
+- **Send all:** sends every ask as one message. If the worker is in a turn, it waits for that turn to end. The asks move to **Sent** with their status: waiting for atlas to finish its turn, atlas is on it, Answered, or "Couldn't confirm atlas got this" with **Put back in queue**. When the reply answers the asks by number, each answer shows under its ask, with the full reply below. **Open in worker chat** brings the main window to that worker's chat, and **Dismiss** clears a finished batch.
+- **Narrow windows:** under 900px the queue is a bottom sheet. While it's closed with asks in it, a bar at the bottom shows the count and opens it.
 
 #### Today
 

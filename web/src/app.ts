@@ -26,6 +26,7 @@ import { startInboxWatch, refreshInbox } from "./inboxWatch.js";
 import { initReadingPane, closePane } from "./readingPane.js";
 import { showPipelines, hidePipelines, reloadPipelines, showChainById } from "./pipelines.js";
 import { showJarvis, hideJarvis, reloadJarvis, resumeNoteDraft, openTaskById } from "./jarvis.js";
+import { preferWorker } from "./jarvisTask.js";
 import { jarvisSettings } from "./settingsJarvis.js";
 import { icon } from "./icons.js";
 import { showAgencyBanner } from "./staleBanner.js";
@@ -717,5 +718,16 @@ window.addEventListener("ado-open-task", (e) => {
   setFeature("jarvis");
   openTaskById(detail.taskId, detail.tab);
 });
+// A worker's code window asks to continue in that worker's chat ("Open in chat" on a sent batch).
+if (typeof BroadcastChannel === "function") {
+  new BroadcastChannel("devis-code").addEventListener("message", (e: MessageEvent) => {
+    const d = e.data;
+    if (d?.type !== "open-worker" || typeof d.taskId !== "string" || typeof d.sessionId !== "string") return;
+    preferWorker(d.taskId, d.sessionId);
+    setFeature("jarvis");
+    openTaskById(d.taskId);
+    window.focus();
+  });
+}
 
 boot();

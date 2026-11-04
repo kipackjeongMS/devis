@@ -14,7 +14,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { endService, ensureService, serviceFiles, serviceStatus, stopService, watchService, type ServiceStatus } from "./service-files.mjs";
 import { APP_NAME, DATA_FOLDER, FORMER_APP_NAME } from "./brand.mjs";
-import { CODE_WINDOW_MIN, codeWindowUrl, codeWindowWorker, parsePlacement, placeCodeWindow, type SavedPlacement } from "./code-window.mjs";
+import { CODE_WINDOW_MIN, codeWindowUrl, codeWindowWorker, isFocusMainUrl, parsePlacement, placeCodeWindow, type SavedPlacement } from "./code-window.mjs";
 
 // Kept from the app's first name: Windows ties toast settings to it.
 const APP_ID = "AdoPrOps.Desktop";
@@ -72,12 +72,14 @@ function openOutside(url: string): void {
 
 /**
  * Keep the window on the service's origin (it can change when the service restarts); everything else opens in the browser.
- * The one window.open the page may make itself is a worker's code window, and the shell builds that window, not the page.
+ * The page's own window.opens are a worker's code window (the shell builds it, not the page) and a code window's
+ * "back to the main window" (`/?focus=main`), which only brings that window forward.
  */
 function confineToOrigin(contents: WebContents): void {
     contents.setWindowOpenHandler(({ url }) => {
         const worker = codeWindowWorker(url, origin);
         if (worker) openCodeWindow(worker);
+        else if (isFocusMainUrl(url, origin)) focusMainWindow();
         else if (isWebUrl(url)) openOutside(url);
         return { action: "deny" };
     });
@@ -197,6 +199,13 @@ function savePlacement(window: BrowserWindow): void {
     } catch {
         // Placement is a convenience; the next window falls back to the main window's display.
     }
+}
+
+/** Bring the main window forward (a code window's "Open in chat", a second launch). */
+function focusMainWindow(): void {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
 }
 
 /** A worker's changes, full width in a window of its own. Opening one that's already up brings it forward. */
@@ -401,11 +410,7 @@ if (process.argv.includes("--install-shortcut")) {
 } else if (!app.requestSingleInstanceLock()) {
     app.quit();
 } else {
-    app.on("second-instance", () => {
-        if (!mainWindow) return;
-        if (mainWindow.isMinimized()) mainWindow.restore();
-        mainWindow.focus();
-    });
+    app.on("second-instance", () => focusMainWindow());
     app.on("window-all-closed", () => app.quit());
     // The service keeps running while it has work; only the window's connection goes.
     app.on("before-quit", () => {

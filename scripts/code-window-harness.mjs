@@ -2,7 +2,7 @@
 // the URL the shell builds, reading saved bounds back, and where a new window goes.
 // Run after `npm run build:backend`: node scripts/code-window-harness.mjs
 import assert from "node:assert/strict";
-import { CASCADE_STEP, CODE_WINDOW_MIN, codeWindowUrl, codeWindowWorker, parsePlacement, placeCodeWindow } from "../code-window.mjs";
+import { CASCADE_STEP, CODE_WINDOW_MIN, codeWindowUrl, codeWindowWorker, isFocusMainUrl, parsePlacement, placeCodeWindow } from "../code-window.mjs";
 
 const origin = "http://127.0.0.1:4317";
 const id = "3f2b8c1e-9a4d-4e6b-8f21-0c5d7e9a1b23";
@@ -27,6 +27,14 @@ assert.equal(codeWindowUrl(origin, id), `${origin}/code.html?worker=${id}`);
 assert.equal(codeWindowUrl(origin, id, "#mode=last&repo=a&path=src%2Fx.ts"), `${origin}/code.html?worker=${id}#mode=last&repo=a&path=src%2Fx.ts`);
 assert.equal(codeWindowUrl(origin, id, "#"), `${origin}/code.html?worker=${id}`, "an empty hash is dropped");
 assert.equal(codeWindowUrl(origin, id, "mode=x"), `${origin}/code.html?worker=${id}`, "only a real hash rides along");
+
+// ---- the "back to the main window" URL ----
+assert.equal(isFocusMainUrl(`${origin}/?focus=main`, origin), true);
+assert.equal(isFocusMainUrl(`${origin}/?focus=other`, origin), false);
+assert.equal(isFocusMainUrl(`${origin}/code.html?focus=main`, origin), false, "only the main page");
+assert.equal(isFocusMainUrl("https://evil.example/?focus=main", origin), false, "only the service's origin");
+assert.equal(isFocusMainUrl(`${origin}/?focus=main`, ""), false, "no origin yet");
+assert.equal(isFocusMainUrl("not a url", origin), false);
 
 // ---- saved bounds ----
 assert.deepEqual(parsePlacement({ x: 10.4, y: 20, width: 800, height: 600, maximized: true }), { x: 10, y: 20, width: 800, height: 600, maximized: true });

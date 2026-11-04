@@ -89,7 +89,7 @@ try {
     const byPath = (repo) => Object.fromEntries(repo.files.map((f) => [f.path, f]));
     const branch = await changes.listWorkerChanges(atlas.sessionId, "branch");
     assert.equal(branch.mode, "branch");
-    assert.deepEqual(branch.worker, { name: "atlas", task: "Code window", busy: false, state: "turnDone" });
+    assert.deepEqual(branch.worker, { name: "atlas", task: "Code window", busy: false, state: "turnDone", taskId: task.id });
     assert.equal(branch.repos.length, 1);
     const repo = branch.repos[0];
     assert.equal(repo.key, key);
