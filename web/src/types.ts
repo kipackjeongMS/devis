@@ -31,7 +31,17 @@ export interface PR {
   myVote?: number; // current user's own vote (0 when not an individual reviewer)
   iCommented?: boolean; // current user left at least one non-system comment
   plateDismissed?: boolean; // user hid this PR from My feed
+  headCommit?: string; // the source branch's latest commit, which changes on every push
+  pushedAt?: string | null; // when the author last pushed (filled in the background)
+  myAt?: string | null; // when I last commented or voted
+  myKind?: "comment" | "vote" | null;
   url: string;
+}
+
+/** A project whose active PRs ran past the first page of /api/prs. */
+export interface CappedProject {
+  org: string;
+  project: string;
 }
 
 /** The commit anchors for a PR's latest iteration. */
@@ -208,6 +218,12 @@ export interface Notification {
 export interface AppState {
   config: Config;
   prs: PR[];
+  /** PRs I authored that aren't in `prs` (other projects, or past the first page). */
+  authoredPrs: PR[];
+  /** Projects with more active PRs than the first page, for "Load older PRs". */
+  cappedProjects: CappedProject[];
+  /** Older pages of active PRs, loaded on demand for Reviews; never shown in the queue. */
+  olderPrs: PR[];
   org: string;
   project: string;
   queueView: QueueView;

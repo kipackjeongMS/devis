@@ -31,6 +31,7 @@ import { jarvisSettings } from "./settingsJarvis.js";
 import { icon } from "./icons.js";
 import { showAgencyBanner } from "./staleBanner.js";
 import { applyShellClasses } from "./shell.js";
+import { loadPrRecency, prIdentity } from "./prRecency.js";
 import type { PR } from "./types.js";
 
 interface CopilotRuntimeInfo {
@@ -180,6 +181,11 @@ async function loadPRs(refreshActivity = false, stopPolling = true): Promise<voi
       throw new Error(res.errors.join("\n"));
     }
     state.prs = res.prs || [];
+    state.authoredPrs = res.authored || [];
+    state.cappedProjects = res.capped || [];
+    // Older pages stay loaded across a refresh, minus any that moved onto the first page.
+    const listed = new Set(state.prs.map((pr) => prIdentity(pr)));
+    state.olderPrs = state.olderPrs.filter((pr) => !listed.has(prIdentity(pr)));
     listAsOf = Date.now();
     noteStaleList(null);
     if (res.errors && res.errors.length) toast(res.errors[0], "err");
@@ -187,6 +193,8 @@ async function loadPRs(refreshActivity = false, stopPolling = true): Promise<voi
     renderList(stopPolling);
     window.dispatchEvent(new CustomEvent("ado-prs-loaded"));
     if (res.activityPending > 0) void loadCommentActivity();
+    // Last push and my last comment or vote, read in the background (/api/pr-recency).
+    if (res.recencyPending > 0) loadPrRecency();
   } catch (e: any) {
     settled = true;
     if (load !== prsLoad) return;
@@ -595,6 +603,11 @@ function settingsCard(
 }
 
 // ---------- events ----------
+// The Workspace's Pull Requests panel asks for a fresh list without leaving the Workspace.
+window.addEventListener("ado-prs-refresh", () => {
+  if ((state.config.organizations || []).length) void loadPRs(true);
+  else window.dispatchEvent(new CustomEvent("ado-prs-loaded"));
+});
 $("#btnSettings").addEventListener("click", renderSettings);
 $("#btnRefresh").addEventListener("click", () => {
   void refreshInbox();

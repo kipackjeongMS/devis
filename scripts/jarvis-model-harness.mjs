@@ -287,9 +287,9 @@ assert.equal(
     "Azure AppConfig · #2841124 · Task · Active · under User Story #2841117 Pin upstream artifacts",
 );
 assert.equal(m.taskMeta(custom), "custom task");
-assert.equal(m.todaySummary({ needs: 1, reviews: 2, running: 0, done: 1 }), "1 needs you · 1 done today · 2 PRs to review");
+assert.equal(m.todaySummary({ needs: 1, reviews: 2, running: 0, done: 1 }), "1 needs you · 1 done today", "PRs live in their own panel, not the Tasks summary");
 assert.equal(m.todaySummary({}), "Nothing in Tasks yet");
-assert.equal(m.SECTIONS.map((s) => s.id).join(), "needs,running,idle,done,reviews", "pull request reviews come last");
+assert.equal(m.SECTIONS.map((s) => s.id).join(), "needs,running,idle,done", "Tasks holds only tasks");
 
 // ---- the quick note: an edit and what an agent added meanwhile ----
 const appended = "Standup at 10.\n\n[Jarvis, Oct 15, 3:00 PM] Canary is green.";

@@ -4127,6 +4127,71 @@ button.rr-main { cursor: pointer; }
 .rr-group { display: flex; align-items: center; gap: 6px; margin: 6px 0 2px; color: var(--text-3); font: 500 12px/18px var(--font); }
 .rr-group > span { margin-left: auto; font-family: var(--mono); }
 .rr-sec + .rr-sec { margin-top: 8px; }
+
+/* The Pull Requests panel: My PRs and Reviews, each folding on its own. */
+.pp-sec + .pp-sec { margin-top: 10px; }
+.pp-h { margin: 0; }
+.pp-t {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-2);
+  font: 500 12px/18px var(--font);
+  text-align: left;
+  cursor: pointer;
+}
+.pp-t:hover { color: var(--text-1); }
+.pp-t:focus-visible { border-radius: var(--r-control); outline: 2px solid var(--focus); outline-offset: 1px; }
+.pp-t svg.ic { flex: none; width: 12px; height: 12px; color: var(--text-3); transition: transform var(--t-fast) var(--ease); }
+.pp-t[aria-expanded="true"] svg.ic { transform: rotate(90deg); }
+.pp-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pp-n { margin-left: auto; color: var(--text-3); font: 400 12px/18px var(--mono); }
+.pp-n:empty { display: none; }
+.pp-b { padding-top: 2px; }
+.pp-tools { display: grid; gap: 6px; margin: 0 0 6px; }
+.pp-search svg.ic { left: 9px; width: 14px; height: 14px; }
+.pp-search input { min-height: 28px; padding-block: 3px; padding-left: 30px; font-size: 12.5px; }
+.pp-search input:placeholder-shown:not(:focus) { padding-right: 11px; }
+.pp-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.pp-chip {
+  height: 24px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--neutral-tint);
+  color: var(--text-2);
+  font: 500 11.5px/24px var(--font);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--t-fast) linear, color var(--t-fast) linear;
+}
+.pp-chip:hover { background: rgba(255, 255, 255, .1); color: var(--text-1); }
+.pp-chip[aria-pressed="true"] { background: var(--accent-tint); color: var(--accent-text); }
+.pp-chip:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.pp-id { min-width: 0; overflow: hidden; color: var(--text-3); text-overflow: ellipsis; white-space: nowrap; }
+.pp-num { font: 400 11.5px/18px var(--mono); }
+.pp-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; margin-top: 4px; }
+.pp-foot .rs-more,
+.pp-foot .rs-empty { margin: 0; }
+.pp-showing { color: var(--text-3); font-size: 12px; line-height: 18px; font-variant-numeric: tabular-nums; }
+.pp-err { color: var(--critical); font-size: 12px; line-height: 18px; }
+.pp-sentinel { height: 1px; }
+/* A PR that starts needing you lights up once as it moves to the top. */
+.rr.flash { animation: rr-flash 1.4s var(--ease); }
+@keyframes rr-flash { 0%, 35% { background: var(--accent-tint); } }
+@media (prefers-reduced-motion: reduce) {
+  .rr.flash { animation: none; }
+}
+@media (pointer: coarse) {
+  .pp-chip { height: 32px; padding: 0 12px; line-height: 32px; }
+  .pp-chips { gap: 6px; }
+}
 /* Two-line rows (Communication, Meetings): name and time, then the line that matters. */
 .rr2 {
   display: block;
@@ -4406,6 +4471,8 @@ button.rr-main { cursor: pointer; }
 @media (max-width: 599.98px) and (pointer: coarse) {
   .rr-main,
   .rs-t,
+  .pp-t,
+  .pp-search input,
   .jarvis-view.flat .pn-grip,
   .ld-item,
   .ld-day,

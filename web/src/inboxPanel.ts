@@ -50,8 +50,33 @@ export function initInbox(): void {
 export function applyInbox(next: { items: Notification[]; unread: number }): void {
   items = next.items || [];
   unread = Number(next.unread || 0);
+  changed();
+}
+
+/** The feed as last loaded, for the Workspace's My PRs. */
+export function inboxItems(): readonly Notification[] {
+  return items;
+}
+
+/** Mark these notifications read, as opening the PR from My PRs does. */
+export async function markPrRead(ids: string[]): Promise<void> {
+  const fresh = items.filter((n) => n.unread && ids.includes(n.id));
+  if (!fresh.length) return;
+  for (const n of fresh) n.unread = 0;
+  unread = Math.max(0, unread - fresh.length);
+  changed();
+  try {
+    await postJSON("/api/inbox/read", { ids: fresh.map((n) => n.id) });
+  } catch {
+    /* non-fatal: local state already reflects the read */
+  }
+}
+
+/** The bell, the open flyout and the Workspace all follow the feed. */
+function changed(): void {
   renderBadge();
   if (open) renderList();
+  window.dispatchEvent(new CustomEvent("ado-inbox"));
 }
 
 /** Durable (not per-poll-flash) indicator that the background poll is
@@ -171,8 +196,7 @@ async function onRow(id: string): Promise<void> {
   if (n.unread) {
     n.unread = 0;
     unread = Math.max(0, unread - 1);
-    renderBadge();
-    renderList();
+    changed();
     try {
       await postJSON("/api/inbox/read", { ids: [id] });
     } catch {
@@ -195,8 +219,7 @@ function route(n: Notification): void {
 async function markAllRead(): Promise<void> {
   for (const n of items) n.unread = 0;
   unread = 0;
-  renderBadge();
-  renderList();
+  changed();
   try {
     await postJSON("/api/inbox/read", { all: true });
   } catch {

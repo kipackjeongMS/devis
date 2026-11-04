@@ -330,6 +330,21 @@ async function initializeDb(): Promise<DatabaseSync> {
             );
             CREATE INDEX IF NOT EXISTS idx_pr_comment_activity_checked
                 ON pr_comment_activity(checked_at);
+            -- When each PR's code last changed and when I last commented or voted,
+            -- cached by the PR's head commit (see pr-recency.mts). Times are epoch ms.
+            CREATE TABLE IF NOT EXISTS pr_recency (
+                org        TEXT NOT NULL,
+                project    TEXT NOT NULL,
+                repo_id    TEXT NOT NULL,
+                pr_id      TEXT NOT NULL,
+                me_id      TEXT NOT NULL,
+                head       TEXT NOT NULL,
+                pushed_at  INTEGER,
+                my_at      INTEGER,
+                my_kind    TEXT,
+                checked_at INTEGER NOT NULL,
+                PRIMARY KEY (org, me_id, project, repo_id, pr_id)
+            );
             CREATE TABLE IF NOT EXISTS inbox_meta (
                 key   TEXT PRIMARY KEY,
                 value TEXT
@@ -1676,6 +1691,86 @@ export function saveCommentActivity(row: CommentActivityRow): void {
 export function pruneCommentActivity(olderThanMs: number): number {
     const info = requireDb()
         .prepare("DELETE FROM pr_comment_activity WHERE checked_at < ?")
+        .run(olderThanMs);
+    return Number(info.changes ?? 0);
+}
+
+// ---------------------------------------------------------------------------
+// Per-PR last push and my last comment or vote (see pr-recency.mts).
+// ---------------------------------------------------------------------------
+export type MyKind = "comment" | "vote";
+
+export interface PrRecencyRow {
+    org: string;
+    project: string;
+    repoId: string;
+    prId: string;
+    meId: string;
+    head: string; // the head commit this was read at; "" when only my activity is known
+    pushedAt: number | null;
+    myAt: number | null;
+    myKind: MyKind | null;
+    checkedAt: number; // epoch ms when the read started; 0 when only my activity is known
+}
+
+const asKind = (v: unknown): MyKind | null => (v === "comment" || v === "vote" ? v : null);
+const asMs = (v: unknown): number | null => (v == null ? null : Number(v));
+
+export function listPrRecency(org: string, meId: string): PrRecencyRow[] {
+    const rows = requireDb()
+        .prepare(
+            `SELECT org, project, repo_id, pr_id, me_id, head, pushed_at, my_at, my_kind, checked_at
+             FROM pr_recency WHERE org = ? AND me_id = ?`,
+        )
+        .all(org, meId) as any[];
+    return rows.map((r) => ({
+        org: r.org,
+        project: r.project,
+        repoId: r.repo_id,
+        prId: r.pr_id,
+        meId: r.me_id,
+        head: r.head,
+        pushedAt: asMs(r.pushed_at),
+        myAt: asMs(r.my_at),
+        myKind: asKind(r.my_kind),
+        checkedAt: Number(r.checked_at),
+    }));
+}
+
+/**
+ * Upsert one observation. The newer read wins the head and push time; my
+ * activity only ever moves forward, so an in-app comment recorded while a read
+ * was in flight isn't lost.
+ */
+export function savePrRecency(row: PrRecencyRow): void {
+    requireDb()
+        .prepare(
+            `INSERT INTO pr_recency
+                 (org, project, repo_id, pr_id, me_id, head, pushed_at, my_at, my_kind, checked_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT (org, me_id, project, repo_id, pr_id) DO UPDATE SET
+                 head = CASE WHEN excluded.checked_at >= pr_recency.checked_at
+                             THEN excluded.head ELSE pr_recency.head END,
+                 pushed_at = CASE WHEN excluded.checked_at >= pr_recency.checked_at
+                                  THEN excluded.pushed_at ELSE pr_recency.pushed_at END,
+                 checked_at = MAX(excluded.checked_at, pr_recency.checked_at),
+                 my_kind = CASE WHEN excluded.my_at IS NOT NULL
+                                 AND (pr_recency.my_at IS NULL OR excluded.my_at > pr_recency.my_at)
+                                THEN excluded.my_kind ELSE pr_recency.my_kind END,
+                 my_at = CASE WHEN excluded.my_at IS NOT NULL
+                               AND (pr_recency.my_at IS NULL OR excluded.my_at > pr_recency.my_at)
+                              THEN excluded.my_at ELSE pr_recency.my_at END`,
+        )
+        .run(
+            row.org, row.project, row.repoId, row.prId, row.meId, row.head,
+            row.pushedAt, row.myAt, row.myKind, row.checkedAt,
+        );
+}
+
+/** Rows with no read and no activity of mine since the cutoff. */
+export function prunePrRecency(olderThanMs: number): number {
+    const info = requireDb()
+        .prepare("DELETE FROM pr_recency WHERE MAX(checked_at, COALESCE(my_at, 0)) < ?")
         .run(olderThanMs);
     return Number(info.changes ?? 0);
 }

@@ -2,23 +2,25 @@
 // each gets. Pure data, no DOM: workspaceGrid.ts puts it on screen and jarvis.ts owns the panels.
 //   Columns  — one to four, side by side. `w` is a column's share of the width once the user has
 //              dragged a border between columns; null leaves the widths to CSS.
-//   Panels   — Devis (always there, exactly once) and the six sections. In a column, open panels
+//   Panels   — Devis (always there, exactly once) and the seven sections. In a column, open panels
 //              share the height by `g` (a flex-grow, 1 when unset).
 //   Flat     — a window too narrow for the columns shows Devis alone and the sections in one
 //              list behind the Overview button. `flat` is that list's order once the user moves
 //              something there; until then it reads the columns left to right, top to bottom.
 // Kept per device in localStorage. The first read takes over the rail's order and the
-// Devis/rail split that step 1 saved, then drops those keys.
+// Devis/rail split that step 1 saved, then drops those keys. A section new since the layout
+// was saved goes in under the section before it, so Pull Requests lands under Tasks.
 import { savedShare } from "./splitter.js";
 
-export type Section = "needs" | "tasks" | "comms" | "meetings" | "todos" | "note";
+export type Section = "needs" | "tasks" | "prs" | "comms" | "meetings" | "todos" | "note";
 export type PanelId = "devis" | Section;
 
-export const SECTIONS: readonly Section[] = ["needs", "tasks", "comms", "meetings", "todos", "note"];
+export const SECTIONS: readonly Section[] = ["needs", "tasks", "prs", "comms", "meetings", "todos", "note"];
 export const PANEL_NAME: Record<PanelId, string> = {
   devis: "Devis",
   needs: "Needs you",
   tasks: "Tasks",
+  prs: "Pull Requests",
   comms: "Communication",
   meetings: "Meetings",
   todos: "To-dos",
@@ -133,20 +135,35 @@ export function normalize(raw: unknown): Layout {
     columns[MAX_COLUMNS - 1]!.panels.push(...extra);
   }
   const missing = SECTIONS.filter((s) => !seen.has(s));
-  if (missing.length) {
+  // Under the nearest earlier section that's placed; with none, at the end of a column.
+  const loose: Section[] = [];
+  for (const id of missing) {
+    const before = SECTIONS.slice(0, SECTIONS.indexOf(id)).reverse().find((s) => seen.has(s));
+    const at = before ? findPanel({ columns }, before) : null;
+    if (at) {
+      columns[at.col]!.panels.splice(at.row + 1, 0, { id });
+      seen.add(id);
+    } else loose.push(id);
+  }
+  if (loose.length) {
     let home = [...columns].reverse().find((c) => !hasDevis(c));
     if (!home && columns.length < MAX_COLUMNS) {
       home = { w: null, panels: [] };
       columns.push(home);
       for (const c of columns) c.w = null;
     }
-    (home ?? columns[columns.length - 1]!).panels.push(...missing.map((id) => ({ id })));
+    (home ?? columns[columns.length - 1]!).panels.push(...loose.map((id) => ({ id })));
   }
   fixWidths(columns);
   const layout: Layout = { columns };
   if (Array.isArray(src.flat)) {
     const flat = [...new Set(src.flat.filter(isSection))];
-    layout.flat = [...flat, ...readingOrder(layout).filter((s) => !flat.includes(s))];
+    for (const id of SECTIONS) {
+      if (flat.includes(id)) continue;
+      const before = SECTIONS.slice(0, SECTIONS.indexOf(id)).reverse().find((s) => flat.includes(s));
+      flat.splice(before ? flat.indexOf(before) + 1 : flat.length, 0, id);
+    }
+    layout.flat = flat;
   }
   return layout;
 }

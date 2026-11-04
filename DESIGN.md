@@ -473,11 +473,12 @@ The Pipelines feature chains Azure DevOps build pipelines on a canvas. Each bloc
 
 ### Workspace: Devis, Today and Tasks
 
-The Workspace is the daily home, and its tab comes first. Three panes sit side by side:
+The Workspace is the daily home, and its tab comes first. Its main parts are:
 
 - **Devis** is the Lead, one persistent Copilot session that watches the Workspace and keeps its history, so you can ask it what happened instead of reading logs.
 - **Today** is your day: Today so far, what needs you, your own to-dos and a quick note.
-- **Tasks** is the board: the pull requests waiting for your review, and your tasks with the Copilot workers running on them.
+- **Tasks** is the board: your tasks with the Copilot workers running on them.
+- **Pull Requests** is your own PRs and the PRs you can review. See [Pull Requests](#pull-requests).
 
 #### Model
 
@@ -548,17 +549,29 @@ Covers every service; the service filter belongs to Tasks.
 
 The third pane's title is three tabs, **Tasks**, **Communication** and **Meetings** (see [Communication](#communication) and [Meetings](#meetings)); the one showing is bright and underlined, Left and Right (Home and End) move between them, and the app remembers which was open. Each tab has its own sub line, tools and body.
 
-Sections in order: Running, Open tasks, Done today, then Pull request reviews last.
+Sections in order: Running, Open tasks, then Done today.
 
 - **Running:** a worker is mid-turn, including one waiting on your answer. Its pill names the tool it's using.
 - **Open tasks:** open tasks with no running worker, including ones whose worker finished a turn or failed. Finished turns lead, then untouched tasks.
 - **Done today:** tasks finished today and PRs you approved today. Earlier work stays in History.
-- **Pull request reviews:** the same rule as the PR feed's "Needs your review" lane. Six show by default, newest first, with PRs someone asked for in Teams ahead of the rest; those carry an amber "Asked by Dana" chip that opens the message in Teams. Each row has **Copilot review**, which queues a review through the same queue, runner and review model as the Pull requests page, so the result lands in the PR's review panel. It shows "Reviewing…" while a review is queued or running, and a chip once it is reviewed or failed. **Review** opens the PR in the Pull requests tab.
 - **Waiting on you:** a task never moves because something waits on you. Its card stays in its section with an amber border, and its warning icon says what's waiting ("Needs you: api: Run npm test") and, clicked, scrolls to the ask under Needs you and puts the cursor on it. The ask itself is answered there, not on the card.
-- Empty sections stay quiet: Pull request reviews says so in one line; Running, Open tasks and Done today hide.
-- The head holds the service filter, History and **+ Task**; in a narrow pane the buttons show icons only. The footer sums up the board ("1 needs you · 1 running · 2 PRs to review").
+- Empty sections stay quiet: Running, Open tasks and Done today hide.
+- The head holds the service filter, History and **+ Task**; in a narrow pane the buttons show icons only. The footer sums up the board ("1 needs you · 1 running · 2 open").
 - Clicking a task card, or its title, opens the task.
 - A task's pull requests show as chips under its title (`PR 17553390 · Active · 1 of 2 required approvals`), up to two, open ones first, then "+N". A chip turns amber when the PR needs someone: rejected, waiting for its author, a failing check or merge conflicts. Clicking one opens the task's Pull requests tab.
+
+#### Pull Requests
+
+A Workspace panel of its own, right after Tasks by default. It has two parts, **My PRs** and **Reviews**, and each one folds. The head counts both and says how many of your PRs have new comments, and its refresh button reads the PR list again. The Tasks service filter applies to both parts.
+
+- **My PRs:** every PR you opened, drafts included. New comments or replies lead, then PRs a reviewer rejected or is waiting on, then published PRs by their last push, then drafts.
+- **Why it's on top:** the line under the title says what happened ("2 new comments · Dana and Lee", "Rejected by Lee", "Waiting on you · Dana"), or Draft.
+- **New activity:** when a new comment lands, or a PR starts needing you, its row flashes once. Opening the PR marks its notifications read, in the bell too.
+- **Reviews:** other people's PRs. Ones someone asked for in Teams lead, with an amber "Asked by Dana" link that opens the message in Teams. The rest go newest first, by the latest of a Copilot review, your comment or vote, the author's push, or when it opened. The line under the title says which ("Copilot reviewed", "You commented", "Pushed").
+- **Search and filters:** a search box and chips for **Assigned** (you're a reviewer), **Copilot reviewed**, **Weighed in** (you voted or commented) and **Drafts**. Chips combine. When nothing matches, one line says so, with **Clear search and filters**.
+- **Loading more:** 20 show at first. Scrolling to the end, or **Show 20 more**, adds the next 20. For a busy project the service reads only the first page of its active PRs, so past the end the panel reads the next page from Azure DevOps, by itself while you scroll or with **Load older pull requests**. A page that fails says so, with **Try again**.
+- **Every row:** has **Copilot review**, the same as on the Pull requests page, and its chip once reviewed or failed. Clicking a row opens the PR in the Pull requests tab.
+- **Saved layouts:** a layout saved before this panel existed gets it right after Tasks.
 
 #### To-dos and the quick note
 

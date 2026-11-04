@@ -66,6 +66,10 @@ export interface Pr {
     sourceRef: string;
     targetRef: string;
     url: string;
+    headCommit?: string; // the source branch's latest commit, which changes on every push
+    pushedAt?: string | null; // last push, filled from the pr-recency cache
+    myAt?: string | null; // my last comment or vote, filled from the pr-recency cache
+    myKind?: "comment" | "vote" | null;
 }
 
 export interface ThreadComment {
@@ -391,6 +395,7 @@ function mapPr(org: string, pr: any, mine: boolean, meId: string | undefined): P
         url: `${orgBase(org)}/${enc(pr.repository?.project?.name || "")}/_git/${enc(
             pr.repository?.name || "",
         )}/pullrequest/${pr.pullRequestId}`,
+        headCommit: typeof pr.lastMergeSourceCommit?.commitId === "string" ? pr.lastMergeSourceCommit.commitId : undefined,
     };
 }
 
@@ -436,7 +441,7 @@ export async function listAssignedPRs(org: string): Promise<Pr[]> {
 export async function listActivePRs(org: string, project: string): Promise<Pr[]> {
     const me = await getMe(org);
     const base = `${orgBase(org)}/${enc(project)}/_apis/git/pullrequests`;
-    const q = `searchCriteria.status=active&$top=200&${API}`;
+    const q = `searchCriteria.status=active&$top=${ACTIVE_PR_PAGE}&${API}`;
     const [allData, mineData] = await Promise.all([
         adoJson("GET", `${base}?${q}`),
         adoJson("GET", `${base}?searchCriteria.reviewerId=${me.id}&${q}`),
@@ -469,6 +474,45 @@ export async function getPrSummary(
     }
     const assignedDirectly = ((raw.reviewers || []) as any[]).some((r) => r.id === me.id);
     return mapPr(org, raw, assignedDirectly, me.id);
+}
+
+/** How many active PRs listActivePRs reads per project; a full page means there are older ones. */
+export const ACTIVE_PR_PAGE = 200;
+const OLDER_PR_PAGE = 100;
+
+/** The next page of a project's active PRs past the first `skip`, for loading older PRs on demand. */
+export async function listOlderActivePRs(org: string, project: string, skip: number): Promise<{ prs: Pr[]; more: boolean }> {
+    const me = await getMe(org);
+    const base = `${orgBase(org)}/${enc(project)}/_apis/git/pullrequests`;
+    const data = await adoJson(
+        "GET",
+        `${base}?searchCriteria.status=active&$top=${OLDER_PR_PAGE}&$skip=${Math.max(0, Math.floor(skip))}&${API}`,
+    );
+    const value = (data?.value || []) as any[];
+    // Without the reviewer=me query, only a direct assignment marks a PR mine.
+    const prs = value.map((pr) =>
+        mapPr(org, pr, ((pr.reviewers || []) as any[]).some((r) => r.id === me.id), me.id),
+    );
+    return { prs, more: value.length >= OLDER_PR_PAGE };
+}
+
+/** A PR's raw comment threads, system threads included. */
+export async function getPrThreadsRaw(pr: Pr): Promise<any[]> {
+    if (!pr.project || !pr.repoId) return [];
+    const data = await adoJson("GET", `${repoBase(pr.org, pr.project, pr.repoId)}/pullRequests/${pr.id}/threads?${API}`);
+    return (data?.value || []) as any[];
+}
+
+/** When the PR's latest iteration (push) was created, in epoch ms, or null. */
+export async function getPrLastPushAt(pr: Pr): Promise<number | null> {
+    if (!pr.project || !pr.repoId) return null;
+    const data = await adoJson("GET", `${repoBase(pr.org, pr.project, pr.repoId)}/pullRequests/${pr.id}/iterations?${API}`);
+    let latest: number | null = null;
+    for (const it of (data?.value || []) as any[]) {
+        const at = Date.parse(it?.createdDate);
+        if (Number.isFinite(at) && (latest == null || at > latest)) latest = at;
+    }
+    return latest;
 }
 
 // All active PRs the current user AUTHORED, for one org (the set where peer

@@ -19,10 +19,13 @@ function fixture(response, opts = {}) {
     const dispatched = [];
     let updated;
     const busy = [];
+    const recency = [];
     const scope = {
         prsLoad: 0,
         listAsOf: opts.firstLoad ? null : Date.now() - 60_000,
-        state: { prs: previousPrs },
+        state: { prs: previousPrs, authoredPrs: [], cappedProjects: [], olderPrs: opts.olderPrs || [] },
+        prIdentity: (pr) => String(pr.id),
+        loadPrRecency: () => recency.push(true),
         view: { innerHTML: "" },
         filterbar: { hidden: !!opts.firstLoad },
         document: { body: { dataset: { page: "queue" } } },
@@ -59,7 +62,7 @@ function fixture(response, opts = {}) {
         },
     };
     const load = vm.runInNewContext(compiled, scope);
-    return { load, scope, errors, warnings, notes, renders, previousPrs, dispatched, busy, updated: () => updated() };
+    return { load, scope, errors, warnings, notes, renders, previousPrs, dispatched, busy, recency, updated: () => updated() };
 }
 
 // A refresh that fails keeps the list on screen and says so until one succeeds.
@@ -97,6 +100,18 @@ const empty = fixture({ prs: [], errors: [] });
 await empty.load();
 assert.equal(empty.errors.length, 0);
 assert.equal(empty.renders.length, 1, "a genuinely empty result still renders the normal empty state");
+
+// The Workspace's Pull Requests panel: your own PRs, capped projects, older pages and recency.
+const panel = fixture(
+    { prs: [{ id: 3 }, { id: 4 }], authored: [{ id: 7 }], capped: [{ org: "o", project: "p" }], errors: [], recencyPending: 2 },
+    { olderPrs: [{ id: 4 }, { id: 5 }] },
+);
+await panel.load();
+assert.deepEqual(panel.scope.state.authoredPrs.map((p) => p.id), [7], "your own PRs are kept for My PRs");
+assert.deepEqual(panel.scope.state.cappedProjects, [{ org: "o", project: "p" }]);
+assert.deepEqual(panel.scope.state.olderPrs.map((p) => p.id), [5], "older pages stay, minus PRs that moved onto the first page");
+assert.equal(panel.recency.length, 1, "pending recency is read in the background");
+assert.equal(empty.recency.length, 0, "…and only when some is pending");
 
 const disconnected = fixture(new Error("Connection lost"), { firstLoad: true });
 await disconnected.load();

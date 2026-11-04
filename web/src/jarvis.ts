@@ -1,9 +1,9 @@
 // The Workspace: Devis and the day's sections in columns, and a drawer over Devis's column.
 //   Devis    — the Lead console, one persistent Copilot session that watches the Workspace and
 //              keeps its history. "Today so far" is pinned over its thread.
-//   Sections — the day at a glance: Needs you, Tasks (with reviews), Communication, Meetings,
-//              the user's own to-dos and a quick note. Each folds. The to-dos and note belong to
-//              no day; Devis and the workers can read them when asked.
+//   Sections — the day at a glance: Needs you, Tasks, Pull Requests (yours and reviews),
+//              Communication, Meetings, the user's own to-dos and a quick note. Each folds. The
+//              to-dos and note belong to no day; Devis and the workers can read them when asked.
 //   Layout   — every panel, Devis too, moves by its grip (or Alt+arrows) to any place in any
 //              column, and the gaps drag to resize; workspaceGrid.ts does that. On a narrow
 //              window Devis stands alone and the sections are a sheet behind the Overview button.
@@ -33,7 +33,6 @@ import { effortLabel, effortsFor, nextChoice, type PickerState } from "./modelCh
 import { patchHtml } from "./patch.js";
 import { toast } from "./toast.js";
 import { state } from "./state.js";
-import { reviewPhase } from "./list.js";
 import { openDetail } from "./detail.js";
 import { openActionDialog } from "./prActions.js";
 import { sendPrsToCopilot } from "./bridge.js";
@@ -60,7 +59,6 @@ import { openContextMenu, type ContextMenuEntry } from "./contextMenu.js";
 import { isOutlookLink, isTeamsLink, unseenRecaps, type ChatsInfo, type CommsChat, type CommsMail, type CommsMeeting, type MeetingScanInfo } from "./commsModel.js";
 import {
   ALL_SERVICES,
-  REVIEW_PREVIEW,
   SECTIONS,
   WORKER_LABEL,
   WORKER_TONE,
@@ -69,10 +67,8 @@ import {
   agoPhrase,
   askerWhere,
   askersLine,
-  askFor,
   askPr,
   cardPrs,
-  copilotReviewControl,
   dayStart,
   groupTasks,
   inService,
@@ -93,7 +89,6 @@ import {
   prChipText,
   prCommentsChip,
   prBuildsChip,
-  reviewQueue,
   serviceOptions,
   taskFolderPreview,
   taskMeta,
@@ -115,6 +110,9 @@ import {
   type TodayWorker,
   type WorkerRequest,
 } from "./jarvisModel.js";
+import { clearSearch, initPrPanel, loadOlder, prPanelHtml, setQuery, showMore, toggleFilter, toggleFold, watchSentinel } from "./prPanel.js";
+import { inboxItems, markPrRead } from "./inboxPanel.js";
+import { matchNotificationPr } from "./inboxRoute.js";
 import type { PR } from "./types.js";
 
 interface ChatMessage {
@@ -214,7 +212,6 @@ let leadSig = "";
 let leadTimer = 0;
 let leadToken = 0;
 let service = readPref(SERVICE_KEY, ALL_SERVICES);
-let showAllReviews = false;
 /** PRs whose Copilot review request is on its way to the queue. */
 const queuing = new Set<string>();
 const prKey = (pr: PR): string => JSON.stringify([pr.org, pr.project, pr.repoId, String(pr.id)]);
@@ -273,6 +270,9 @@ let needsBody: HTMLElement;
 let needsCount: HTMLElement;
 let tasksBody: HTMLElement;
 let tasksCount: HTMLElement;
+let prsBody: HTMLElement;
+let prsCount: HTMLElement;
+let prsSig = "";
 let serviceSelect: HTMLSelectElement;
 let commsRailBody: HTMLElement;
 let commsRailCount: HTMLElement;
@@ -441,11 +441,21 @@ export async function reloadJarvis(): Promise<void> {
 // The PR list loads on its own schedule; Today repaints when it lands.
 window.addEventListener("ado-prs-loaded", () => {
   prsLoaded = true;
+  for (const b of root?.querySelectorAll<HTMLButtonElement>('[data-act="prs-refresh"]') || []) {
+    b.disabled = false;
+    b.removeAttribute("aria-busy");
+  }
   if (visible) renderToday(true);
 });
 window.addEventListener("ado-pr-updated", () => {
   if (visible) renderToday(true);
 });
+// New comments on your PRs, and the last push and your last word on each, land on their own.
+for (const name of ["ado-inbox", "ado-pr-recency"]) {
+  window.addEventListener(name, () => {
+    if (visible) renderPrs(true);
+  });
+}
 
 // ---- mount --------------------------------------------------------------------------
 
@@ -469,6 +479,7 @@ function mount(): void {
   root = document.getElementById("jarvisView")!;
   const railTools: Partial<Record<RailSection, string>> = {
     tasks: `<select class="filter-select today-service" aria-label="Service"></select>${iconBtn("history", "clock", "History")}${iconBtn("new-task", "add", "New task")}`,
+    prs: iconBtn("prs-refresh", "sync", "Refresh pull requests"),
     comms: iconBtn("comms-scan", "sync", "Read Teams and email now"),
     meetings: iconBtn("meetings-scan", "sync", "Read the calendar now"),
   };
@@ -542,6 +553,11 @@ function mount(): void {
   needsCount = count("needs");
   tasksBody = body("tasks");
   tasksCount = count("tasks");
+  prsBody = body("prs");
+  prsCount = count("prs");
+  initPrPanel(() => {
+    if (visible) renderPrs(true);
+  });
   commsRailBody = body("comms");
   commsRailCount = count("comms");
   meetRailBody = body("meetings");
@@ -1042,10 +1058,6 @@ async function loadToday(): Promise<void> {
   if (visible) todayTimer = window.setTimeout(() => void loadToday(), live ? FAST_MS : updating ? MID_MS : SLOW_MS);
 }
 
-function scopedPrs(): PR[] {
-  return reviewQueue(state.prs, reviewPhase).filter((pr) => inService(pr, service));
-}
-
 /**
  * Drop per-task and per-request state for what's no longer on Today: drafts
  * and the task modal's chat notes and choices. The page runs
@@ -1075,8 +1087,29 @@ function reviewedInService(events: JarvisEvent[]): JarvisEvent[] {
 function renderToday(force = false): void {
   if (!root) return;
   renderTasks(force);
+  renderPrs(force);
   renderDay(force);
   renderComms(force);
+}
+
+/** Pull Requests: yours, then other people's to review. Skips the paint when nothing changed. */
+function renderPrs(force = false): void {
+  if (!root) return;
+  const view = prPanelHtml({
+    now: Date.now(),
+    service,
+    loaded: prsLoaded || state.prs.length > 0,
+    asks: data?.comms?.asks,
+    queuing,
+  });
+  // The HTML carries every age and state on screen, so it's the panel's signature.
+  if (!force && view.html === prsSig) return;
+  prsSig = view.html;
+  prsCount.textContent = view.count ? String(view.count) : "";
+  paintNew("prs", view.newCount, view.newLabel);
+  paintRailBadge();
+  patchPane(prsBody, view.html);
+  watchSentinel(prsBody);
 }
 
 // ---- Communication and Meetings ---------------------------------------------------
@@ -1162,17 +1195,17 @@ function loadMeetings(): Promise<void> {
 }
 
 /** What's new, by rail section; on a narrow window the Overview button's badge adds them up. */
-const railNew = { needs: 0, comms: 0, meetings: 0 };
+const railNew = { needs: 0, prs: 0, comms: 0, meetings: 0 };
 
 function paintRailBadge(): void {
-  const n = railNew.needs + railNew.comms + railNew.meetings;
+  const n = railNew.needs + railNew.prs + railNew.comms + railNew.meetings;
   railBadge.hidden = !n;
   railBadge.textContent = n ? String(n) : "";
   railButton.setAttribute("aria-label", n ? `Show the overview, ${n} new` : "Show the overview");
 }
 
 /** A rail section's "N new" pill; none while its drawer is open, since you're looking at it. */
-function paintNew(sec: "comms" | "meetings", n: number, label: string): void {
+function paintNew(sec: "prs" | "comms" | "meetings", n: number, label: string): void {
   railNew[sec] = n;
   const pill = root!.querySelector<HTMLElement>(`[data-rs="${sec}"] .rs-new`)!;
   pill.hidden = !n;
@@ -1501,7 +1534,8 @@ async function dismissAsk(ask: CommsAsk): Promise<void> {
 
 function renderTasks(force: boolean): void {
   const now = Date.now();
-  const prs = scopedPrs();
+  // The service choices come from tasks and PRs, so the PR list moves them too.
+  const options = serviceOptions(data?.tasks || [], state.prs);
   const sig = todayFingerprint(
     data,
     JSON.stringify([
@@ -1509,8 +1543,7 @@ function renderTasks(force: boolean): void {
       loadError,
       // What the to-dos took out of Needs you.
       data?.todos?.filter((t) => !t.done && t.source).map((t) => t.source!.key),
-      prsLoaded || state.prs.length > 0,
-      prs.map((p) => [p.id, reviewPhase(p)]),
+      options,
       // Ages ("4m") move on even when nothing else does.
       Math.floor(now / 60_000),
     ])
@@ -1518,7 +1551,6 @@ function renderTasks(force: boolean): void {
   if (!force && sig === tasksSig) return;
   tasksSig = sig;
 
-  const options = serviceOptions(data?.tasks || [], state.prs);
   if (service !== ALL_SERVICES && !options.includes(service)) service = ALL_SERVICES;
   serviceSelect.innerHTML =
     `<option value="${ALL_SERVICES}">All services</option>` +
@@ -1537,7 +1569,6 @@ function renderTasks(force: boolean): void {
   const reviewed = reviewedInService(data.reviewed);
   const counts: Partial<Record<SectionId, number>> = {
     needs: needs.length,
-    reviews: prs.length,
     running: groups.running.length,
     idle: groups.idle.length,
     done: groups.done.length + reviewed.length,
@@ -1563,10 +1594,9 @@ function renderTasks(force: boolean): void {
     const id = section.id;
     if (id === "needs") continue;
     const count = counts[id] || 0;
-    if (!count && id !== "reviews") continue;
+    if (!count) continue;
     html.push(`<div class="rr-sec" data-section="${id}" data-key="sec:${id}">${subHead(section.title, count)}`);
-    if (id === "reviews") html.push(renderReviews(prs, now));
-    else if (id === "done") {
+    if (id === "done") {
       html.push(groups.done.map((t) => taskCard(t, now, "done")).join(""));
       html.push(reviewed.map((e) => reviewedRow(e, now)).join(""));
     } else html.push(groups[id].map((t) => taskCard(t, now, id)).join(""));
@@ -2177,50 +2207,6 @@ function focusKey(node: HTMLElement): string | null {
 const subHead = (title: string, count: number): string =>
   `<h4 class="rr-group" data-key="h">${esc(title)}<span>${count}</span></h4>`;
 
-function renderReviews(prs: PR[], now: number): string {
-  if (!prs.length) {
-    const loading = !prsLoaded && !state.prs.length;
-    return `<p class="rs-empty">${loading ? '<span class="spinner"></span> Loading pull requests…' : esc(SECTIONS.find((s) => s.id === "reviews")!.empty)}</p>`;
-  }
-  // PRs someone asked for in Teams come first; otherwise the feed's order stands.
-  const asks = data?.comms?.asks;
-  const ordered = asks?.length ? [...prs].sort((a, b) => Number(!!askFor(asks, b)) - Number(!!askFor(asks, a))) : prs;
-  const shown = showAllReviews ? ordered : ordered.slice(0, REVIEW_PREVIEW);
-  const more = prs.length - shown.length;
-  const toggle =
-    prs.length > REVIEW_PREVIEW
-      ? `<button type="button" class="rs-more" data-key="more-reviews" data-act="more-reviews">${more ? `Show ${more} more` : "Show fewer"}</button>`
-      : "";
-  return (
-    shown
-      .map((pr) => {
-        const control = copilotReviewControl(reviewPhase(pr));
-        const queued = queuing.has(prKey(pr));
-        const busy = control.disabled || queued;
-        const copilot = `<button type="button" class="icon-btn copilot-review" data-act="copilot-review" title="${esc(queued ? "Queuing…" : control.title)}" aria-label="${esc(
-          `${queued ? "Queuing" : control.label}: ${pr.title}`
-        )}"${busy ? " disabled" : ""}>${busy ? '<span class="spinner"></span>' : svg("sparkle")}</button>`;
-        const ask = askFor(asks, pr);
-        const asked = ask
-          ? `<a class="rr-ask" href="${esc(ask.askers[0]?.link || "")}" target="_blank" rel="noopener" data-act="pr-teams" title="${esc(
-              `${askersLine(ask.askers)} asked ${ask.askers[0] ? askerWhere(ask.askers[0]) : "in Teams"}. Open the message in Teams.`
-            )}">${svg("chat")}<span class="ell">Asked by ${esc(askersLine(ask.askers))}</span></a>`
-          : "";
-        const status = control.chip ? `<span class="rr-st tone-${control.chip.tone}">${esc(control.chip.label)}</span>` : "";
-        const meta = `#${pr.id} · ${pr.repo} · ${pr.author} · waiting ${ago(pr.created, now)}${pr.isDraft ? " · Draft" : ""}`;
-        return `
-        <div class="rr" data-key="pr:${esc(prKey(pr))}" data-pr="${esc(JSON.stringify([pr.org, pr.project, pr.repoId, pr.id]))}">
-          <button type="button" class="rr-main" data-act="open-pr" title="${esc(meta)}">
-            <span class="rdot tone-run"></span><span class="rr-t ell">${esc(pr.title)}</span><span class="rr-tm">${esc(ago(pr.created, now))}</span>
-          </button>
-          <span class="rr-ha">${copilot}</span>
-          ${asked || status ? `<div class="rr-p">${asked}${status}</div>` : ""}
-        </div>`;
-      })
-      .join("") + toggle
-  );
-}
-
 function reviewedRow(e: JarvisEvent, now: number): string {
   return `
     <div class="rr is-done" data-key="rev:${esc(e.at)}">
@@ -2323,7 +2309,8 @@ function prFor(node: Element): PR | undefined {
   const key = node.closest<HTMLElement>("[data-pr]")?.dataset.pr;
   if (!key) return undefined;
   const [org, project, repoId, id] = JSON.parse(key);
-  return state.prs.find((p) => p.org === org && p.project === project && p.repoId === repoId && p.id === id);
+  const match = (p: PR): boolean => p.org === org && p.project === project && p.repoId === repoId && p.id === id;
+  return state.prs.find(match) || state.authoredPrs.find(match) || state.olderPrs.find(match);
 }
 
 /** Run a Today action, then refresh. Errors become toasts. */
@@ -2531,12 +2518,13 @@ function onClick(e: MouseEvent): void {
       return void openHistory();
     case "new-task":
       return openNewTask();
-    case "more-reviews":
-      showAllReviews = !showAllReviews;
-      return renderToday(true);
     case "open-pr": {
       const pr = prFor(node);
-      if (pr) void openDetail(pr);
+      if (!pr) return;
+      // Opening your PR reads its new comments, so the row stops asking for you.
+      const unread = inboxItems().filter((n) => n.unread && matchNotificationPr([pr], n));
+      if (unread.length) void markPrRead(unread.map((n) => n.id));
+      void openDetail(pr);
       return;
     }
     case "copilot-review": {
@@ -2544,6 +2532,26 @@ function onClick(e: MouseEvent): void {
       if (pr) void queueCopilotReview(pr);
       return;
     }
+    case "prs-fold":
+      toggleFold(node.dataset.fold);
+      return renderPrs(true);
+    case "pr-filter":
+      toggleFilter(node.dataset.filter);
+      return renderPrs(true);
+    case "pr-clear":
+      clearSearch();
+      renderPrs(true);
+      return prsBody.querySelector<HTMLInputElement>('[data-role="pr-search"]')?.focus();
+    case "prs-more":
+      showMore();
+      return renderPrs(true);
+    case "prs-older":
+      return void loadOlder(service, true);
+    case "prs-refresh":
+      if (node instanceof HTMLButtonElement) node.disabled = true;
+      node.setAttribute("aria-busy", "true");
+      window.dispatchEvent(new CustomEvent("ado-prs-refresh"));
+      return;
     case "ov-refresh":
       return void refreshOverview();
     case "ov-toggle":
@@ -2614,6 +2622,10 @@ function onInput(e: Event): void {
   const field = e.target as HTMLElement;
   if (!(field instanceof HTMLTextAreaElement || field instanceof HTMLInputElement)) return;
   if (field.dataset.role === "quick-note") onNoteInput(field as HTMLTextAreaElement);
+  if (field.dataset.role === "pr-search") {
+    setQuery(field.value);
+    renderPrs(true);
+  }
   if (field.dataset.draft) drafts.set(field.dataset.draft, field.value);
   if (field instanceof HTMLTextAreaElement) autoSize(field);
 }

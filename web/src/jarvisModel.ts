@@ -870,15 +870,14 @@ export function reconcileNote(baseText: string, draft: string, saved: string, ow
   return { kind: "draft", text: merged, added: merged !== draft };
 }
 
-export type SectionId = "needs" | "reviews" | "running" | "idle" | "done";
+export type SectionId = "needs" | "running" | "idle" | "done";
 
-// Needs you leads; Pull request reviews comes last, under the user's own tasks.
+// Needs you leads. Pull requests have their own Workspace panel, so Tasks holds only tasks.
 export const SECTIONS: ReadonlyArray<{ id: SectionId; title: string; tone: string; empty: string }> = [
   { id: "needs", title: "Needs you", tone: "warn", empty: "Nothing is waiting on you." },
   { id: "running", title: "Running", tone: "run", empty: "No workers are running." },
   { id: "idle", title: "Open tasks", tone: "idle", empty: "" },
   { id: "done", title: "Done today", tone: "ok", empty: "" },
-  { id: "reviews", title: "Pull request reviews", tone: "run", empty: "No pull requests are waiting for your review." },
 ];
 
 const time = (iso: string | null | undefined): number => {
@@ -916,7 +915,7 @@ export const WORKER_TONE: Record<WorkerState, string> = {
  * finished before `dayStart`). The overview reads tasks this way, and the server's write-up
  * agrees with it (jarvis-overview sectionOf). Where its card sits is cardSection.
  */
-export function taskSection(task: TodayTask, dayStart: number): Exclude<SectionId, "reviews"> | null {
+export function taskSection(task: TodayTask, dayStart: number): SectionId | null {
   const states = task.workers.map(workerState);
   // A worker still waiting on the user, or still running, outranks the task's status:
   // marking a task done must never hide an open approval.
@@ -933,7 +932,7 @@ const oldestRequest = (task: TodayTask): number =>
 const lastActivity = (task: TodayTask): number =>
   Math.max(time(task.updatedAt), ...task.workers.map((w) => time(w.updatedAt)));
 
-export type BoardSection = Exclude<SectionId, "reviews" | "needs">;
+export type BoardSection = Exclude<SectionId, "needs">;
 
 /**
  * Where a task's card sits on the board, or null once it was finished before `dayStart`.
@@ -957,8 +956,8 @@ export function needsYou(task: TodayTask, dayStart: number): boolean {
  * Tasks per board section, each in its own order, and `needs`: the tasks waiting on the user
  * (the longest wait first). A task in `needs` is also on the board.
  */
-export function groupTasks(tasks: TodayTask[], dayStart: number): Record<Exclude<SectionId, "reviews">, TodayTask[]> {
-  const out: Record<Exclude<SectionId, "reviews">, TodayTask[]> = { needs: [], running: [], idle: [], done: [] };
+export function groupTasks(tasks: TodayTask[], dayStart: number): Record<SectionId, TodayTask[]> {
+  const out: Record<SectionId, TodayTask[]> = { needs: [], running: [], idle: [], done: [] };
   for (const task of tasks) {
     if (needsYou(task, dayStart)) out.needs.push(task);
     const section = cardSection(task, dayStart);
@@ -1245,7 +1244,6 @@ export function taskMeta(task: TodayTask): string {
 export function todaySummary(counts: Partial<Record<SectionId, number>>): string {
   const phrase: Record<SectionId, (n: number) => string> = {
     needs: (n) => `${n} need${n === 1 ? "s" : ""} you`,
-    reviews: (n) => `${n} PR${n === 1 ? "" : "s"} to review`,
     running: (n) => `${n} running`,
     idle: (n) => `${n} open`,
     done: (n) => `${n} done today`,

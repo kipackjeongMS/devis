@@ -4,8 +4,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { BodyTooLargeError, sendJson, sendBuffer, readBody } from "./http.mjs";
 import { readConfig, writeConfig } from "./config.mjs";
-import { ensureDb, getReview, listReviews, listActiveReviewJobs, upsertReview, publishReviewRun, expireStaleReviews, markFindingPosted, markSemanticFindingPosted, setFindingHumanizedComment, setSemanticFindingHumanizedComment, setDismissed, listPlateDismissals, onPlateDismissed, setPlateDismissed, listNotifications, unreadCount, markNotificationsRead, markAllNotificationsRead, reviewIdentityKey, legacyReviewKey, pruneCommentActivity, type ReviewIdentity } from "./store.mjs";
+import { ensureDb, getReview, listReviews, listActiveReviewJobs, upsertReview, publishReviewRun, expireStaleReviews, markFindingPosted, markSemanticFindingPosted, setFindingHumanizedComment, setSemanticFindingHumanizedComment, setDismissed, listPlateDismissals, onPlateDismissed, setPlateDismissed, listNotifications, unreadCount, markNotificationsRead, markAllNotificationsRead, reviewIdentityKey, legacyReviewKey, pruneCommentActivity, prunePrRecency, type ReviewIdentity } from "./store.mjs";
 import { commentActivity } from "./comment-activity.mjs";
+import { prRecency } from "./pr-recency.mjs";
 import { answerAsks } from "./comms.mjs";
 import { readPrSnapshot, savePrSnapshot } from "./pr-snapshot.mjs";
 import type { WorkItem } from "./service-files.mjs";
@@ -27,6 +28,9 @@ import { queueReviewTargets } from "./review-task.mjs";
 import {
     listAssignedPRs,
     listActivePRs,
+    listAuthoredPRs,
+    listOlderActivePRs,
+    ACTIVE_PR_PAGE,
     getPrSummary,
     getPrDetail,
     getFileDiff,
@@ -131,10 +135,22 @@ async function noteCommentActivity(value: Record<string, unknown>, commented: bo
     try {
         await ensureDb();
         await commentActivity.record(ref, commented);
+        if (wrote) await prRecency.record(ref, "comment");
     } catch (e) {
         console.error(`[comment-activity] record failed: ${(e as Error).message}`);
     }
 }
+
+// Whether a PR was dismissed from the plate, by its full identity or the legacy id-only key.
+function markDismissed(list: Pr[]): void {
+    const dismissed = listPlateDismissals();
+    for (const pr of list) {
+        const identity = { prId: pr.id, org: pr.org, project: pr.project, repoId: pr.repoId };
+        pr.plateDismissed = dismissed.has(reviewIdentityKey(identity)) || dismissed.has(legacyReviewKey(pr.id));
+    }
+}
+
+const prIdentity = (pr: Pr): string => JSON.stringify([pr.org, pr.repoId, pr.id]);
 
 async function reviewerSessionFor(identity: ReviewIdentity): Promise<string | null> {
     if (String(identity.prId).trim() === "") return null;
@@ -216,15 +232,6 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
         // Filtering by org/project/assignment happens client-side.
         if (p === "/api/prs" && req.method === "GET") {
             const cfg = await readConfig();
-            const markDismissed = (list: Pr[]): void => {
-                const dismissed = listPlateDismissals();
-                for (const pr of list) {
-                    const identity = { prId: pr.id, org: pr.org, project: pr.project, repoId: pr.repoId };
-                    pr.plateDismissed =
-                        dismissed.has(reviewIdentityKey(identity)) ||
-                        dismissed.has(legacyReviewKey(pr.id));
-                }
-            };
             // The last complete list, for the page's first paint while the live one loads.
             if (q.get("cached") === "1") {
                 await ensureDb();
@@ -235,6 +242,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
             }
             const refreshActivity = q.get("refresh") === "1";
             const prs: Pr[] = [];
+            const authoredAll: Pr[] = [];
+            const capped: Array<{ org: string; project: string }> = [];
             const errors: string[] = [];
             const tasks: Promise<void>[] = [];
             for (const org of cfg.organizations) {
@@ -246,12 +255,24 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
                                 try {
                                     const found = await listActivePRs(org, project);
                                     prs.push(...found);
+                                    if (found.length >= ACTIVE_PR_PAGE) capped.push({ org, project });
                                 } catch (e) {
                                     errors.push(`${org}/${project}: ${(e as Error).message}`);
                                 }
                             })(),
                         );
                     }
+                    // My PRs lists everything I authored, including PRs in projects
+                    // that aren't configured or past the first page. Best-effort.
+                    tasks.push(
+                        (async () => {
+                            try {
+                                authoredAll.push(...(await listAuthoredPRs(org)));
+                            } catch (e) {
+                                console.warn(`[api] authored PRs for ${org}: ${(e as Error).message}`);
+                            }
+                        })(),
+                    );
                 } else {
                     tasks.push(
                         (async () => {
@@ -267,12 +288,18 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
             }
             await Promise.all(tasks);
             await ensureDb();
+            const listed = new Set(prs.map(prIdentity));
+            const authored = authoredAll.filter((pr) => !listed.has(prIdentity(pr)));
             markDismissed(prs);
+            markDismissed(authored);
             prs.sort((a, b) => new Date(b.created).getTime() - new Date(a.created).getTime());
             pruneCommentActivity(Date.now() - COMMENT_ACTIVITY_RETENTION_MS);
+            prunePrRecency(Date.now() - COMMENT_ACTIVITY_RETENTION_MS);
             // Phase 1: cached "I commented" values only; stale PRs are checked in the
             // background and the client collects them from /api/pr-activity.
             const activityPending = await commentActivity.apply(prs, refreshActivity);
+            // Same for last push and my last comment or vote; see /api/pr-recency.
+            const recencyPending = await prRecency.apply([...prs, ...authored]);
             rememberPrs(prs);
             if (!errors.length) {
                 try {
@@ -281,7 +308,25 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
                     console.warn(`[api] could not keep the PR list for the next launch: ${(e as Error).message}`);
                 }
             }
-            return sendJson(res, 200, { prs, errors, activityPending });
+            return sendJson(res, 200, { prs, authored, capped, errors, activityPending, recencyPending });
+        }
+
+        // ---- older active PRs in one configured project, past the first `skip` ----
+        if (p === "/api/prs/older" && req.method === "GET") {
+            const cfg = await readConfig();
+            const org = q.get("org") || "";
+            const project = q.get("project") || "";
+            const skip = Number(q.get("skip"));
+            if (!cfg.organizations.includes(org) || !(cfg.projects[org] || []).includes(project)) {
+                return sendJson(res, 400, { error: "not a configured project" });
+            }
+            if (!Number.isFinite(skip) || skip < 0) return sendJson(res, 400, { error: "skip must be a number" });
+            const page = await listOlderActivePRs(org, project, skip);
+            await ensureDb();
+            markDismissed(page.prs);
+            const activityPending = await commentActivity.apply(page.prs);
+            const recencyPending = await prRecency.apply(page.prs);
+            return sendJson(res, 200, { prs: page.prs, more: page.more, activityPending, recencyPending });
         }
 
         // ---- phase 2 of /api/prs: settled "I commented" activity ----
@@ -291,6 +336,14 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
             const settled = await commentActivity.settle(cfg.organizations);
             notePrActivity(settled.commented, { commented: true });
             return sendJson(res, 200, settled);
+        }
+
+        // ---- phase 2 for last push and my last comment or vote ----
+        // Waits a little for reads in flight; `pending` says whether to ask again.
+        if (p === "/api/pr-recency" && req.method === "GET") {
+            const cfg = await readConfig();
+            await ensureDb();
+            return sendJson(res, 200, await prRecency.settle(cfg.organizations, 15_000));
         }
 
         // ---- resolve one PR summary for a canvas deep-link ----
@@ -419,6 +472,17 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
             }
             const voted = await setMyVote(b.org, b.project, b.repoId, b.prId, vote);
             notePrActivity([{ org: b.org, project: b.project, repoId: b.repoId, prId: b.prId }], { vote });
+            if (vote !== 0) {
+                try {
+                    await ensureDb();
+                    await prRecency.record(
+                        { org: String(b.org), project: String(b.project), repoId: String(b.repoId), prId: String(b.prId) },
+                        "vote",
+                    );
+                } catch (e) {
+                    console.error(`[pr-recency] record failed: ${(e as Error).message}`);
+                }
+            }
             if (vote !== 0) void answerAsks([{ org: b.org, prId: b.prId }], "you voted on the PR").catch((error: Error) => console.warn(`[comms] answering asks: ${error.message}`));
             // Jarvis keeps reviews in its history; a failure there must not undo the vote.
             if (vote !== 0) {
