@@ -14,7 +14,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { format } from "node:util";
 import { DatabaseSync } from "node:sqlite";
-import { buildId, openLock, readServiceInfo, readServicePort, serviceFiles, serviceStatus, writeServicePort, type ServiceInfo, type ServiceStatus } from "./service-files.mjs";
+import { buildCommit, buildId, openLock, readServiceInfo, readServicePort, serviceFiles, serviceStatus, writeServicePort, type ServiceInfo, type ServiceStatus } from "./service-files.mjs";
 import { ServiceLifecycle } from "./service-lifecycle.mjs";
 import { DATA_FOLDER } from "./brand.mjs";
 
@@ -188,7 +188,7 @@ async function main(): Promise<void> {
     const { startReviewRunner, stopReviewRunner, reviewRunnerActivity } = await import("./review-runner.mjs");
     const { startPipelineRunner, stopPipelineRunner, pipelineActivity } = await import("./pipeline-runner.mjs");
     const { closeAllReviewerSessions, reviewerActivity } = await import("./reviewer-session.mjs");
-    const { closeAllWorkers, workerActivity } = await import("./jarvis-workers.mjs");
+    const { closeAllWorkers, messageWorker, workerActivity } = await import("./jarvis-workers.mjs");
     const { closeLead, leadActivity } = await import("./jarvis-lead.mjs");
     const { startOverviewRunner, stopOverviewRunner } = await import("./jarvis-overview.mjs");
     const { startPrsRunner, stopPrsRunner } = await import("./jarvis-prs.mjs");
@@ -197,6 +197,7 @@ async function main(): Promise<void> {
     const { startPrBuildsRunner, stopPrBuildsRunner } = await import("./jarvis-pr-builds.mjs");
     const { startCommsRunner, stopCommsRunner } = await import("./comms.mjs");
     const { startMaintenance, stopMaintenance } = await import("./maintenance.mjs");
+    const { watchShips } = await import("./devis-self.mjs");
     const { stopCopilotClient, warmCopilot } = await import("./copilot-runtime.mjs");
     const { closeDb } = await import("./store.mjs");
 
@@ -212,7 +213,7 @@ async function main(): Promise<void> {
     lifecycle.register("pipelines", pipelineActivity);
     lifecycle.register("api", apiActivity);
 
-    const info: ServiceInfo = { pid: process.pid, url: "", buildId: buildId(appDir), appDir, startedAt: new Date().toISOString() };
+    const info: ServiceInfo = { pid: process.pid, url: "", buildId: buildId(appDir), appDir, startedAt: new Date().toISOString(), commit: buildCommit(appDir) };
     const status = async (): Promise<ServiceStatus> => ({
         ...info,
         attached: lifecycle.attached,
@@ -259,6 +260,7 @@ async function main(): Promise<void> {
     const running = await startServer(join(appDir, "web"), { routes, port: readServicePort(userData) });
     info.url = running.url;
     writeServicePort(userData, Number(new URL(running.url).port));
+    let stopShipWatch = (): void => undefined;
     stop = async (reason: string) => {
         if (state === "stopping") return;
         state = "stopping";
@@ -272,6 +274,7 @@ async function main(): Promise<void> {
                 stopValidationRunner();
                 stopPrCommentsRunner();
                 stopPrBuildsRunner();
+                stopShipWatch();
                 await Promise.all([closeAllReviewerSessions(), closeAllWorkers(), closeLead()]);
                 await stopCopilotClient();
                 await closing;
@@ -294,6 +297,11 @@ async function main(): Promise<void> {
     startPrBuildsRunner();
     startCommsRunner();
     startMaintenance();
+    // A ship of Devis' own change that didn't go live goes back to the worker that made it.
+    stopShipWatch = watchShips({
+        notGoneLive: (ship, message) =>
+            void messageWorker(ship.sessionId, message, undefined, "queue").catch((error: Error) => console.warn(`[devis] ship ${ship.n}: ${error.message}`)),
+    });
     writeInfo(info);
     state = "running";
     lifecycle.start();

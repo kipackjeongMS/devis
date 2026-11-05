@@ -1,5 +1,8 @@
-# Dependencies
-node_modules/
+# Dependencies (no trailing slash: a Devis worktree links its source's node_modules, and git sees that link as a file)
+node_modules
+
+# The commit a packaged build came from (scripts/package-desktop.mjs)
+build-info.json
 
 # Runtime state (SQLite review store)
 data/

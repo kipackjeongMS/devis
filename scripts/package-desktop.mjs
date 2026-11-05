@@ -1,11 +1,31 @@
 // Package the built app into out/<name>-win32-x64 with @electron/packager.
 // Run `npm run build` first (scripts/deploy-desktop.ps1 does both).
 import { packager } from "@electron/packager";
-import { readFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+
+// The commit this build comes from, so the service can report it (Devis' updater checks a ship went live by it),
+// and the source folder it was built from, the default for Settings' self-change source.
+const git = (args) => {
+    try {
+        return execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    } catch {
+        return "";
+    }
+};
+await writeFile(
+    new URL("../build-info.json", import.meta.url),
+    JSON.stringify({
+        commit: git(["rev-parse", "HEAD"]) || null,
+        dirty: !!git(["status", "--porcelain", "--untracked-files=no"]),
+        source: root.replace(/[\\/]+$/, ""),
+        builtAt: new Date().toISOString(),
+    }) + "\n",
+);
 
 const ignore = [
     /^\/src($|\/)/,

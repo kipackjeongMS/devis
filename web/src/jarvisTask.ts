@@ -108,6 +108,7 @@ const svg = (name: IconName): string => icon(name);
 /** A worker's open question or approval, for Needs you and the modal's chat. */
 export function requestCardHtml(label: string, r: WorkerRequest, draft: string): string {
   if (r.kind === "repos") return reposCardHtml(label, r);
+  if (r.kind === "ship") return shipCardHtml(label, r, draft);
   if (r.kind === "permission") {
     return `
       <div class="ask-card" data-key="r:${esc(r.id)}" data-request="${esc(r.id)}">
@@ -171,6 +172,81 @@ export function reposFromCard(button: HTMLElement): string[] | null {
   if (!card) return null;
   if (button.dataset.repos === "none") return [];
   return [...card.querySelectorAll<HTMLInputElement>('.ask-card-repos input[type="checkbox"]:checked')].map((i) => i.value);
+}
+
+const shipTime = (ms: number): string => {
+  const s = Math.max(0, Math.round(ms / 1000));
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+};
+
+/** The +/− of a changed file; a binary file has neither. */
+export function shipFileHtml(f: { path: string; added: number | null; removed: number | null; sensitive: boolean }): string {
+  const counts = f.added === null ? `<span class="ship-bin">binary</span>` : `<span class="ship-add">+${f.added}</span><span class="ship-del">−${f.removed ?? 0}</span>`;
+  return `<li class="ship-file${f.sensitive ? " sensitive" : ""}"${f.sensitive ? ' title="Sensitive: how Devis deploys, approves tools or stays alive"' : ""}>
+    <code class="ship-path">${esc(f.path)}</code>${counts}</li>`;
+}
+
+/**
+ * A worker on a Devis task asks to ship its change to Devis itself. The whole card is pinned by
+ * data-v (the request never changes), so a poll keeps the tick, the open Send back and its note.
+ */
+function shipCardHtml(label: string, r: WorkerRequest, draft: string): string {
+  const s = r.ship;
+  const files = s?.files || [];
+  const sensitive = s?.sensitive || [];
+  const checks = s?.checks;
+  const sorted = [...files].sort((a, b) => Number(b.sensitive) - Number(a.sensitive) || a.path.localeCompare(b.path));
+  const checksLine = checks
+    ? `<li class="ship-check ok">${svg("check")}<span>Both TypeScript builds, ${checks.passed} of ${checks.total} harnesses</span><span class="ship-muted">${esc(shipTime(checks.ms))}</span></li>
+       ${
+         checks.preexisting.length
+           ? `<li class="ship-check warn">${svg("warning")}<span>${esc(checks.preexisting.join(", "))}</span><span class="ship-muted">fail on master too, not blocking</span></li>`
+           : ""
+       }`
+    : "";
+  const ack = sensitive.length
+    ? `<label class="ship-ack"><input type="checkbox" data-ship-ack>
+         <span>This touches how Devis deploys, approves tools, or keeps the service alive. A mistake here can stop the next update. I read the diff for ${sensitive.length === 1 ? "this file" : "these files"}.</span></label>`
+    : "";
+  return `
+    <div class="ask-card ship" data-key="r:${esc(r.id)}" data-request="${esc(r.id)}" data-v="${esc(r.id)}">
+      <p class="ask-card-title"><span class="ship-chip">${svg("sparkle")}Devis</span><span>Ship “${esc(r.title)}”?</span></p>
+      ${s ? `<p class="ship-branch">${svg("branch")}<code>${esc(s.branch)}</code><span aria-hidden="true">→</span><code>master</code></p>` : ""}
+      ${s?.behind ? `<p class="ask-card-note">Master moved since ${esc(label)} started. The change is rebased and checked again when it ships.</p>` : ""}
+      ${r.detail ? `<div class="ship-summary md">${renderMarkdown(r.detail)}</div>` : ""}
+      ${checksLine ? `<ul class="ship-checks">${checksLine}</ul>` : ""}
+      ${files.length ? `<ul class="ship-files" aria-label="Changed files">${sorted.map(shipFileHtml).join("")}</ul>` : ""}
+      ${ack}
+      <div class="ask-card-actions">
+        <button type="button" class="btn sm accent ship-go" data-ship="idle" title="Ships once the workers' turns and reviews in flight are done">${svg("up")}<span>Ship when the workers are done</span></button>
+        <button type="button" class="btn sm ship-go" data-ship="now" title="Stops the workers' turns and ships; they carry on from their next message">Ship now</button>
+        <button type="button" class="btn sm ghost" data-ship="view">${svg("diff")}<span>View changes</span></button>
+      </div>
+      <details class="ship-back">
+        <summary>Send back…</summary>
+        <div class="ship-back-body">
+          <textarea rows="2" data-draft="ans:${esc(r.id)}" placeholder="What should ${esc(label)} change?" aria-label="Note for ${esc(label)}">
+${esc(draft)}</textarea>
+          <button type="button" class="btn sm" data-ship="back">${svg("reply")}<span>Send back</span></button>
+        </div>
+      </details>
+    </div>`;
+}
+
+/** What a ship card's button asks for, or null (with a toast) when a sensitive change isn't ticked. */
+export function shipFromCard(button: HTMLElement): { decision: "idle" | "now" | "back"; note: string; ack: boolean } | null {
+  const card = button.closest<HTMLElement>("[data-request]");
+  const decision = button.dataset.ship;
+  if (!card || (decision !== "idle" && decision !== "now" && decision !== "back")) return null;
+  const tick = card.querySelector<HTMLInputElement>("input[data-ship-ack]");
+  const ack = !tick || tick.checked;
+  if (decision !== "back" && !ack) {
+    toast("Tick that you read the diff of the sensitive files first.", "err");
+    tick?.focus();
+    return null;
+  }
+  const note = card.querySelector<HTMLTextAreaElement>(".ship-back textarea")?.value.trim() || "";
+  return { decision, note, ack };
 }
 
 /** Say in a remove dialog what its worktrees hold that isn't committed or pushed yet. */
@@ -743,7 +819,7 @@ function selectWorker(sessionId: string): void {
 
 /** A control's identity across repaints: what it does and what it belongs to. */
 function focusKey(node: HTMLElement): string {
-  const own = ["data-act", "data-ide", "popovertarget", "data-tab", "data-ltab", "data-name", "data-decide", "data-choice", "data-repos", "data-run", "data-draft", "data-fold", "data-fold-all"].map((a) => node.getAttribute(a) || "");
+  const own = ["data-act", "data-ide", "popovertarget", "data-tab", "data-ltab", "data-name", "data-decide", "data-choice", "data-repos", "data-ship", "data-ship-ack", "data-run", "data-draft", "data-fold", "data-fold-all"].map((a) => node.getAttribute(a) ?? "");
   // Controls repeated per request or per PR row belong to that row.
   const owner =
     node.closest<HTMLElement>("[data-request]")?.dataset.request || node.closest<HTMLElement>("[data-pr-key]")?.dataset.prKey || "";
@@ -2074,6 +2150,19 @@ function onClick(e: MouseEvent): void {
     if (reposButton.dataset.repos === "confirm" && !repos.length) return void toast("Check at least one repository, or choose None.", "err");
     void withButton(reposButton, async () => {
       await postJSON("/api/jarvis/workers/repos", { sessionId: w.sessionId, requestId, repos });
+      await m.host.refresh();
+    });
+    return;
+  }
+  const shipButton = target.closest<HTMLElement>("[data-ship]");
+  if (shipButton && w) {
+    if (shipButton.dataset.ship === "view") return void window.open(`/code.html?worker=${encodeURIComponent(w.sessionId)}`, `code-${w.sessionId}`);
+    const requestId = shipButton.closest<HTMLElement>("[data-request]")?.dataset.request;
+    const pick = shipFromCard(shipButton);
+    if (!requestId || !pick) return;
+    void withButton(shipButton, async () => {
+      await postJSON("/api/jarvis/workers/ship", { sessionId: w.sessionId, requestId, ...pick });
+      if (pick.decision !== "back") toast("Shipping. Devis restarts on the new build when it's deployed.", "ok");
       await m.host.refresh();
     });
     return;

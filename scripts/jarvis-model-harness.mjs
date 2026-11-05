@@ -572,4 +572,13 @@ assert.notEqual(fp(task("x", { validation: vs({ run: vrun({ done: 1 }) }) })), f
     assert.ok(m.LIVE_FIELDS.includes("partialId") && !m.LIVE_FIELDS.includes("label"), "only live fields come from the read");
 }
 
+// ---- the Devis banner on Today -------------------------------------------------------
+{
+    const b = { n: 4, mode: "idle", title: "Fix the banner", note: null, at: iso(0) };
+    assert.equal(m.devisBannerText({ ...b, state: "deploying" }), "Updating Devis to ship 4: Fix the banner");
+    assert.equal(m.devisBannerText({ ...b, state: "live" }), "Devis is on ship 4: Fix the banner");
+    assert.equal(m.devisBannerText({ ...b, state: "rolled-back", note: "It didn't answer." }), "Ship 4 rolled back: It didn't answer.");
+    assert.equal(m.devisBannerText({ ...b, state: "failed" }), "Ship 4 didn't ship: Fix the banner", "the title stands in for a missing note");
+}
+
 console.log("jarvis-model harness: ok");

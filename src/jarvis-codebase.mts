@@ -7,7 +7,7 @@
 
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, renameSync, rmSync, statSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { userInfo } from "node:os";
 import { dirname, isAbsolute, join, parse, relative, resolve } from "node:path";
 import { codebaseKey, readConfig, type CodebaseRepo } from "./config.mjs";
@@ -345,10 +345,32 @@ export interface WorktreeRef {
     path: string;
     branch: string;
     clonePath: string;
+    /** The branch it came from. A repo with no remote (Devis' own source) counts unpushed work from here. */
+    base?: string | null;
+}
+
+/** A node_modules that links elsewhere (a Devis worktree shares its source's): unlink it so nothing below it is deleted. */
+function unlinkSharedModules(path: string): void {
+    const modules = join(path, "node_modules");
+    try {
+        if (!lstatSync(modules).isSymbolicLink()) return;
+    } catch {
+        return;
+    }
+    try {
+        unlinkSync(modules);
+    } catch {
+        rmdirSync(modules);
+    }
 }
 
 /** Remove a worktree and its local branch. Returns what couldn't be removed, or null. */
 export async function removeWorktree(w: WorktreeRef): Promise<string | null> {
+    try {
+        unlinkSharedModules(w.path);
+    } catch (error) {
+        return `Left ${w.path} alone: its node_modules link couldn't be removed (${(error as Error).message}).`;
+    }
     if (isCloned(w.clonePath)) {
         await serial(w.clonePath, async () => {
             await runtime.git(["worktree", "remove", "--force", "--force", w.path], { cwd: w.clonePath, timeoutMs: GIT_LIMITS.worktreeMs }).catch(() => "");
@@ -385,9 +407,9 @@ export async function worktreeChanges(w: WorktreeRef & { repo: string }): Promis
     if (!isDirectory(w.path)) return null;
     const status = await runtime.git(["status", "--porcelain"], { cwd: w.path, timeoutMs: GIT_LIMITS.quickMs }).catch(() => null);
     if (status === null) return null;
-    const ahead = await runtime
-        .git(["rev-list", "--count", "HEAD", "--not", "--remotes"], { cwd: w.path, timeoutMs: GIT_LIMITS.quickMs })
-        .catch(() => "0");
+    const count = (not: string[]) =>
+        runtime.git(["rev-list", "--count", "HEAD", "--not", "--remotes", ...not], { cwd: w.path, timeoutMs: GIT_LIMITS.quickMs });
+    const ahead = await (w.base ? count([w.base]).catch(() => count([])) : count([])).catch(() => "0");
     return { path: w.path, repo: w.repo, uncommitted: status.split("\n").filter(Boolean).length, unpushed: Number(ahead) || 0 };
 }
 

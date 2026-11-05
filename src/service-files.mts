@@ -17,6 +17,8 @@ export interface ServiceInfo {
     buildId: string;
     appDir: string;
     startedAt: string;
+    /** The git commit the installed build was packaged from (build-info.json), when known. */
+    commit?: string | null;
 }
 
 export interface WorkItem {
@@ -72,6 +74,16 @@ export function buildId(appDir: string): string {
         hash.update(name).update("\0").update(readFileSync(join(appDir, name))).update("\0");
     }
     return hash.digest("hex").slice(0, 16);
+}
+
+/** The commit the build in appDir was packaged from, or null for a dev build. */
+export function buildCommit(appDir: string): string | null {
+    try {
+        const info = JSON.parse(readFileSync(join(appDir, "build-info.json"), "utf8")) as { commit?: unknown };
+        return typeof info.commit === "string" && /^[0-9a-f]{7,40}$/i.test(info.commit) ? info.commit : null;
+    } catch {
+        return null;
+    }
 }
 
 export function readServiceInfo(userData: string): ServiceInfo | null {

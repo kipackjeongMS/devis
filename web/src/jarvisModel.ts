@@ -10,15 +10,97 @@ export type WorkerState = "working" | "needsInput" | "turnDone" | "idle" | "stop
 
 export interface WorkerRequest {
   id: string;
-  /** repos: the worker proposes repositories and the user confirms which it gets worktrees of. */
-  kind: "question" | "permission" | "repos";
+  /**
+   * repos: the worker proposes repositories and the user confirms which it gets worktrees of.
+   * ship: a worker on a Devis task asks to ship its change to Devis itself.
+   */
+  kind: "question" | "permission" | "repos" | "ship";
   title: string;
   detail: string;
   choices: string[];
   allowFreeform: boolean;
   /** For repos: the ones the worker proposed. */
   selected?: string[];
+  ship?: ShipRequest;
   at: string;
+}
+
+/** A file a Devis change touches; a sensitive one needs the user's tick before it ships. */
+export interface ShipFile {
+  path: string;
+  /** Null for a binary file. */
+  added: number | null;
+  removed: number | null;
+  sensitive: boolean;
+}
+
+/** What a worker on a Devis task asks the user to ship (devis-self.mts). */
+export interface ShipRequest {
+  branch: string;
+  files: ShipFile[];
+  sensitive: string[];
+  checks: { passed: number; total: number; preexisting: string[]; ms: number };
+  /** Master moved since the branch left it: it's rebased and checked again when it ships. */
+  behind: boolean;
+}
+
+export type ShipState = "deploying" | "live" | "rolled-back" | "failed";
+
+/** One change shipped to Devis itself, in Settings' history. */
+export interface DevisShip {
+  n: number;
+  taskId: string;
+  sessionId: string;
+  worker: string;
+  title: string;
+  summary: string;
+  branch: string;
+  before: string;
+  commit: string;
+  state: ShipState;
+  mode: "idle" | "now";
+  files: ShipFile[];
+  sensitive: string[];
+  checks: { passed: number; total: number; preexisting: string[]; ms: number };
+  note: string | null;
+  log: string | null;
+  shippedAt: string;
+  settledAt: string | null;
+  revertedBy: number | null;
+  undoTaskId: string | null;
+  dismissed: boolean;
+}
+
+/** Settings' "Change Devis itself" card. */
+export interface DevisOverview {
+  enabled: boolean;
+  /** The Devis source folder changes are made in; "" when unset. */
+  source: string;
+  /** Why the source folder can't be used, if it can't. */
+  sourceProblem: string | null;
+  /** The commit the running build came from. */
+  commit: string | null;
+  ships: DevisShip[];
+  checking: { label: string; step: string; startedAt: string } | null;
+  busy: boolean;
+}
+
+/** The ship worth a banner on Today. */
+export interface DevisBanner {
+  n: number;
+  state: ShipState;
+  mode: "idle" | "now";
+  title: string;
+  note: string | null;
+  at: string;
+}
+
+/** The banner's line for a ship. */
+export function devisBannerText(b: DevisBanner): string {
+  if (b.state === "deploying") return `Updating Devis to ship ${b.n}: ${b.title}`;
+  if (b.state === "live") return `Devis is on ship ${b.n}: ${b.title}`;
+  const what = b.state === "rolled-back" ? "rolled back" : "didn't ship";
+  return `Ship ${b.n} ${what}: ${b.note || b.title}`;
 }
 
 /** One repository a worker works in: a worktree on its own branch. */
@@ -207,6 +289,8 @@ export interface TodayTask {
   description?: string;
   /** The task's own folder, where each worker gets a folder with its worktrees. Null for older tasks. */
   folder?: string | null;
+  /** "devis": a change to Devis itself, shipped through the self-change pipeline. */
+  kind?: "devis";
   org: string | null;
   project: string | null;
   workItem: TaskWorkItem | null;
@@ -711,6 +795,8 @@ export interface TodayData {
    * threads waiting on the user (`needsFailed` likewise); the meetings', chats' and email's digests.
    */
   comms?: { asks: CommsAsk[]; failed?: boolean; meetings?: MeetingsDigest; chats?: ChatsDigest; mail?: ChatsDigest; needs?: CommsNeed[]; needsFailed?: boolean };
+  /** A Devis ship deploying, just live, or not live: the Workspace banner. */
+  devis?: DevisBanner | null;
 }
 
 /** A chat or email thread someone waits on the user in: its latest day that says so (comms.mts commsNeeds). */
@@ -1003,7 +1089,7 @@ export function needLine(n: NeedItem): string {
   if (n.kind === "validation" || n.kind === "prComments" || n.kind === "prBuilds") return n.text;
   if (n.kind === "failed") return `${n.worker.label} failed`;
   const r = n.worker.requests[0];
-  const what = r.kind === "repos" ? "confirm its repositories" : r.title;
+  const what = r.kind === "repos" ? "confirm its repositories" : r.kind === "ship" ? `ready to ship: ${r.title}` : r.title;
   const extra = n.worker.requests.length > 1 ? ` (+${n.worker.requests.length - 1} more)` : "";
   return `${n.worker.label}: ${what}${extra}`;
 }
@@ -1106,7 +1192,13 @@ export function needTodo(n: NeedItem): { text: string; source: TodoSource } {
   if (n.kind === "failed") return { text: `See why ${who}'s turn failed`, source };
   const r = firstRequest(n.worker.requests);
   const text =
-    r.kind === "repos" ? `Confirm ${who}'s repositories` : r.kind === "permission" ? `Allow or deny ${who}: ${oneLine(r.title, 160)}` : `Answer ${who}: ${oneLine(r.title, 160)}`;
+    r.kind === "repos"
+      ? `Confirm ${who}'s repositories`
+      : r.kind === "ship"
+        ? `Review and ship ${who}'s change to Devis: ${oneLine(r.title, 160)}`
+        : r.kind === "permission"
+          ? `Allow or deny ${who}: ${oneLine(r.title, 160)}`
+          : `Answer ${who}: ${oneLine(r.title, 160)}`;
   return { text, source };
 }
 

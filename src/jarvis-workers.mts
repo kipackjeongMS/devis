@@ -33,6 +33,7 @@ import {
     asJarvisId,
     beginRemoval,
     clip,
+    createTask,
     deleteTask,
     deleteWorker,
     describeTask,
@@ -79,6 +80,20 @@ import { taskPrBuildsTool } from "./jarvis-pr-builds.mjs";
 import { taskPrCommentsTool } from "./jarvis-pr-comments.mjs";
 import { openWorkspaceIde } from "./workspace-ide.mjs";
 import { APP_NAME, LEAD_NAME } from "./brand.mjs";
+import {
+    MAIN,
+    addDevisWorktree,
+    catchUpWithMaster,
+    checksReport,
+    completeShip,
+    devisChanges,
+    requireDevis,
+    runDevisChecks,
+    shipGate,
+    withShipLock,
+    type DevisChecks,
+    type DevisFile,
+} from "./devis-self.mjs";
 
 /** Where worker sessions come from. The harness swaps in a fake. */
 export interface WorkerRuntime {
@@ -106,17 +121,31 @@ export function setWorkerRuntime(next: WorkerRuntime | null): void {
 type UserInputRequest = Parameters<NonNullable<SessionConfig["onUserInputRequest"]>>[0];
 type UserInputResponse = Awaited<ReturnType<NonNullable<SessionConfig["onUserInputRequest"]>>>;
 
+/** What a worker on a Devis task asks the user to ship. */
+export interface ShipRequest {
+    branch: string;
+    files: DevisFile[];
+    sensitive: string[];
+    checks: { passed: number; total: number; preexisting: string[]; ms: number };
+    /** Master has moved since the branch left it: it's rebased when it ships. */
+    behind: boolean;
+}
+
 /** Something a worker is waiting on the user for. */
 export interface WorkerRequest {
     id: string;
-    /** repos: the worker proposes repositories; the user confirms which it gets worktrees of. */
-    kind: "question" | "permission" | "repos";
+    /**
+     * repos: the worker proposes repositories; the user confirms which it gets worktrees of.
+     * ship: a worker on a Devis task asks to ship its change to Devis itself.
+     */
+    kind: "question" | "permission" | "repos" | "ship";
     title: string;
     detail: string;
     choices: string[];
     allowFreeform: boolean;
     /** For repos: the choices the worker proposed, checked to start with. */
     selected?: string[];
+    ship?: ShipRequest;
     at: string;
 }
 
@@ -387,7 +416,10 @@ function workerBrief(task: JarvisTask, worker: { label: string; cwd: string }, w
     const parent = task.workItem?.parent
         ? ` It sits under ${task.workItem.parent.type} #${task.workItem.parent.id} ${task.workItem.parent.title}.`
         : "";
-    const where = task.folder
+    const devis = task.kind === "devis";
+    const where = devis
+        ? devisBrief(task, worker, worktrees)
+        : task.folder
         ? [
               `You work in ${worker.cwd}, your own folder inside the task's folder (${task.folder}). Other workers on this task have their own folders beside yours; leave them alone.`,
               worktrees.length
@@ -399,9 +431,23 @@ function workerBrief(task: JarvisTask, worker: { label: string; cwd: string }, w
               "Have a clear goal, scope and definition of done before you change anything: confirm your understanding with the user through ask_user, and ask about anything the title and description leave open.",
           ]
         : [`You work in ${worker.cwd}.`];
+    const delivery = devis
+        ? []
+        : [
+              `Pull requests you open for this task are linked to it on their own when you use az repos pr create or the Azure DevOps tools.${
+                  task.workItem ? ` Also link work item #${task.workItem.id} when you create one (for example, az repos pr create --work-items ${task.workItem.id}).` : ""
+              } If you open one another way, link it with task_link_pr.`,
+          ];
+    const reviews = devis
+        ? []
+        : [
+              "The task can have a validation chain: Azure DevOps pipelines that prove the change works, run in order. Find and propose one with task_validation (candidates, then propose) when the user asks or the app does; the user accepts it and decides when it runs.",
+              "When reviewers comment on your pull requests, the app asks you to review them and propose a response per thread with task_pr_comments. The user accepts the proposal before anything changes; then make only the accepted changes and report with task_pr_comments done.",
+              "When blocking builds fail on your pull requests, the app asks you to read the failures and propose, per build, a fix or a rerun with task_pr_builds. The user accepts before anything changes; then make only the accepted fixes, push, and report with task_pr_builds done. Don't queue builds yourself.",
+          ];
     return [
         `You are "${worker.label}", a Copilot worker in the user's Workspace in ${APP_NAME}, working with the lead agent ${LEAD_NAME}.`,
-        `Your task: ${describeTask(task)} (service: ${service}).${parent}`,
+        `Your task: ${describeTask(task)}${devis ? "" : ` (service: ${service})`}.${parent}`,
         ...(task.description
             ? [`The task's description:\n${task.description.length > 6_000 ? `${task.description.slice(0, 5_999).trimEnd()}…` : task.description}`]
             : []),
@@ -409,17 +455,30 @@ function workerBrief(task: JarvisTask, worker: { label: string; cwd: string }, w
         `The task has an Artifacts folder that you, the task's other workers and the user share (${artifactsDir(task.id)}); use the task_artifacts tool for it.`,
         "note.md there is the shared note: read it before you start. Add to it only what others need to know, like decisions, findings and open questions, not progress: task_status is the progress record. Save longer work, like a design or plan, as its own .md artifact.",
         "Before you end each turn, post one status line with task_status: where the task stands now and what is next, in under 160 characters (for example, \"API change done, tests next\"). It shows on the task's card in the user's Workspace and builds the task's timeline.",
-        `Pull requests you open for this task are linked to it on their own when you use az repos pr create or the Azure DevOps tools.${
-            task.workItem ? ` Also link work item #${task.workItem.id} when you create one (for example, az repos pr create --work-items ${task.workItem.id}).` : ""
-        } If you open one another way, link it with task_link_pr.`,
+        ...delivery,
         "When you need a decision from the user, ask with ask_user instead of guessing.",
         WEB_BRIEF,
         "The user keeps a to-do list and a quick note in the Workspace that every agent can read with user_notes: check them when the user mentions their notes or to-dos.",
-        "The task can have a validation chain: Azure DevOps pipelines that prove the change works, run in order. Find and propose one with task_validation (candidates, then propose) when the user asks or the app does; the user accepts it and decides when it runs.",
-        "When reviewers comment on your pull requests, the app asks you to review them and propose a response per thread with task_pr_comments. The user accepts the proposal before anything changes; then make only the accepted changes and report with task_pr_comments done.",
-                "When blocking builds fail on your pull requests, the app asks you to read the failures and propose, per build, a fix or a rerun with task_pr_builds. The user accepts before anything changes; then make only the accepted fixes, push, and report with task_pr_builds done. Don't queue builds yourself.",
-                "End each turn with a short plain summary of what you did and what is next.",
+        ...reviews,
+        "End each turn with a short plain summary of what you did and what is next.",
     ].join("\n");
+}
+
+/** Where a worker on a Devis task works, and the rules for changing the app that runs it. */
+function devisBrief(task: JarvisTask, worker: { label: string; cwd: string }, worktrees: Worktree[]): string[] {
+    const tree = worktrees.find((w) => w.repo === "devis");
+    return [
+        `This task changes ${APP_NAME} itself: the app you run in. You work in ${worker.cwd}, your own folder inside the task's folder (${task.folder}).`,
+        tree
+            ? `Your worktree of ${APP_NAME}' source is ${tree.path}, on your own branch ${tree.branch}, off ${MAIN}. Make every change there, and nowhere else.`
+            : `Your worktree of ${APP_NAME}' source is missing. Tell the user, and don't change anything.`,
+        "Read DESIGN.md in your worktree before you change anything, and the code your change touches. Follow how the code around it is written. When what you change is described in DESIGN.md, update it in the same change.",
+        "Have a clear goal, scope and definition of done before you change anything: confirm your understanding with the user through ask_user, and ask about anything the title and description leave open.",
+        "Build with `node node_modules/typescript/bin/tsc -p tsconfig.backend.json` and the same with tsconfig.web.json, and run a harness with `node scripts/<name>-harness.mjs`, from your worktree.",
+        "Your worktree's node_modules is a link to the source folder's: don't run npm install, and don't add, remove or upgrade packages. If the change needs one, ask the user with ask_user first.",
+        `Commit your work on your branch with clear messages. When the change is done and committed, call devis_ready_to_ship: the app runs the builds and every harness, then shows the user your change to review. Nothing ships until they say so; then the app merges your branch into ${MAIN}, deploys it, checks it came up, and rolls back when it didn't.`,
+        `Never deploy, restart or stop ${APP_NAME} yourself: don't run scripts/deploy-desktop.ps1, the packaging scripts or the updater. Don't push, and don't touch the source folder${tree ? ` (${tree.clonePath})` : ""} or its ${MAIN} branch directly.`,
+    ];
 }
 
 function taskStatusTool(): Tool<unknown> {
@@ -725,6 +784,134 @@ function taskWorkspaceTool(): Tool<unknown> {
     });
 }
 
+// ---- shipping a change to Devis itself (tasks of kind devis) --------------------------
+
+const checksLine = (c: DevisChecks): ShipRequest["checks"] => ({
+    passed: c.harnesses.passed,
+    total: c.harnesses.total,
+    preexisting: c.harnesses.preexisting,
+    ms: c.ms,
+});
+
+/** The user's answer to a ship request: ship when the workers are idle, ship now, or send it back. */
+function shipAnswer(answer: string): { decision: "idle" | "now" | "back"; note: string } | null {
+    try {
+        const a = JSON.parse(answer) as { decision?: unknown; note?: unknown };
+        if (a.decision !== "idle" && a.decision !== "now" && a.decision !== "back") return null;
+        return { decision: a.decision, note: typeof a.note === "string" ? a.note : "" };
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * devis_ready_to_ship: check the worker's branch, run the builds and harnesses,
+ * and, when they pass, ask the user to ship it. On Ship, rebase onto master if
+ * it moved (and check again), merge, and start the updater.
+ */
+async function readyToShip(worker: JarvisWorker, args: { title?: unknown; summary?: unknown }): Promise<string> {
+    const task = await getTask(worker.taskId);
+    if (task?.kind !== "devis") return `Only a worker on a task that changes ${APP_NAME} itself can ship.`;
+    const entry = lives.get(worker.sessionId);
+    if (entry?.recapping || entry?.auditing) return "Not while writing the recap or reviewing feedback.";
+    const title = typeof args.title === "string" ? clip(args.title.trim(), 200) : "";
+    const summary = typeof args.summary === "string" ? clip(args.summary.trim(), 2_000) : "";
+    if (!title) return "Give the change a title: one line the user sees in the ship card and the ship history.";
+    if (!summary) return "Give a summary: what changed and why, and how you checked it, in a few lines.";
+    const tree = (await listWorktrees({ sessionId: worker.sessionId })).find((w) => w.repo === "devis");
+    if (!tree) return `You have no worktree of ${APP_NAME}' source, so there's nothing to ship. Tell the user.`;
+    const source = await requireDevis();
+    const changes = await devisChanges(tree.path);
+    if (changes.uncommitted.length) {
+        const shown = changes.uncommitted.slice(0, 12).join(", ");
+        return `Commit everything on your branch first. Not committed: ${shown}${changes.uncommitted.length > 12 ? `, and ${changes.uncommitted.length - 12} more` : ""}.`;
+    }
+    if (!changes.ahead) return `Your branch has no commits that ${MAIN} doesn't. Commit your change, then call devis_ready_to_ship again.`;
+    if (entry) entry.activity = "Running Devis' checks";
+    let checks = await runDevisChecks({ worktree: tree.path, source, label: worker.label });
+    if (!checks.ok) return checksReport(checks);
+    if (entry) entry.activity = "";
+    const answer = await waitForUser(worker.sessionId, {
+        kind: "ship",
+        title,
+        detail: summary,
+        choices: [],
+        allowFreeform: false,
+        ship: { branch: tree.branch, files: changes.files, sensitive: changes.sensitive, checks: checksLine(checks), behind: changes.behind },
+    });
+    const decided = shipAnswer(answer);
+    if (!decided) return "The ship request was closed without a decision. Ask the user how they want to go on.";
+    if (decided.decision === "back") {
+        return [
+            decided.note ? `The user sent the change back:\n${decided.note}` : "The user sent the change back without a note. Ask them what to change.",
+            "Make what they ask for, commit, and call devis_ready_to_ship again.",
+        ].join("\n\n");
+    }
+    const mode = decided.decision;
+    try {
+        const ship = await withShipLock(async () => {
+            if (entry) entry.activity = `Catching up with ${MAIN}`;
+            const caught = await catchUpWithMaster(tree.path);
+            if (caught.problem) throw new JarvisError(caught.problem);
+            if (caught.rebased) {
+                if (entry) entry.activity = "Running Devis' checks again";
+                checks = await runDevisChecks({ worktree: tree.path, source, label: worker.label });
+                if (!checks.ok) throw new JarvisError(`${MAIN} moved, so your branch was rebased onto it, and then the checks failed.\n\n${checksReport(checks)}`);
+            }
+            if (entry) entry.activity = "Shipping";
+            return completeShip({
+                source,
+                worktree: tree.path,
+                branch: tree.branch,
+                taskId: task.id,
+                sessionId: worker.sessionId,
+                worker: worker.label,
+                title,
+                summary,
+                mode,
+                checks,
+            });
+        });
+        if (ship.state === "failed") return `Ship ${ship.n} didn't start: ${ship.note} Tell the user.`;
+        return [
+            `Shipped as ship ${ship.n}: ${MAIN} is at ${ship.commit.slice(0, 8)}, and the updater deploys it ${mode === "now" ? "in a few seconds" : "once no worker is busy"}.`,
+            `${APP_NAME} restarts for it, so end your turn now with a short summary. If it doesn't come up, the previous build is put back and the app tells you why.`,
+        ].join(" ");
+    } catch (error) {
+        return `Not shipped: ${(error as Error).message}`;
+    } finally {
+        if (entry) entry.activity = "";
+    }
+}
+
+function devisShipTool(): Tool<unknown> {
+    return defineTool("devis_ready_to_ship", {
+        description:
+            `Ask to ship your committed change to ${APP_NAME}. The app checks everything on your branch is committed, runs both TypeScript builds and every harness (the ones that fail on ${MAIN} too don't block), and returns the failures when there are any. When they pass, it shows the user your change and waits: they ship it, or send it back with a note. On ship, the app merges your branch into ${MAIN} and deploys it. It can take several minutes.`,
+        parameters: {
+            type: "object",
+            properties: {
+                title: { type: "string", description: "One line: what the change does, for the ship card and history." },
+                summary: { type: "string", description: "What changed and why, and how you checked it, in a few plain lines." },
+            },
+            required: ["title", "summary"],
+            additionalProperties: false,
+        },
+        skipPermission: true,
+        defer: "never",
+        // The worker and task come from the invoking session, never from the input.
+        handler: async (args, invocation) => {
+            const worker = await getWorker(invocation.sessionId);
+            if (!worker) return "This session is not one of the Workspace's workers.";
+            try {
+                return await readyToShip(worker, (args || {}) as { title?: unknown; summary?: unknown });
+            } catch (error) {
+                return `Not shipped: ${(error as Error).message}`;
+            }
+        },
+    });
+}
+
 /** Skill folders of the user's enabled Copilot CLI plugins, from the CLI's own config. */
 function pluginSkillDirectories(home: string): string[] {
     try {
@@ -767,8 +954,11 @@ function sessionConfig(
 ): ResumeSessionConfig {
     const model = worker.model?.trim();
     const effort = worker.effort?.trim();
-    const tools = [taskArtifactsTool(), taskStatusTool(), taskLinkPrTool(), userNotesTool(), taskValidationTool(), taskPrCommentsTool(), taskPrBuildsTool()];
-    if (task.folder) tools.push(taskWorkspaceTool());
+    const devis = task.kind === "devis";
+    const tools = devis
+        ? [taskArtifactsTool(), taskStatusTool(), userNotesTool(), devisShipTool()]
+        : [taskArtifactsTool(), taskStatusTool(), taskLinkPrTool(), userNotesTool(), taskValidationTool(), taskPrCommentsTool(), taskPrBuildsTool()];
+    if (task.folder && !devis) tools.push(taskWorkspaceTool());
     // Skills come from each repository first, then the worker's folder, then the user's own and plugins'.
     const roots = [...worktrees.map((w) => w.path), worker.cwd];
     const own = roots.flatMap((dir) => workerSkillDirectories(dir).filter((d) => isInside(d, dir)));
@@ -910,7 +1100,9 @@ async function waitForUser(
         "worker.needsInput",
         request.kind === "repos"
             ? `${worker?.label || "A worker"} proposes repositories: ${(request.selected || []).join(", ") || "none yet"}`
-            : `${worker?.label || "A worker"} ${request.kind === "question" ? "asked" : "needs approval"}: ${request.title}`,
+            : request.kind === "ship"
+              ? `${worker?.label || "A worker"} is ready to ship: ${request.title}`
+              : `${worker?.label || "A worker"} ${request.kind === "question" ? "asked" : "needs approval"}: ${request.title}`,
         { taskId: worker?.taskId, sessionId },
     );
     return answer;
@@ -1196,6 +1388,19 @@ export function setupPrompt(instructions: string): string {
         .join("\n\n");
 }
 
+/** The first turn of a worker on a task that changes Devis itself: read up, settle the goal, then start. */
+export function devisSetupPrompt(instructions: string): string {
+    return [
+        `Get ready to change ${APP_NAME}, then start.`,
+        "1. Read DESIGN.md in your worktree, then the code this change touches.",
+        "2. Before you change anything, make sure the goal, the scope and what done means are clear: state your understanding to the user with ask_user and ask them to confirm or correct it, along with anything the title and description leave open. One question at a time.",
+        "3. Make the change on your branch, build it, run the harnesses it touches, and commit. Then call devis_ready_to_ship.",
+        instructions ? `The user's instructions:\n${instructions}` : "",
+    ]
+        .filter(Boolean)
+        .join("\n\n");
+}
+
 /** Start a worker on a task and send it its first instructions. */
 export async function startWorker(input: StartWorker): Promise<JarvisWorker> {
     const taskId = asJarvisId(input.taskId);
@@ -1214,6 +1419,9 @@ export async function startWorker(input: StartWorker): Promise<JarvisWorker> {
     let label: string;
     let prompt: string;
     let display: string | undefined;
+    const devis = task.kind === "devis";
+    if (devis && !task.folder) throw new JarvisError(`A task that changes ${APP_NAME} needs a folder: set the task folder under Settings > Workspace.`, 409);
+    const source = devis ? await requireDevis() : null;
     if (task.folder) {
         // The worker gets its own folder in the task's folder, named for it; its worktrees go there.
         const instructions = typeof input.prompt === "string" ? input.prompt.trim() : "";
@@ -1227,8 +1435,8 @@ export async function startWorker(input: StartWorker): Promise<JarvisWorker> {
         label = await nextWorkerName((name) => !existsSync(join(root, name)));
         cwd = join(root, label);
         mkdirSync(cwd, { recursive: true });
-        prompt = setupPrompt(instructions);
-        display = instructions || "Set up your workspace and start on this task.";
+        prompt = devis ? devisSetupPrompt(instructions) : setupPrompt(instructions);
+        display = instructions || (devis ? "Get ready and start on this change." : "Set up your workspace and start on this task.");
     } else {
         cwd = cleanFolder(input.cwd);
         prompt = cleanPrompt(input.prompt);
@@ -1237,18 +1445,43 @@ export async function startWorker(input: StartWorker): Promise<JarvisWorker> {
     const sessionId = randomUUID();
     const worker = await insertWorker({ sessionId, taskId: task.id, label, cwd, model, effort: effort || null, state: "working", summary: "" });
     const entry = live(sessionId);
+    const worktrees: Worktree[] = [];
     try {
-        const session = await runtime.create({ ...sessionConfig(task, worker), sessionId } as SessionConfig);
+        if (source) {
+            entry.activity = `Making a worktree of ${APP_NAME}' source`;
+            const wt = await addDevisWorktree({ source, workerFolder: cwd, title: task.title });
+            worktrees.push(await insertWorktree({ sessionId, taskId: task.id, org: "", project: "", repo: "devis", ...wt }));
+            entry.activity = "";
+        }
+        const session = await runtime.create({ ...sessionConfig(task, worker, worktrees), sessionId } as SessionConfig);
         wire(sessionId, entry, session);
     } catch (error) {
         lives.delete(sessionId);
         await deleteWorker(sessionId);
+        for (const w of worktrees) await removeWorktree(w).catch(() => undefined);
         if (task.folder && isInside(cwd, task.folder)) removeFolder(cwd);
         throw new JarvisError(`Could not start the worker: ${(error as Error).message}`, 502);
     }
     await recordEvent("worker.started", `${label} started on ${describeTask(task)} in ${cwd}`, { taskId: task.id, sessionId });
     runTurn(sessionId, prompt, display);
     return (await getWorker(sessionId))!;
+}
+
+/** A task that changes Devis itself, with a worker started on it. The task stays when its worker can't start. */
+export async function startDevisTask(input: { title: unknown; description: unknown }): Promise<{ task: JarvisTask; worker: JarvisWorker | null; workerError: string | null }> {
+    await requireDevis();
+    const title = typeof input.title === "string" ? input.title.trim() : "";
+    const description = typeof input.description === "string" ? input.description : "";
+    if (!title) throw new JarvisError("Give the change a title.");
+    if (!description.trim()) throw new JarvisError("Describe the change: what to do, and why.");
+    const cfg = await readConfig();
+    if (!cfg.taskRoot) throw new JarvisError(`Set the task folder under Settings > Workspace first: a change to ${APP_NAME} works in a folder there.`, 409);
+    const { task } = await createTask({ title, description, folderRoot: cfg.taskRoot, kind: "devis" });
+    try {
+        return { task, worker: await startWorker({ taskId: task.id }), workerError: null };
+    } catch (error) {
+        return { task, worker: null, workerError: (error as Error).message };
+    }
 }
 
 async function requireWorker(sessionId: unknown): Promise<JarvisWorker> {
@@ -1279,6 +1512,7 @@ export async function messageWorker(
         if (images.length) throw new JarvisError("An answer is text only. Send the image as a message once you've answered.");
         if (pending.kind === "permission") throw new JarvisError("That request needs Allow or Deny.");
         if (pending.kind === "repos") throw new JarvisError("That request needs the user to confirm the repositories in the card.");
+        if (pending.kind === "ship") throw new JarvisError("That request needs Ship or Send back in the card.");
         const answer = typeof text === "string" ? text.trim() : "";
         if (!answer) throw new JarvisError("Type an answer.");
         pending.settle(answer.slice(0, PROMPT_MAX));
@@ -1417,6 +1651,29 @@ export async function decidePermission(sessionId: unknown, requestId: unknown, d
         taskId: worker.taskId,
         sessionId: worker.sessionId,
     });
+}
+
+/**
+ * The user's call on a worker's ship request: ship when no worker is busy
+ * ("idle"), ship now, or send it back with a note. A ship that can't go now
+ * (another one deploying, the source folder off master, a sensitive file not
+ * ticked) throws, and the card stays.
+ */
+export async function decideShip(sessionId: unknown, requestId: unknown, decision: unknown, note: unknown, ack: unknown): Promise<void> {
+    const worker = await requireWorker(sessionId);
+    const pending = typeof requestId === "string" ? lives.get(worker.sessionId)?.requests.get(requestId) : undefined;
+    if (!pending || pending.kind !== "ship") throw new JarvisError("That request is no longer waiting.", 409);
+    if (decision !== "idle" && decision !== "now" && decision !== "back") throw new JarvisError("Unknown decision.");
+    const text = typeof note === "string" ? note.trim().slice(0, PROMPT_MAX) : "";
+    if (decision !== "back") await shipGate({ sensitive: pending.ship?.sensitive || [], ack: ack === true });
+    pending.settle(JSON.stringify({ decision, note: text }));
+    await recordEvent(
+        "worker.answered",
+        decision === "back"
+            ? `You sent ${worker.label}'s change back${text ? `: ${clip(text, 200)}` : "."}`
+            : `You shipped ${worker.label}'s change${decision === "now" ? " now" : " for when the workers are done"}: ${pending.title}`,
+        { taskId: worker.taskId, sessionId: worker.sessionId },
+    );
 }
 
 /** The user confirms which of the proposed repositories the worker gets; an empty list gives it none. */

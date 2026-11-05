@@ -27,6 +27,7 @@ import { createTaskFromInput, previewWorkItem, refreshTaskWorkItems, rememberedP
 import {
     confirmRepos,
     decidePermission,
+    decideShip,
     listWorkerCommands,
     messageWorker,
     openWorkerIde,
@@ -38,6 +39,7 @@ import {
     runWorkerCommand,
     sendQueuedNow,
     setWorkerModel,
+    startDevisTask,
     startWorker,
     stopWorker,
     workerTranscript,
@@ -105,6 +107,7 @@ import {
     setPrCommentsAuto,
 } from "./jarvis-pr-comments.mjs";
 import { acceptPrBuilds, auditPrBuildsNow, dismissPrBuilds, prBuildsView } from "./jarvis-pr-builds.mjs";
+import { devisBanner, devisOverview, dismissShip, markUndo, saveDevisSettings, undoTask } from "./devis-self.mjs";
 
 function since(value: string | null): string {
     const t = Date.parse(value || "");
@@ -193,6 +196,7 @@ export async function handleJarvisApi(req: IncomingMessage, res: ServerResponse,
                 todos,
                 note: { version: note.version, updatedAt: note.updatedAt, updatedBy: note.updatedBy },
                 comms: { asks: comms || [], ...(comms ? {} : { failed: true }), ...(meetings ? { meetings } : {}), ...(chats ? { chats } : {}), ...(mail ? { mail } : {}), needs: needs || [], ...(needs ? {} : { needsFailed: true }) },
+                devis: devisBanner(),
             });
         }
 
@@ -469,10 +473,37 @@ export async function handleJarvisApi(req: IncomingMessage, res: ServerResponse,
             return sendJson(res, 200, { ok: true });
         }
 
+        // ---- changing Devis itself (devis-self.mts) ----
+        if (p === "/api/jarvis/devis" && get) {
+            return sendJson(res, 200, await devisOverview());
+        }
+        if (p === "/api/jarvis/devis/settings" && post) {
+            const b = await readBody(req);
+            await saveDevisSettings({ enabled: b?.enabled, source: b?.source });
+            return sendJson(res, 200, await devisOverview());
+        }
+        if (p === "/api/jarvis/devis/undo" && post) {
+            const b = await readBody(req);
+            const n = Number(b?.n);
+            const { task, worker, workerError } = await startDevisTask(undoTask(n));
+            markUndo(n, task.id);
+            return sendJson(res, 200, { task, worker, workerError, devis: await devisOverview() });
+        }
+        if (p === "/api/jarvis/devis/dismiss" && post) {
+            const b = await readBody(req);
+            dismissShip(Number(b?.n));
+            return sendJson(res, 200, await devisOverview());
+        }
+
         // ---- workers ----
         if (p === "/api/jarvis/workers/start" && post) {
             const b = await readBody(req);
             return sendJson(res, 200, { worker: await startWorker({ taskId: b?.taskId, cwd: b?.cwd, prompt: b?.prompt, model: b?.model, effort: b?.effort }) });
+        }
+        if (p === "/api/jarvis/workers/ship" && post) {
+            const b = await readBody(req);
+            await decideShip(b?.sessionId, b?.requestId, b?.decision, b?.note, b?.ack === true);
+            return sendJson(res, 200, { ok: true });
         }
         if (p === "/api/jarvis/workers/repos" && post) {
             const b = await readBody(req);

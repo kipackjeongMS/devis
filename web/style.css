@@ -3925,6 +3925,41 @@ body[data-feature="jarvis"]:not([data-page="settings"]) #btnLayout:not([hidden])
 .jv-banner-go { flex: none; color: var(--accent-text); }
 .jv-banner:hover .jv-banner-go { text-decoration: underline; text-underline-offset: 3px; }
 .jv-banner:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+/* A ship to Devis itself: deploying, just live, or rolled back. Shown in every layout. */
+.jv-devis {
+  --tone: var(--accent);
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  width: min(720px, calc(100% - 40px));
+  min-height: 36px;
+  margin: 4px auto 0;
+  padding: 0 4px 0 12px;
+  border: 1px solid color-mix(in srgb, var(--tone) 30%, transparent);
+  border-radius: var(--r-surface);
+  background: color-mix(in srgb, var(--tone) 12%, transparent);
+  color: var(--text-1);
+  font-size: var(--fs-caption);
+}
+.jv-devis[hidden] { display: none; }
+.jv-devis.tone-ok { --tone: var(--success); }
+.jv-devis.tone-bad { --tone: var(--critical); }
+.jv-devis > svg.ic { flex: none; width: 14px; height: 14px; color: var(--tone); }
+.jv-devis.tone-accent > svg.ic { animation: spin 1.4s linear infinite; }
+.jv-devis-t { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jv-devis .btn, .jv-devis .icon-btn { flex: none; }
+.jarvis-view:not(.flat) .jv-devis { width: auto; margin: 8px 104px 0 20px; }
+@media (prefers-reduced-motion: reduce) { .jv-devis.tone-accent > svg.ic { animation: none; } }
+.rr-devis {
+  flex: none;
+  padding: 0 6px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 999px;
+  color: var(--accent-text);
+  font: 600 var(--fs-micro)/16px var(--font);
+  letter-spacing: .02em;
+}
 .jarvis-view:not(.flat) .jv-tools { position: absolute; top: 8px; right: 12px; z-index: 2; }
 .jarvis-view:not(.flat) :is(.jv-railbtn, .jv-sp, .jv-banner) { display: none; }
 
@@ -4458,7 +4493,8 @@ button.rr-main { cursor: pointer; }
   .jv-center > .chat .chat-tools,
   .jv-center > .chat .chat-compose,
   .jv-overview,
-  .jv-banner { width: calc(100% - 24px); }
+  .jv-banner,
+  .jv-devis { width: calc(100% - 24px); }
   .jv-overview .ov-narrative { max-height: min(24vh, 160px); }
   .jv-drawer,
   .jv-drawer[data-kind="task"] { width: 100%; max-width: 100%; border-left: 0; }
@@ -5082,6 +5118,59 @@ a.todo-src { text-decoration: none; }
 .teams-switch { display: inline-flex; align-items: center; gap: 8px; color: var(--text-1); font-size: var(--fs-label); cursor: pointer; }
 .teams-line { margin: 0 0 0 52px; color: var(--text-3); font-size: var(--fs-caption); line-height: var(--lh-caption); }
 
+/* Settings' "Change Devis itself" card: the switch, the source folder, and the ship history. */
+.settings-card-control.dv-control { flex-direction: column; flex-wrap: nowrap; align-items: stretch; justify-content: flex-start; gap: 10px; }
+.dv-control .dv-line { margin: 0; }
+.dv-source { display: flex; gap: 8px; align-items: center; }
+.dv-source .dv-path { flex: 1 1 auto; min-width: 0; }
+.dv-problem { margin: 0; color: var(--critical); font-size: var(--fs-caption); line-height: var(--lh-caption); }
+.dv-ships { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--stroke-card); }
+.dv-ship { display: flex; align-items: flex-start; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--stroke-card); }
+.dv-empty { padding: 8px 0; color: var(--text-3); font-size: var(--fs-caption); }
+.dv-dot { flex: none; width: 8px; height: 8px; margin-top: 6px; border-radius: 50%; background: var(--text-3); }
+.dv-dot.tone-ok { background: var(--success); }
+.dv-dot.tone-bad { background: var(--critical); }
+.dv-dot.tone-accent { background: var(--accent); animation: pulse 1.6s ease-in-out infinite; }
+.dv-m { flex: 1 1 auto; min-width: 0; }
+.dv-l1 { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: var(--fs-label); }
+.dv-l1 b { flex: none; font-family: var(--mono); font-weight: 600; }
+.dv-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dv-chip {
+  flex: none;
+  padding: 0 6px;
+  border: 1px solid var(--stroke-card);
+  border-radius: 999px;
+  color: var(--text-2);
+  font: 600 var(--fs-micro)/16px var(--font);
+}
+.dv-chip.tone-ok { border-color: color-mix(in srgb, var(--success) 40%, transparent); color: var(--success); }
+.dv-chip.tone-bad { border-color: color-mix(in srgb, var(--critical) 40%, transparent); color: var(--critical); }
+.dv-chip.tone-accent { border-color: color-mix(in srgb, var(--accent) 40%, transparent); color: var(--accent-text); }
+.dv-l2 { margin-top: 2px; color: var(--text-3); font-size: var(--fs-caption); }
+.dv-note { margin: 4px 0 0; color: var(--text-2); font-size: var(--fs-caption); line-height: var(--lh-caption); }
+.dv-log, .dv-files { margin-top: 4px; font-size: var(--fs-caption); }
+.dv-log summary, .dv-files summary { width: fit-content; color: var(--accent-text); cursor: pointer; }
+.dv-log pre {
+  max-height: 220px;
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  overflow: auto;
+  border-radius: var(--r-control);
+  background: var(--well);
+  color: var(--text-2);
+  font: var(--fs-micro)/1.5 var(--mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.dv-files ul { margin: 6px 0 0; padding-left: 16px; color: var(--text-3); }
+.dv-files li.sensitive code { color: var(--caution); }
+.dv-undoing { flex: none; color: var(--text-3); font-size: var(--fs-caption); }
+.dv-ship > .btn { flex: none; }
+@media (max-width: 640px) {
+  .dv-source { flex-direction: column; align-items: stretch; }
+  .dv-l1 { flex-wrap: wrap; }
+}
+
 .ask-card {
   margin-top: 10px;
   padding: 10px 12px;
@@ -5134,6 +5223,81 @@ a.todo-src { text-decoration: none; }
 .repo-pick input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
 .repo-pick-name { overflow: hidden; color: var(--text-1); font: var(--fs-label)/20px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
 .repo-pick-where { overflow: hidden; color: var(--text-3); font-size: var(--fs-caption); text-overflow: ellipsis; white-space: nowrap; }
+
+/* A worker on a Devis task asks to ship its change to Devis itself. */
+.ask-card.ship { border-color: var(--accent-tint-2); background: var(--accent-tint); }
+.ask-card.ship .ask-card-title { align-items: center; flex-wrap: wrap; }
+.ship-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--accent-tint-2);
+  color: var(--accent-text);
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  line-height: 20px;
+  letter-spacing: .02em;
+}
+.ask-card.ship .ship-chip svg.ic { margin: 0; color: var(--accent); }
+.ship-branch { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 6px 0 0; color: var(--text-3); font-size: var(--fs-caption); }
+.ship-branch code { color: var(--text-2); font: var(--fs-caption)/18px var(--mono); overflow-wrap: anywhere; }
+.ship-summary.md { margin-top: 8px; color: var(--text-1); font-size: var(--fs-label); line-height: 20px; }
+.ship-summary.md > :first-child { margin-top: 0; }
+.ship-summary.md > :last-child { margin-bottom: 0; }
+.ship-checks, .ship-files { margin: 8px 0 0; padding: 4px; list-style: none; border-radius: var(--r-control); background: var(--well); }
+.ship-check { display: flex; align-items: flex-start; gap: 8px; padding: 3px 6px; color: var(--text-1); font-size: var(--fs-caption); line-height: var(--lh-caption); }
+.ship-check svg.ic { flex: none; margin-top: 1px; }
+.ship-check.ok svg.ic { color: var(--success); }
+.ship-check.warn svg.ic { color: var(--caution); }
+.ship-check > span:first-of-type { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.ship-muted { flex: none; color: var(--text-3); }
+.ship-files { max-height: 200px; overflow-y: auto; }
+.ship-file { display: flex; align-items: baseline; gap: 8px; padding: 2px 6px; font: var(--fs-caption)/18px var(--mono); }
+.ship-path { flex: 1 1 auto; min-width: 0; color: var(--text-2); font: inherit; overflow-wrap: anywhere; }
+.ship-add { flex: none; color: var(--success); }
+.ship-del { flex: none; color: var(--critical); }
+.ship-bin { flex: none; color: var(--text-3); }
+.ship-file.sensitive { border-radius: 4px; background: var(--critical-tint); }
+.ship-file.sensitive .ship-path { color: var(--critical); }
+.ship-ack {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 143, 160, .36);
+  border-radius: var(--r-control);
+  background: var(--critical-tint);
+  color: var(--text-1);
+  font-size: var(--fs-caption);
+  line-height: var(--lh-caption);
+  cursor: pointer;
+}
+.ship-ack input { flex: none; width: 16px; height: 16px; margin: 1px 0 0; accent-color: var(--critical); }
+/* Ship waits for the tick when sensitive files changed; the click still says why. */
+.ask-card.ship:has(.ship-ack input:not(:checked)) .ship-go { opacity: .45; }
+.ship-back { margin-top: 8px; }
+.ship-back > summary { width: max-content; color: var(--text-3); font-size: var(--fs-caption); cursor: pointer; }
+.ship-back > summary:hover { color: var(--text-1); }
+.ship-back-body { display: flex; align-items: flex-end; gap: 8px; margin-top: 6px; }
+.ship-back-body textarea {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 52px;
+  padding: 6px 10px;
+  resize: vertical;
+  border: 1px solid var(--stroke-card);
+  border-radius: var(--r-control);
+  background: var(--well);
+  color: var(--text-1);
+  font: var(--fs-label)/20px var(--font);
+}
+@media (max-width: 640px) {
+  .ask-card.ship .ask-card-actions .btn { flex: 1 1 100%; justify-content: center; }
+  .ship-back-body { flex-direction: column; align-items: stretch; }
+}
 
 .worker-msg { display: flex; align-items: flex-end; gap: 8px; margin-top: 10px; }
 .worker-msg textarea {

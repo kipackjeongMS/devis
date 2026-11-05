@@ -201,10 +201,15 @@ try {
     // ---- the Lead's tools ----
     const tools = Object.fromEntries(lead.leadTools().map((t) => [t.name, t]));
     assert.deepEqual(Object.keys(tools).sort(), [
-        "devis_create_task", "devis_history", "devis_message_worker", "devis_notes", "devis_post_status", "devis_set_task_status",
+        "devis_change_self", "devis_create_task", "devis_history", "devis_message_worker", "devis_notes", "devis_post_status", "devis_set_task_status",
         "devis_start_worker", "devis_stop_worker", "devis_task_artifacts", "devis_task_validation", "devis_today",
     ]);
     assert.ok(Object.values(tools).every((t) => t.skipPermission), "the Lead's own tools never prompt");
+    assert.match(
+        String(await tools.devis_change_self.handler({ title: "Bigger font", description: "Make the font bigger." })),
+        /Changing Devis itself is off/,
+        "changing Devis waits for Settings to turn it on",
+    );
 
     let view = JSON.parse(await tools.devis_today.handler({}));
     assert.match(view.pullRequestsToReview, /Not loaded yet/);

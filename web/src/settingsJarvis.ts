@@ -9,6 +9,7 @@ import { el } from "./dom.js";
 import { esc } from "./util.js";
 import { icon } from "./icons.js";
 import { teamsCard } from "./settingsTeams.js";
+import { devisCard } from "./settingsDevis.js";
 import type { CodebaseRepo, Config } from "./types.js";
 
 type CardFactory = (name: Parameters<typeof icon>[0], title: string, descHtml: string, titleId: string, stacked?: boolean) => HTMLElement;
@@ -291,6 +292,7 @@ export function jarvisSettings(config: Config, orgs: () => string[], card: CardF
   paintList();
   void loadStatus();
   section.appendChild(teamsCard(card));
+  section.appendChild(devisCard(card));
 
   return {
     section,

@@ -39,6 +39,8 @@ export interface JarvisTask {
     project: string | null;
     workItem: TaskWorkItem | null;
     status: TaskStatus;
+    /** "devis": a change to Devis itself, made in a worktree of its source and shipped through Settings' self-change pipeline. */
+    kind?: "devis";
     createdAt: string;
     updatedAt: string;
     doneAt: string | null;
@@ -231,6 +233,7 @@ export function jarvisDb(): Promise<DatabaseSync> {
             if (!taskCols.some((c) => c.name === "removing_at")) db.exec("ALTER TABLE jarvis_tasks ADD COLUMN removing_at TEXT");
             if (!taskCols.some((c) => c.name === "description")) db.exec("ALTER TABLE jarvis_tasks ADD COLUMN description TEXT NOT NULL DEFAULT ''");
             if (!taskCols.some((c) => c.name === "folder")) db.exec("ALTER TABLE jarvis_tasks ADD COLUMN folder TEXT");
+            if (!taskCols.some((c) => c.name === "kind")) db.exec("ALTER TABLE jarvis_tasks ADD COLUMN kind TEXT");
             const workerCols = db.prepare("PRAGMA table_info(jarvis_workers)").all() as Array<{ name: string }>;
             if (!workerCols.some((c) => c.name === "effort")) db.exec("ALTER TABLE jarvis_workers ADD COLUMN effort TEXT");
             if (!workerCols.some((c) => c.name === "state_at")) {
@@ -309,6 +312,7 @@ interface TaskRow {
     removing_at?: string | null;
     description?: string | null;
     folder?: string | null;
+    kind?: string | null;
 }
 
 function toTask(r: TaskRow): JarvisTask {
@@ -317,6 +321,7 @@ function toTask(r: TaskRow): JarvisTask {
         title: r.title,
         description: r.description || "",
         folder: r.folder || null,
+        ...(r.kind === "devis" ? { kind: "devis" as const } : {}),
         org: r.org,
         project: r.project,
         workItem:
@@ -464,6 +469,7 @@ export interface NewTask {
     workItem?: (TaskWorkItem & { title: string; project: string }) | null;
     /** Where the task's own folder goes; the folder is named after its title. Without it the task gets no folder. */
     folderRoot?: string | null;
+    kind?: "devis";
 }
 
 function cleanText(value: unknown, max: number): string {
@@ -587,8 +593,8 @@ export async function createTask(input: NewTask): Promise<{ task: JarvisTask; cr
     try {
         db.prepare(
             `INSERT INTO jarvis_tasks (id, title, org, project, wi_id, wi_type, wi_state, wi_url,
-                parent_id, parent_type, parent_title, status, created_at, updated_at, description, folder)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)`,
+                parent_id, parent_type, parent_title, status, created_at, updated_at, description, folder, kind)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)`,
         ).run(
             id,
             title,
@@ -605,6 +611,7 @@ export async function createTask(input: NewTask): Promise<{ task: JarvisTask; cr
             at,
             description,
             folder,
+            input.kind === "devis" ? "devis" : null,
         );
     } catch (error) {
         if (folder) rmSync(folder, { recursive: true, force: true });

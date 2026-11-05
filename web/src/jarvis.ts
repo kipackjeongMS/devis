@@ -37,7 +37,7 @@ import { openDetail } from "./detail.js";
 import { openActionDialog } from "./prActions.js";
 import { sendPrsToCopilot } from "./bridge.js";
 import { requestNotifyPermission } from "./notifyWatch.js";
-import { closeTaskModal, openTaskModal, pruneTaskModalState, reposFromCard, requestCardHtml, updateTaskModal, warnUnsaved, type LeftTab, type TaskModalHost } from "./jarvisTask.js";
+import { closeTaskModal, openTaskModal, pruneTaskModalState, reposFromCard, requestCardHtml, shipFromCard, updateTaskModal, warnUnsaved, type LeftTab, type TaskModalHost } from "./jarvisTask.js";
 import { initViewZoom, zoomable } from "./viewZoom.js";
 import { PANEL_NAME, SECTIONS as PANEL_SECTIONS, isPanelId, isSection as isPanelSection, type PanelId, type Section as PanelSection } from "./workspaceLayout.js";
 import { afterFold, hideGrid, initGrid, isFlat, keyMove } from "./workspaceGrid.js";
@@ -93,6 +93,8 @@ import {
   taskFolderPreview,
   taskMeta,
   todayFingerprint,
+  devisBannerText,
+  type DevisBanner,
   todayHasTasks,
   todaySummary,
   validationChip,
@@ -262,6 +264,7 @@ let railButton: HTMLButtonElement;
 let railBadge: HTMLElement;
 /** The needs line over Devis on a narrow window. */
 let needsBanner: HTMLElement;
+let devisBannerEl: HTMLElement;
 /** "Today so far", pinned over Devis's thread so it stays in view while the chat scrolls. */
 let overviewEl: HTMLElement;
 /** Devis's line under the hello: what it watches. */
@@ -492,6 +495,7 @@ function mount(): void {
         ${iconBtn("lead-terminal", "terminal", "Open the Lead in a terminal")}
       </div>
       <button type="button" class="jv-banner" data-act="rail-open" hidden></button>
+      <div class="jv-devis" role="status" hidden></div>
       ${chatPaneHtml({
         id: "lead",
         inputLabel: "Message Devis",
@@ -547,6 +551,7 @@ function mount(): void {
   railButton = q(".jv-railbtn");
   railBadge = q(".jv-badge");
   needsBanner = q(".jv-banner");
+  devisBannerEl = q(".jv-devis");
   const body = (sec: RailSection): HTMLElement => q(`#rs-b-${sec}`);
   const count = (sec: RailSection): HTMLElement => q(`[data-rs="${sec}"] .rs-n`);
   needsBody = body("needs");
@@ -1054,7 +1059,7 @@ async function loadToday(): Promise<void> {
   updateTaskModal();
   openPendingTask();
   const live = !!data?.tasks.some((t) => t.workers.some((w) => w.busy || w.requests.length));
-  const updating = data?.overview?.phase === "updating";
+  const updating = data?.overview?.phase === "updating" || data?.devis?.state === "deploying";
   if (visible) todayTimer = window.setTimeout(() => void loadToday(), live ? FAST_MS : updating ? MID_MS : SLOW_MS);
 }
 
@@ -1625,6 +1630,7 @@ function renderDay(force: boolean): void {
     noteError,
     noteMerged,
     noteConflict?.version,
+    data?.devis ? [data.devis.n, data.devis.state, data.devis.title, data.devis.note] : null,
     Math.floor(now / 60_000),
   ]);
   if (!force && sig === daySig) return;
@@ -1645,6 +1651,7 @@ function renderDay(force: boolean): void {
     needsBanner.dataset.text = banner;
     needsBanner.innerHTML = banner ? `${svg("warning")}<span>${esc(banner)}</span><span class="jv-banner-go">Show</span>` : "";
   }
+  paintDevisBanner(data?.devis || null);
 
   if (!data) {
     needsBody.innerHTML = loadingHtml("Today");
@@ -1657,6 +1664,28 @@ function renderDay(force: boolean): void {
   patchPane(overviewEl, renderOverview(data.tasks, now));
   patchPane(todosBody, renderTodos(todos, now));
   patchPane(noteBody, renderNote(now));
+}
+
+/** A ship to Devis itself: deploying, just live, or rolled back. Shown over the chat in every layout. */
+function paintDevisBanner(b: DevisBanner | null): void {
+  const text = b ? devisBannerText(b) : "";
+  const key = b ? `${b.n}|${b.state}|${text}` : "";
+  devisBannerEl.hidden = !b;
+  if (devisBannerEl.dataset.key === key) return;
+  devisBannerEl.dataset.key = key;
+  if (!b) {
+    devisBannerEl.innerHTML = "";
+    return;
+  }
+  const tone = b.state === "deploying" ? "accent" : b.state === "live" ? "ok" : "bad";
+  devisBannerEl.className = `jv-devis tone-${tone}`;
+  const icon = b.state === "deploying" ? "sync" : b.state === "live" ? "check" : "warning";
+  const details = `<button type="button" class="btn sm ghost" data-act="devis-settings">${b.state === "live" ? "History" : "Details"}</button>`;
+  const dismiss =
+    b.state === "deploying"
+      ? ""
+      : `<button type="button" class="icon-btn" data-act="devis-dismiss" data-n="${b.n}" title="Dismiss" aria-label="Dismiss">${svg("dismiss")}</button>`;
+  devisBannerEl.innerHTML = `${svg(icon)}<span class="jv-devis-t" title="${esc(text)}">${esc(text)}</span>${details}${dismiss}`;
 }
 
 // ---- Today: to-dos ------------------------------------------------------------------
@@ -2199,7 +2228,7 @@ function focusKey(node: HTMLElement): string | null {
   const owners = ["data-task", "data-pr", "data-session", "data-request", "data-todo", "data-meet"].map(
     (attr) => node.closest<HTMLElement>(`[${attr}]`)?.getAttribute(attr) || ""
   );
-  const own = ["data-draft", "data-act", "data-decide", "data-choice", "data-repos", "data-jump", "data-role", "data-day", "data-index"].map((attr) => node.getAttribute(attr) || "");
+  const own = ["data-draft", "data-act", "data-decide", "data-choice", "data-repos", "data-ship", "data-ship-ack", "data-jump", "data-role", "data-day", "data-index"].map((attr) => node.getAttribute(attr) ?? "");
   return [...owners, ...own, node.tagName].join("|");
 }
 
@@ -2257,7 +2286,7 @@ function taskCard(task: TodayTask, now: number, section: BoardSection): string {
   return `
     <div class="rr${asks.length ? " needs" : ""}${done ? " is-done" : ""}" data-key="task:${esc(task.id)}" data-task="${esc(task.id)}">
       <button type="button" class="rr-main" data-act="open-task" title="${esc(tip)}">
-        <span class="rdot tone-${tone}"></span><span class="rr-t ell">${esc(task.title)}</span><span class="rr-tm">${esc(ago(at, now))}</span>
+        <span class="rdot tone-${tone}"></span>${task.kind === "devis" ? `<span class="rr-devis" title="A change to Devis itself">Devis</span>` : ""}<span class="rr-t ell">${esc(task.title)}</span><span class="rr-tm">${esc(ago(at, now))}</span>
       </button>
       <span class="rr-ha">
         ${done ? "" : `<button type="button" class="icon-btn" data-act="done" title="Mark done" aria-label="Mark done: ${esc(task.title)}">${svg("check")}</button>`}
@@ -2384,6 +2413,20 @@ function onClick(e: MouseEvent): void {
     void act(reposButton, () => postJSON("/api/jarvis/workers/repos", { sessionId: w.sessionId, requestId, repos }));
     return;
   }
+  const shipButton = target.closest<HTMLElement>("[data-ship]");
+  if (shipButton) {
+    const w = workerFor(shipButton);
+    if (!w) return;
+    if (shipButton.dataset.ship === "view") return void window.open(`/code.html?worker=${encodeURIComponent(w.sessionId)}`, `code-${w.sessionId}`);
+    const requestId = shipButton.closest<HTMLElement>("[data-request]")?.dataset.request;
+    const pick = shipFromCard(shipButton);
+    if (!requestId || !pick) return;
+    void act(shipButton, async () => {
+      await postJSON("/api/jarvis/workers/ship", { sessionId: w.sessionId, requestId, ...pick });
+      if (pick.decision !== "back") toast("Shipping. Devis restarts on the new build when it's deployed.", "ok");
+    });
+    return;
+  }
   const node = target.closest<HTMLElement>("[data-act]");
   if (!node) return;
   const task = taskFor(node);
@@ -2487,12 +2530,15 @@ function onClick(e: MouseEvent): void {
       return void meetingTodo(node);
     case "meetings-scan":
       return void scanMeetingsNow(node);
+    case "devis-settings":
     case "meetings-settings":
     case "comms-settings":
       closeDrawer(false);
       return hooks.openSettings();
     case "comms-scan":
       return void scanChatsNow(node);
+    case "devis-dismiss":
+      return void act(node, () => postJSON("/api/jarvis/devis/dismiss", { n: Number(node.dataset.n) }));
     case "chat-day":
       toggleChatDay(node.dataset.day || "", node.dataset.today === "1");
       return renderComms(true);

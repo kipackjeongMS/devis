@@ -30,7 +30,7 @@ import {
 import { postStatus } from "./jarvis-status.mjs";
 import { overviewState } from "./jarvis-overview.mjs";
 import { createTaskFromInput, reviewQueue, reviewQueueAge, startOfToday, todaySnapshot, type TodayTask } from "./jarvis-today.mjs";
-import { messageWorker, runArtifactAction, spawnResumeTerminal, startWorker, stopWorker } from "./jarvis-workers.mjs";
+import { messageWorker, runArtifactAction, spawnResumeTerminal, startDevisTask, startWorker, stopWorker } from "./jarvis-workers.mjs";
 import { leadValidationTool } from "./jarvis-validation-agent.mjs";
 import { APP_NAME, FORMER_LEAD_NAME, LEAD_NAME } from "./brand.mjs";
 
@@ -298,6 +298,22 @@ export function leadTools(): Tool<any>[] {
             ["action"],
             async (args) => runNotesAction(LEAD_NAME, args, LEAD_NOTE_ACTIONS),
         ),
+        tool<{ title: string; description: string }>(
+            "devis_change_self",
+            `Start a change to ${APP_NAME} itself: a new task whose worker gets a worktree of ${APP_NAME}' source, makes the change on its own branch, and asks the user to review it before anything ships. Shipping merges it, deploys it and checks it came up. Only when the user clearly asks to change ${APP_NAME} (this app, you, the Workspace) itself.`,
+            {
+                title: { ...str, description: "Short title for the change." },
+                description: { ...str, description: "What to change and why, with everything the user said about it." },
+            },
+            ["title", "description"],
+            async ({ title, description }) => {
+                const { task, worker, workerError } = await startDevisTask({ title, description });
+                const lines = [`Created: ${describeTask(task)} (taskId ${task.id})`];
+                if (worker) lines.push(`${worker.label} started on it (workerSessionId ${worker.sessionId}). It confirms the goal with the user before it changes anything.`);
+                if (workerError) lines.push(`Its worker didn't start: ${workerError}`);
+                return lines.join("\n");
+            },
+        ),
         leadValidationTool(),
     ];
 }
@@ -314,6 +330,7 @@ const LEAD_BRIEF = [
     "You may create tasks, mark them done, post status updates, add to a task's note.md, and start, message or stop workers, but only when the user asks. Permission requests from workers are the user's to approve under Needs you in the Workspace; point them there.",
     "The user also keeps their own to-do list and quick note, kept across days. Read them with devis_notes when the user asks about their notes or to-dos, or what to work on; add, check off or append only when they ask.",
     "A task can have a validation chain: Azure DevOps pipelines run in order to prove its change. devis_today shows each task's validation; devis_task_validation reads it, finds candidates and proposes a chain when the user asks. The user accepts and runs it from the task.",
+    `When the user clearly asks to change ${APP_NAME} itself (a feature, a fix or a tweak to this app, the Workspace or you), start it with devis_change_self, passing on everything they said. Follow up through devis_message_worker. The worker asks the user to review the change before it ships, and only the user ships it. Never change ${APP_NAME}' source or deploy it yourself.`,
     "You also have the user's MCP servers (Agency's ADO, Bluebird, WorkIQ, mail, calendar, Teams, Kusto, IcM and the rest) for anything outside the Workspace. Anything that changes something outside the app, like sending mail or updating a work item, only when the user asks.",
     WEB_BRIEF,
     "Answer briefly, in plain Markdown that reads well in a terminal: short lines, simple lists, ids in backticks.",
