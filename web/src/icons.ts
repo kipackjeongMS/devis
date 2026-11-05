@@ -41,6 +41,8 @@ const PATHS = {
   minus: '<path d="M3 8h10"/>',
   up: '<path d="M3.5 10 8 5.5l4.5 4.5"/>',
   down: '<path d="M3.5 6 8 10.5 12.5 6"/>',
+  left: '<path d="M10 3.5 5.5 8l4.5 4.5"/>',
+  right: '<path d="M6 3.5 10.5 8 6 12.5"/>',
   edit: '<path d="M10.25 2.75l3 3-7.5 7.5H2.75v-3z"/><path d="M8.75 4.25l3 3"/>',
   panel: '<rect x="2.25" y="2.75" width="11.5" height="10.5" rx="1.5"/><path d="M6 2.75v10.5"/>',
   calendar: '<rect x="2.25" y="3.25" width="11.5" height="10.5" rx="1.5"/><path d="M2.25 6.5h11.5M5.5 1.75v3M10.5 1.75v3"/>',

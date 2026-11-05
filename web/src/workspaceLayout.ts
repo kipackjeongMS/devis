@@ -1,7 +1,8 @@
 // The Workspace's layout: which panels sit in which column, in what order, and how much room
 // each gets. Pure data, no DOM: workspaceGrid.ts puts it on screen and jarvis.ts owns the panels.
 //   Columns  — one to four, side by side. `w` is a column's share of the width once the user has
-//              dragged a border between columns; null leaves the widths to CSS.
+//              dragged a border between columns; null leaves the widths to CSS. A column moves
+//              as a whole, its panels and width going with it.
 //   Panels   — Devis (always there, exactly once) and the seven sections. In a column, open panels
 //              share the height by `g` (a flex-grow, 1 when unset).
 //   Flat     — a window too narrow for the columns shows Devis alone and the sections in one
@@ -65,6 +66,8 @@ export const MIN = {
   /** The gap between columns or panels, and the padding around the columns. */
   sash: 8,
   pad: 8,
+  /** The strip on top of each column that holds its grip (it takes the top padding's place). */
+  bar: 16,
 };
 
 const G_MIN = 0.05;
@@ -215,6 +218,18 @@ export function movePanel(l: Layout, id: PanelId, col: number, row: number): Lay
   const target = next.columns[Math.max(0, col)]!.panels;
   const moved: PanelSlot = col === at.col ? slot! : { id: slot!.id };
   target.splice(Math.max(0, Math.min(target.length, row)), 0, moved);
+  return next;
+}
+
+/**
+ * Move column `from` so it ends up `to`th from the left (counted without it), taking its panels
+ * and width along. Nothing else changes size, so it always fits.
+ */
+export function moveColumn(l: Layout, from: number, to: number): Layout {
+  const next = cloneLayout(l);
+  if (from < 0 || from >= next.columns.length) return next;
+  const [column] = next.columns.splice(from, 1);
+  next.columns.splice(Math.max(0, Math.min(next.columns.length, to)), 0, column!);
   return next;
 }
 

@@ -3665,7 +3665,7 @@ body[data-feature="jarvis"]:not([data-page="settings"]) #btnLayout:not([hidden])
   display: flex;
   flex: 1 1 auto;
   min-height: 0;
-  padding: 8px;
+  padding: 0 8px 8px;
   overflow: clip;
 }
 .jv-col {
@@ -3791,6 +3791,51 @@ body[data-feature="jarvis"]:not([data-page="settings"]) #btnLayout:not([hidden])
 }
 .jv-drop.no::after { background: var(--caution); box-shadow: 0 0 14px color-mix(in srgb, var(--caution) 70%, transparent); }
 .jv-drop.no::before { border-color: var(--caution); }
+/* The same line, upright, between columns. */
+.jv-drop.v { width: 0; }
+.jv-drop.v::after { top: 4px; right: auto; bottom: 4px; left: -1.5px; width: 3px; height: auto; }
+.jv-drop.v::before { top: 0; left: -4px; }
+
+/* The strip on top of a column, with the grip that moves the whole column. */
+.jv-colbar { display: grid; flex: none; place-items: center; height: 16px; }
+.jv-colgrip {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-3);
+  cursor: grab;
+  touch-action: none;
+}
+.jv-colgrip svg.ic { width: 14px; height: 14px; transform: rotate(90deg); }
+.jv-colgrip:hover { background: rgba(255, 255, 255, .07); color: var(--text-1); }
+.jv-colgrip:focus-visible { outline: 2px solid var(--focus); outline-offset: 0; }
+@media (hover: hover) and (pointer: fine) {
+  .jv-colgrip { opacity: 0; transition: opacity var(--t-fast) linear; }
+  .jv-col:hover .jv-colgrip { opacity: .5; }
+  .jv-colbar:hover .jv-colgrip,
+  .jv-colbar:focus-within .jv-colgrip,
+  .jarvis-view.editing .jv-colgrip { opacity: 1; }
+}
+.jarvis-view.flat .jv-colbar { display: none; }
+
+/* Moving a column: it stays in place, hatched, like a lifted panel. */
+.jv-col.col-lifted::after {
+  content: "";
+  position: absolute;
+  inset: 16px 0 0;
+  z-index: 5;
+  border: 1px dashed rgba(76, 214, 255, .4);
+  border-radius: 10px;
+  background: repeating-linear-gradient(135deg, rgba(76, 214, 255, .05) 0 8px, transparent 8px 16px);
+  pointer-events: none;
+}
+.jv-col.col-lifted > :not(.jv-colbar) { opacity: .35; }
+.jv-col.col-lifted .jv-colgrip { opacity: 1; color: var(--accent-text); cursor: grabbing; }
 
 /* The gaps: drag to resize, double-click (or Enter) to share alike, arrows to nudge. */
 .jv-vsash,

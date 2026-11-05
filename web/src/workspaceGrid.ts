@@ -1,9 +1,10 @@
 // Puts the Workspace's panels on screen as the layout says (workspaceLayout.ts), and lets the
 // user rearrange them.
 //   Columns     — side by side; the panels in a column share its height and scroll on their own.
-//                 Drag a panel by its grip to another place or column. Drag the gap between two
-//                 panels or two columns to resize them; double-click it to even them out again.
-//                 Alt+arrows on a panel's header move it, and its grip's menu has the same moves.
+//                 Drag a panel by its grip to another place or column, or a whole column by the
+//                 grip on top of it. Drag the gap between two panels or two columns to resize
+//                 them; double-click it to even them out again. Alt+arrows on a panel's header
+//                 (or a column's grip) move it, and the grip's menu has the same moves.
 //   Edit layout — the titlebar button. The grips stay in view, a strip on the right takes a
 //                 panel to a new column (four at most), and Done (or Esc) drops columns left empty.
 //   Flat        — a window too narrow for the columns: Devis alone, and the sections in one list
@@ -28,10 +29,12 @@ import {
   isPanelId,
   isSection,
   minWidth,
+  moveColumn,
   movePanel,
   pruneEmpty,
   readLayout,
   saveLayout,
+  type Column,
   type Layout,
   type PanelId,
   type Section,
@@ -69,6 +72,8 @@ let cols: HTMLElement;
 let editbar: HTMLElement;
 let addcol: HTMLButtonElement;
 const colPool: HTMLElement[] = [];
+/** Each column's grip strip. It belongs to the column's element, so it goes where the column goes. */
+const bars = new WeakMap<HTMLElement, HTMLElement>();
 const slotPool: HTMLElement[] = [];
 const vsashPool: HTMLElement[] = [];
 const hsashPool: HTMLElement[] = [];
@@ -88,7 +93,7 @@ export function initGrid(h: GridHost): void {
   layout = readLayout();
   editbar = el(`<div class="jv-editbar" role="toolbar" aria-label="Edit layout" hidden>
       ${icon("layout")}<b>Editing layout</b>
-      <span class="muted">${icon("grip")}Drag panels by the grip</span>
+      <span class="muted">${icon("grip")}Drag panels or columns by their grips</span>
       <span class="muted">· Drag the gaps to resize</span>
       <span class="muted">· Alt + arrows</span>
       <span class="jv-editbar-sp"></span>
@@ -107,6 +112,7 @@ export function initGrid(h: GridHost): void {
   cols.addEventListener("pointerdown", onSashDown);
   cols.addEventListener("dblclick", onSashReset);
   cols.addEventListener("keydown", onSashKey);
+  cols.addEventListener("keydown", onColKey);
   host.editButton?.addEventListener("click", () => setEditing(!editing));
   host.sheetQuery.addEventListener("change", () => refresh());
   new ResizeObserver(() => refresh()).observe(host.root);
@@ -199,6 +205,30 @@ function hsash(n: number, col: number, row: number): HTMLElement {
   return sash;
 }
 
+/** What a column is called: by Devis when it's there, else by its first panel. */
+function columnName(c: Column, i: number): string {
+  if (c.panels.some((p) => p.id === "devis")) return "Devis's column";
+  const [first, ...rest] = c.panels;
+  if (!first) return `column ${i + 1}`;
+  return `the column with ${PANEL_NAME[first.id]}${rest.length ? ` and ${rest.length} more` : ""}`;
+}
+
+/** The strip on top of column `col`, with the grip that moves the whole column. */
+function colbar(col: HTMLElement, i: number, c: Column): HTMLElement {
+  let bar = bars.get(col);
+  if (!bar) {
+    bar = el(
+      `<div class="jv-colbar"><button type="button" class="jv-colgrip" data-act="col-move" aria-haspopup="menu" title="Drag to move this column · Alt+arrows">${icon("grip")}</button></div>`
+    );
+    bars.set(col, bar);
+  }
+  const grip = bar.firstElementChild as HTMLButtonElement;
+  grip.dataset.col = String(i);
+  grip.hidden = layout.columns.length < 2;
+  grip.setAttribute("aria-label", `Move ${columnName(c, i)}`);
+  return bar;
+}
+
 /**
  * Lay the panels out as `layout` says, or flat when the window is too narrow for it.
  * Columns, gaps and slots come from pools; the panels move into place.
@@ -237,7 +267,7 @@ export function place(): void {
     const devis = c.panels.some((p) => p.id === "devis");
     col.classList.toggle("has-devis", devis);
     col.classList.toggle("sized", c.panels.some((p) => p.g !== undefined));
-    const kids: HTMLElement[] = [];
+    const kids: HTMLElement[] = flat ? [] : [colbar(col, i, c)];
     c.panels.forEach((p, j) => {
       if (j) kids.push(hsash(n++, i, j));
       const pe = panelEl(p.id);
@@ -324,8 +354,8 @@ function refuse(id: PanelId): void {
   announce(text);
 }
 
-/** The space the columns get for their panels, inside their padding. */
-const columnsHeight = (): number => cols.clientHeight - 2 * MIN.pad;
+/** The space the columns get for their panels, under the grip strips and over the bottom padding. */
+const columnsHeight = (): number => cols.clientHeight - MIN.pad - MIN.bar;
 
 /**
  * Whether `next` fits the window: every column at its narrowest side by side, and, when a
@@ -370,6 +400,57 @@ function moveFlat(id: Section, to: number): void {
   rest.splice(at, 0, id);
   commit({ ...cloneLayout(layout), flat: rest }, id);
   panelEl(id).scrollIntoView({ block: "nearest" });
+}
+
+const capital = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);
+
+/**
+ * Move column `from` so it's `to`th from the left, its panels and width with it. Its element
+ * goes too (the pools shuffle the same way), so nothing in it is re-placed and its grip keeps focus.
+ */
+function shiftColumn(from: number, to: number): boolean {
+  const count = layout.columns.length;
+  const at = clamp(to, 0, count - 1);
+  if (from === at || from < 0 || from >= count) return false;
+  const name = columnName(layout.columns[from]!, from);
+  const next = moveColumn(layout, from, at);
+  const foot = footerColumn(next);
+  if (foot !== footerColumn(layout) && columnMinHeight(next.columns[foot]!, host.folded) + host.footer.offsetHeight > columnsHeight()) {
+    const text = "No room for the status line under that column.";
+    toast(text, "err");
+    announce(text);
+    return false;
+  }
+  const [col] = colPool.splice(from, 1);
+  colPool.splice(at, 0, col!);
+  commit(next);
+  announce(`${capital(name)} moved to position ${at + 1} of ${count}.`);
+  return true;
+}
+
+/** Alt+Left and Alt+Right on a column's grip. */
+function onColKey(e: KeyboardEvent): void {
+  if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || (e.key !== "ArrowLeft" && e.key !== "ArrowRight")) return;
+  const grip = (e.target as HTMLElement).closest<HTMLElement>(".jv-colgrip");
+  if (!grip || flat) return;
+  e.preventDefault();
+  const i = Number(grip.dataset.col);
+  shiftColumn(i, i + (e.key === "ArrowLeft" ? -1 : 1));
+}
+
+/** A column grip's menu: the moves a drag makes. */
+function columnMenu(i: number, x: number, y: number, anchor: HTMLElement): void {
+  const count = layout.columns.length;
+  const c = layout.columns[i];
+  if (!c || flat) return;
+  const entries: ContextMenuEntry[] = [];
+  if (i > 0) entries.push({ label: "Move left", icon: "left", run: () => void shiftColumn(i, i - 1) });
+  if (i < count - 1) entries.push({ label: "Move right", icon: "right", run: () => void shiftColumn(i, i + 1) });
+  if (i > 1) entries.push({ label: "Move to the far left", run: () => void shiftColumn(i, 0) });
+  if (i < count - 2) entries.push({ label: "Move to the far right", run: () => void shiftColumn(i, count - 1) });
+  if (!editing) entries.push({ label: "Edit layout", icon: "layout", run: () => setEditing(true) });
+  if (!isDefault(layout)) entries.push({ label: "Reset layout", icon: "reset", run: resetLayout });
+  openContextMenu(x, y, `Move ${columnName(c, i)}`, entries, () => anchor.isConnected && anchor.focus({ preventScroll: true }));
 }
 
 /**
@@ -519,12 +600,24 @@ function onClick(e: MouseEvent): void {
       const r = node.getBoundingClientRect();
       return panelMenu(id, r.left, r.bottom + 4, node);
     }
+    case "col-move": {
+      if (flat || performance.now() - dragEndedAt < 400) return;
+      const r = node.getBoundingClientRect();
+      return columnMenu(Number(node.dataset.col), r.left, r.bottom + 4, node);
+    }
   }
 }
 
 /** A right-click on a section's header (or a grip) opens the grip's menu. */
 function onContextMenu(e: MouseEvent): void {
   const t = e.target as HTMLElement;
+  const bar = t.closest<HTMLElement>(".jv-colbar");
+  if (bar) {
+    const grip = bar.querySelector<HTMLElement>(".jv-colgrip");
+    if (flat || !grip || grip.hidden) return;
+    e.preventDefault();
+    return columnMenu(Number(grip.dataset.col), e.clientX, e.clientY, grip);
+  }
   const head = t.closest<HTMLElement>(".rs-h, .pn-grip");
   const box = head?.closest<HTMLElement>("[data-panel]");
   const id = box?.dataset.panel;
@@ -534,6 +627,11 @@ function onContextMenu(e: MouseEvent): void {
 }
 
 function onPointerDown(e: PointerEvent): void {
+  const colGrip = (e.target as HTMLElement).closest<HTMLElement>(".jv-colgrip");
+  if (colGrip) {
+    if (!flat && e.button === 0) dragColumn(e, colGrip, Number(colGrip.dataset.col));
+    return;
+  }
   const grip = (e.target as HTMLElement).closest<HTMLElement>(".pn-grip");
   const box = grip?.closest<HTMLElement>("[data-panel]");
   const id = box?.dataset.panel;
@@ -677,6 +775,58 @@ function dragColumns(e: PointerEvent, grip: HTMLElement, box: HTMLElement, id: P
       saveLayout(layout);
       place();
       announceMove(id);
+    },
+  });
+}
+
+/** What the ghost says while a column is dragged: Devis, or its first panels. */
+function columnLabel(c: Column): string {
+  if (c.panels.some((p) => p.id === "devis")) return "Devis's column";
+  if (!c.panels.length) return "Empty column";
+  const names = c.panels.slice(0, 2).map((p) => PANEL_NAME[p.id]);
+  return names.join(", ") + (c.panels.length > 2 ? ` +${c.panels.length - 2}` : "");
+}
+
+/** Drag a whole column sideways. A line between the other columns shows where it lands. */
+function dragColumn(e: PointerEvent, grip: HTMLElement, from: number): void {
+  const colEl = colPool[from];
+  const c = layout.columns[from];
+  if (!colEl || !c || layout.columns.length < 2) return;
+  let ghost: HTMLElement | null = null;
+  let line: HTMLElement | null = null;
+  let to = from;
+  track(e, grip, {
+    start: () => {
+      colEl.classList.add("col-lifted");
+      host.root.classList.add("pn-sorting");
+      ghost = el(`<div class="pn-ghost" aria-hidden="true">${icon("col")}<span></span></div>`);
+      ghost.querySelector("span")!.textContent = columnLabel(c);
+      document.body.append(ghost);
+      line = el('<div class="jv-drop v" aria-hidden="true" hidden></div>');
+      cols.append(line);
+    },
+    move: (x, y) => {
+      ghost!.style.transform = `translate(${x + 12}px, ${y - 14}px) rotate(-1.2deg)`;
+      const others = colPool
+        .slice(0, layout.columns.length)
+        .filter((_, i) => i !== from)
+        .map((node) => node.getBoundingClientRect());
+      const i = others.findIndex((r) => x < r.left + r.width / 2);
+      to = i < 0 ? others.length : i;
+      const box = cols.getBoundingClientRect();
+      const self = colEl.getBoundingClientRect();
+      const gap = to < others.length ? others[to]!.left - MIN.sash / 2 : others[others.length - 1]!.right + MIN.sash / 2;
+      line!.style.left = `${gap - box.left}px`;
+      line!.style.top = `${self.top - box.top}px`;
+      line!.style.height = `${self.height}px`;
+      line!.hidden = to === from;
+    },
+    end: (commit) => {
+      ghost?.remove();
+      line?.remove();
+      colEl.classList.remove("col-lifted");
+      host.root.classList.remove("pn-sorting");
+      if (commit && to !== from) shiftColumn(from, to);
     },
   });
 }
