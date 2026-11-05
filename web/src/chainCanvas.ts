@@ -102,7 +102,7 @@ export class ChainCanvas {
            <button type="button" class="chain-edge-remove" aria-label="Remove arrow" title="Remove arrow (Delete)" hidden>${icon("dismiss")}</button>
            <button type="button" class="chain-block-action" hidden></button>
          </div>
-         <p id="chainCanvasHelp" class="visually-hidden">Drag the background or scroll to pan. Hold Ctrl and scroll, or press Ctrl plus or minus, to zoom.
+         <p id="chainCanvasHelp" class="visually-hidden">Drag the background or scroll to pan. Hold Ctrl and scroll to zoom.
            Tab to a block and press Enter to select it, arrow keys to move it, and Delete to remove it.</p>
        </div>`
     );

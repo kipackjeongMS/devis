@@ -24,6 +24,7 @@ import { openDetail } from "./detail.js";
 import { initInbox } from "./inboxPanel.js";
 import { startInboxWatch, refreshInbox } from "./inboxWatch.js";
 import { initReadingPane, closePane } from "./readingPane.js";
+import { initUiZoom } from "./uiZoom.js";
 import { showPipelines, hidePipelines, reloadPipelines, showChainById } from "./pipelines.js";
 import { showJarvis, hideJarvis, reloadJarvis, resumeNoteDraft, openTaskById } from "./jarvis.js";
 import { preferWorker } from "./jarvisTask.js";
@@ -88,6 +89,7 @@ async function resolveCanvasTarget(target: CanvasPrTarget): Promise<PR> {
 async function boot(): Promise<void> {
   applyShellClasses(new URLSearchParams(window.location.search));
   initReadingPane();
+  initUiZoom();
   await bindIdentity();
   let target: CanvasPrTarget | null;
   try {

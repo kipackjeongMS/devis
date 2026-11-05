@@ -399,13 +399,9 @@ body[data-page="settings"] #btnSettings { background: var(--fill-selected); colo
   min-height: 0;
   overflow: hidden;
 }
-/* Ctrl +/−/0 (readingPane.ts): the pane's frame stays put; its content zooms. */
-.reading-pane > * { zoom: var(--pane-zoom, 1); }
-/* Workspace views (the panes, the task sheet, History) zoom their own content with
-   Ctrl +/−/0; viewZoom.ts sets --view-zoom per view type. --view-base is a view's
-   default size: the task sheet reads larger, since it's where a task is read. */
-[data-zoom-view] > * { zoom: calc(var(--view-base, 1) * var(--view-zoom, 1)); }
-.tm { --view-base: 1.125; }
+/* The task sheet reads a step larger than the rest, since it's where a task is read.
+   Ctrl +/−/0 size the whole interface (main.mts), this included. */
+.tm:not(.is-embedded) > * { zoom: 1.125; }
 
 .pane-scroll {
   height: 100%;
@@ -6254,7 +6250,6 @@ button.tm-pr-title:hover { color: var(--accent-text); text-decoration: underline
 .tm-switch-n.is-asking { color: var(--caution); }
 .tm-mount { display: flex; flex: 1 1 auto; min-height: 0; container: tmmount / inline-size; }
 .tm.is-embedded {
-  --view-base: 1;
   flex: 1 1 auto;
   width: auto;
   min-width: 0;

@@ -52,7 +52,6 @@ import {
   type RunParameter,
 } from "./pipelineModel.js";
 import { openActionDialog } from "./prActions.js";
-import { paneZoomCommand } from "./shellModel.js";
 import { toast } from "./toast.js";
 import { esc } from "./util.js";
 
@@ -265,9 +264,9 @@ function mount(): void {
             <p class="chain-empty-text">Then drag from a block's right edge onto another block to run it next.</p>
           </div>
           <div class="chain-zoom" role="group" aria-label="View">
-            <button type="button" class="icon-btn" data-zoom="-1" title="Zoom out (Ctrl+−)" aria-label="Zoom out">${icon("minus")}</button>
-            <button type="button" class="chain-zoom-level" title="Reset to 100% (Ctrl+0)" aria-label="Reset zoom">100%</button>
-            <button type="button" class="icon-btn" data-zoom="1" title="Zoom in (Ctrl+=)" aria-label="Zoom in">${icon("add")}</button>
+            <button type="button" class="icon-btn" data-zoom="-1" title="Zoom out" aria-label="Zoom out">${icon("minus")}</button>
+            <button type="button" class="chain-zoom-level" title="Reset to 100%" aria-label="Reset zoom">100%</button>
+            <button type="button" class="icon-btn" data-zoom="1" title="Zoom in" aria-label="Zoom in">${icon("add")}</button>
             <span class="chain-sep" aria-hidden="true"></span>
             <button type="button" class="icon-btn" data-act="fit" title="Fit to view" aria-label="Fit to view">${icon("fit")}</button>
             <button type="button" class="icon-btn" data-act="tidy" title="Tidy layout" aria-label="Tidy layout">${icon("tidy")}</button>
@@ -2108,12 +2107,6 @@ function isTextField(t: EventTarget | null): boolean {
 
 function onGlobalKey(e: KeyboardEvent): void {
   if (!visible || e.defaultPrevented || document.body.dataset.page === "settings" || document.querySelector(".ask-overlay")) return;
-  const zoom = paneZoomCommand(e);
-  if (zoom) {
-    e.preventDefault();
-    canvas.zoomStep(zoom === "in" ? 1 : zoom === "out" ? -1 : 0);
-    return;
-  }
   if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
   const key = e.key.toLowerCase();
   if (key === "f") {

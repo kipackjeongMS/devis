@@ -540,7 +540,7 @@ assert.match(canvasSource, /onBlockAction/);
 assert.match(canvasSource, /repoCount/, "blocks show how many repository branches they set");
 assert.match(canvasSource, /not part of this run/, "blocks outside a live run say so to screen readers");
 const reading = await source("../web/src/readingPane.ts");
-assert.match(reading, /if \(feature === "pipelines" \|\| feature === "jarvis"\) return;/, "pane zoom keys belong to the canvas in Pipelines");
+assert.match(reading, /if \(feature === "pipelines" \|\| feature === "jarvis"\) return;/, "the hidden reading pane leaves Escape to Pipelines");
 const app = await source("../web/src/app.ts");
 assert.match(app, /from "\.\/pipelines\.js"/);
 assert.match(app, /setFeature\(/);

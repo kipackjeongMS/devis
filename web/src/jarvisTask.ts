@@ -80,7 +80,6 @@ import {
 } from "./taskChatModel.js";
 import { createValidationPanel, type ValidationPanel } from "./taskValidation.js";
 import { createPrCommentsPanel, type PrCommentsPanel } from "./taskPrComments.js";
-import { zoomable } from "./viewZoom.js";
 import { attachSplitter } from "./splitter.js";
 import { ImageDraft, paintTray, trayNote, uploadWith, wireImages, type ChatImage } from "./chatImages.js";
 
@@ -582,9 +581,7 @@ export function openTaskModal(taskId: string, host: TaskModalHost, tab?: LeftTab
     hintError: "",
   };
   const m = modal;
-  // Every task sheet opens at the zoom last set on one (Ctrl +/−/0).
-  zoomable(m.dialog, "task");
-  // And split the way the last one was left (drag the border between the panels).
+  // Split the way the last one was left (drag the border between the panels).
   const body = q<HTMLElement>(".tm-body");
   attachSplitter({
     container: body,

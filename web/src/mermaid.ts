@@ -170,7 +170,7 @@ function addDiagramControls(node: HTMLElement, svg: SVGSVGElement): void {
   const frame = (): Size => ({ width: viewport.clientWidth, height: viewport.clientHeight });
   const center = (): Point => ({ x: viewport.clientWidth / 2, y: viewport.clientHeight / 2 });
   const minScale = (): number => Math.min(MIN_SCALE, fitScale);
-  // Client px are visual; the stage lives in the reading pane's own px, which Ctrl +/− zooms.
+  // Client px are visual; the stage lives in its ancestors' CSS-zoomed px (the task sheet reads at 1.125).
   const paneZoom = (): number => viewport.currentCSSZoom || 1;
 
   const render = (next: DiagramView, animate = false): void => {

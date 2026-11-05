@@ -38,7 +38,6 @@ import { openActionDialog } from "./prActions.js";
 import { sendPrsToCopilot } from "./bridge.js";
 import { requestNotifyPermission } from "./notifyWatch.js";
 import { closeTaskModal, openTaskModal, pruneTaskModalState, reposFromCard, requestCardHtml, shipFromCard, updateTaskModal, warnUnsaved, type LeftTab, type TaskModalHost } from "./jarvisTask.js";
-import { initViewZoom, zoomable } from "./viewZoom.js";
 import { PANEL_NAME, SECTIONS as PANEL_SECTIONS, isPanelId, isSection as isPanelSection, type PanelId, type Section as PanelSection } from "./workspaceLayout.js";
 import { afterFold, hideGrid, initGrid, isFlat, keyMove } from "./workspaceGrid.js";
 import { meetingDetailHtml, meetingsHtml, meetingsRail, meetingsSig, meetingsSub, pruneMeetingsState, selectMeeting, toggleDay, toggleNote, type MeetingsView } from "./meetingsView.js";
@@ -596,11 +595,6 @@ function mount(): void {
     onFlatChange: () => setSheet(false),
   });
 
-  // Ctrl +/−/0 zoom what you're in: Devis's chat or a section (the drawer zooms on its own).
-  zoomable(leadPane.root, "lead");
-  for (const b of root.querySelectorAll<HTMLElement>(".rs-b")) zoomable(b, "today");
-  initViewZoom();
-
   root.addEventListener("click", onClick);
   root.addEventListener("dblclick", onDblClick);
   root.addEventListener("submit", onSubmit);
@@ -698,8 +692,6 @@ function showDrawer(d: Drawer, detail: boolean): void {
   }
   drawerBody.replaceChildren();
   drawerActs.replaceChildren();
-  delete drawerBody.dataset.zoomView;
-  drawerBody.style.removeProperty("--view-zoom");
   drawerEl.dataset.kind = d.kind;
   drawerBackBtn.hidden = !drawerBack.length;
   if (d.kind === "task") {
@@ -718,9 +710,8 @@ function showDrawer(d: Drawer, detail: boolean): void {
     drawerActs.innerHTML = comms
       ? iconBtn("comms-scan", "sync", "Read Teams and email now") + iconBtn("comms-settings", "settings", "Communication settings")
       : iconBtn("meetings-scan", "sync", "Read the calendar now") + iconBtn("meetings-settings", "settings", "Meetings settings");
-    drawerBody.innerHTML = `<div class="ld" data-pane="${detail ? "detail" : "list"}"><div class="ld-list" tabindex="-1"></div><div class="ld-detail" tabindex="-1"></div></div>`;
-    zoomable(drawerBody, "drawer");
-    if (comms) {
+    drawerBody.innerHTML = `<div class="ld" data-pane="${detail ? "detail" : "list"}"><div class="ld-list" tabindex="-1"></div>    <div class="ld-detail" tabindex="-1"></div></div>`;
+        if (comms) {
       writePref(COMMUNICATION_SEEN_KEY, String(Date.now()));
       loadCommunication();
     } else {
@@ -743,8 +734,6 @@ function closeDrawer(restore = true): void {
   ldDetail = false;
   drawerBody.replaceChildren();
   drawerActs.replaceChildren();
-  delete drawerBody.dataset.zoomView;
-  drawerBody.style.removeProperty("--view-zoom");
   delete drawerEl.dataset.kind;
   drawerLayer.hidden = true;
   drawerLayer.classList.remove("anim");
@@ -3082,6 +3071,5 @@ async function openHistory(): Promise<void> {
     onConfirm: async () => undefined,
   });
   history.classList.add("jh-dialog");
-  zoomable(history, "history");
   history.querySelector(".pa-cancel")?.remove();
 }

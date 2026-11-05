@@ -1,17 +1,14 @@
 // The docked reading pane (replaces the old slide-over modal). Wide windows show
 // it beside the queue as a non-modal region; narrow windows stack it over the
 // queue as a modal dialog. Only one PR is mounted at a time. Esc closes it unless
-// something inside already consumed the key or the reader is typing. Ctrl +/−/0
-// zoom only the pane's content.
+// something inside already consumed the key or the reader is typing.
 import { el, listPane, readingPane } from "./dom.js";
 import { icon } from "./icons.js";
-import { paneZoomCommand, SPLIT_MIN_WIDTH, stepPaneZoom, type PaneZoomCommand } from "./shellModel.js";
-import { toast } from "./toast.js";
+import { SPLIT_MIN_WIDTH } from "./shellModel.js";
 
 let scroller: HTMLElement | null = null;
 let onCloseCb: (() => void) | null = null;
 let returnFocus: HTMLElement | null = null;
-let paneZoom = 1;
 const split = window.matchMedia(`(min-width: ${SPLIT_MIN_WIDTH}px)`);
 
 function renderEmpty(): void {
@@ -36,29 +33,14 @@ function isTextEntry(target: EventTarget | null): boolean {
   return false;
 }
 
-// CSS zoom on the pane's child re-lays it out at the new size (text stays crisp)
-// while the queue and title bar keep theirs. The level lasts for the app session:
-// the local server takes a new port each launch, so localStorage would not keep it.
-function zoomPane(command: PaneZoomCommand): void {
-  paneZoom = command === "reset" ? 1 : stepPaneZoom(paneZoom, command === "in" ? 1 : -1);
-  readingPane.style.setProperty("--pane-zoom", String(paneZoom));
-  toast(`Reading pane ${Math.round(paneZoom * 100)}%`);
-}
-
 // Window-level bubble listener: document listeners (dialogs, the inbox, the
 // selection toolbar) run first and preventDefault when they consume Escape;
 // capture-phase menus and drawers stop propagation before it gets here.
 function onKey(e: KeyboardEvent): void {
   if (e.defaultPrevented) return;
-  // Pipelines zooms its canvas, and the Workspace its own views (viewZoom.ts).
+  // Pipelines and the Workspace hide the pane; Escape there is theirs.
   const feature = document.body.dataset.feature;
   if (feature === "pipelines" || feature === "jarvis") return;
-  const zoom = paneZoomCommand(e);
-  if (zoom) {
-    e.preventDefault();
-    zoomPane(zoom);
-    return;
-  }
   if (e.key !== "Escape" || !scroller) return;
   if (isTextEntry(e.target) || document.querySelector(".ask-overlay")) return;
   e.preventDefault();

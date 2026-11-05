@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 import { endService, ensureService, serviceFiles, serviceStatus, stopService, watchService, type ServiceStatus } from "./service-files.mjs";
 import { APP_NAME, DATA_FOLDER, FORMER_APP_NAME } from "./brand.mjs";
 import { CODE_WINDOW_MIN, codeWindowUrl, codeWindowWorker, isFocusMainUrl, parsePlacement, placeCodeWindow, type SavedPlacement } from "./code-window.mjs";
+import { nextZoom, titleBarHeight, zoomCommand, zoomLevelOf } from "./ui-zoom.mjs";
 
 // Kept from the app's first name: Windows ties toast settings to it.
 const APP_ID = "AdoPrOps.Desktop";
@@ -152,7 +153,7 @@ function chromeOptions(): BrowserWindowConstructorOptions {
         backgroundColor: glass ? "#00000000" : "#050505",
         ...(glass ? { backgroundMaterial: backdrop } : {}),
         titleBarStyle: "hidden",
-        titleBarOverlay: { color: glass ? "#00000000" : "#050505", symbolColor: "#f2f2f2", height: 40 },
+        titleBarOverlay: { color: glass ? "#00000000" : "#050505", symbolColor: "#f2f2f2", height: titleBarHeight(uiZoom) },
         autoHideMenuBar: true,
         show: false,
         webPreferences: {
@@ -160,13 +161,74 @@ function chromeOptions(): BrowserWindowConstructorOptions {
             sandbox: true,
             nodeIntegration: false,
             spellcheck: true,
+            zoomFactor: uiZoom,
         },
     };
+}
+
+// ---- interface size -----------------------------------------------------------------
+
+function zoomFile(): string {
+    return join(app.getPath("userData"), "ui-zoom.json");
+}
+
+function savedZoom(): number {
+    try {
+        return zoomLevelOf((JSON.parse(readFileSync(zoomFile(), "utf8")) as { level?: unknown }).level);
+    } catch {
+        return 1;
+    }
+}
+
+/** The whole interface's size, in every window (1 is 100%). */
+let uiZoom = savedZoom();
+
+function sizeWindow(window: BrowserWindow): void {
+    if (window.isDestroyed()) return;
+    window.webContents.setZoomFactor(uiZoom);
+    // The caption buttons' strip grows with the page's title bar. Windows and Linux only.
+    if (process.platform !== "darwin") {
+        try {
+            window.setTitleBarOverlay({ height: titleBarHeight(uiZoom) });
+        } catch {
+            // A window without the overlay keeps its frame.
+        }
+    }
+}
+
+/** Size every window at `level`, save it, and tell the page the keys came from, so it can say so. */
+function setUiZoom(level: number, from: WebContents): void {
+    if (level !== uiZoom) {
+        uiZoom = level;
+        try {
+            writeFileSync(zoomFile(), JSON.stringify({ level }));
+        } catch {
+            // Not saved: the app opens at the last saved size.
+        }
+    }
+    for (const window of BrowserWindow.getAllWindows()) sizeWindow(window);
+    if (!from.isDestroyed()) void from.executeJavaScript(`window.dispatchEvent(new CustomEvent("devis:ui-zoom", { detail: ${level} }))`).catch(() => undefined);
+}
+
+/**
+ * Ctrl +/−/0 size the whole interface, in every window, before the page sees the keys.
+ * A page that loads, or reloads onto a new port, takes the current size.
+ */
+function followUiZoom(window: BrowserWindow): void {
+    const contents = window.webContents;
+    contents.on("before-input-event", (event, input) => {
+        const command = zoomCommand(input);
+        if (!command) return;
+        event.preventDefault();
+        setUiZoom(nextZoom(uiZoom, command), contents);
+    });
+    contents.on("did-navigate", () => sizeWindow(window));
 }
 
 function createWindow(url: string): BrowserWindow {
     const window = new BrowserWindow({ ...chromeOptions(), width: 1440, height: 920, minWidth: 760, minHeight: 520 });
     confineToOrigin(window.webContents);
+    followUiZoom(window);
     window.once("ready-to-show", () => window.show());
     window.on("closed", () => {
         if (mainWindow === window) mainWindow = null;
@@ -228,6 +290,7 @@ function openCodeWindow(worker: string): void {
     });
     codeWindows.set(worker, window);
     confineToOrigin(window.webContents);
+    followUiZoom(window);
     window.once("ready-to-show", () => {
         if (placement.maximized) window.maximize();
         window.show();
@@ -380,8 +443,8 @@ async function start(): Promise<void> {
     const status = await connect();
     watch(status);
     console.log(`[ado-pr-ops] showing the service at ${status.url} (pid ${status.pid})`);
-    // Electron's default menu binds Ctrl +/−/0 to whole-window zoom; the page zooms
-    // only its reading pane with those keys, so keep the default menu minus zoom.
+    // Electron's default menu binds Ctrl +/−/0 to the focused window's zoom; the shell
+    // sizes every window together with those keys (followUiZoom), so keep the default menu minus zoom.
     Menu.setApplicationMenu(
         Menu.buildFromTemplate([
             { role: "fileMenu" },
