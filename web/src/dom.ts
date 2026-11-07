@@ -12,27 +12,19 @@ export function el<T extends HTMLElement = HTMLElement>(html: string): T {
   return t.content.firstElementChild as T;
 }
 
-/** The main content area plus the filter-bar controls (present in index.html). */
+/** The Settings page's content area, the PR window's reading pane, and the shell's two root nodes. */
 export const view = $("#view") as HTMLElement;
-export const filterbar = $("#filterbar") as HTMLElement;
-export const bulkReviewHost = $("#bulkReviewHost") as HTMLElement;
-export const orgFilter = $("#orgFilter") as HTMLSelectElement;
-export const projectFilter = $("#projectFilter") as HTMLSelectElement;
-export const queueTabs = $("#queueTabs") as HTMLElement;
-export const queueSearch = $("#queueSearch") as HTMLInputElement;
-export const scopeFields = $("#scopeFields") as HTMLElement;
 export const listPane = $("#listPane") as HTMLElement;
 export const readingPane = $("#readingPane") as HTMLElement;
 
-/** Switch the shell between the queue (list + reading pane) and the settings page. */
+/** Switch the shell between the main page and the settings page. */
 export function setPage(page: "queue" | "settings"): void {
   document.body.dataset.page = page;
 }
 
 /** Replace the view with a full-panel error/empty state. */
 export function renderError(msg: string): void {
-  setPage("queue");
-  filterbar.hidden = true;
+  setPage("settings");
   view.innerHTML =
     `<div class="empty">${esc(msg)}<div class="hint">Check that you are logged in with <code>az login</code>.</div></div>`;
 }

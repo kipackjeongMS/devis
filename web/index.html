@@ -22,8 +22,8 @@
     <link rel="stylesheet" href="style.css" />
     <link rel="stylesheet" href="responsive.css" />
   </head>
-  <body data-page="queue" data-feature="prs">
-    <a id="skipLink" class="skip-link" href="#view">Skip to pull requests</a>
+  <body data-page="queue" data-feature="jarvis">
+      <a id="skipLink" class="skip-link" href="#jarvisView">Skip to the Workspace</a>
     <header class="titlebar">
       <div class="brand">
         <span class="brand-mark" aria-hidden="true">
@@ -43,15 +43,6 @@
             <path d="M6 2.75v10.5M10 2.75v10.5"></path>
           </svg>
           <span>Workspace</span>
-        </button>
-        <button type="button" class="feature-tab active" data-feature="prs" aria-current="page">
-          <svg class="ic" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-            <circle cx="4.5" cy="3.75" r="1.5"></circle>
-            <circle cx="4.5" cy="12.25" r="1.5"></circle>
-            <circle cx="11.5" cy="12.25" r="1.5"></circle>
-            <path d="M4.5 5.25v5.5M11.5 10.75V7a2.5 2.5 0 0 0-2.5-2.5H6.5M8 3l-1.5 1.5L8 6"></path>
-          </svg>
-          <span>Pull requests</span>
         </button>
         <button type="button" class="feature-tab" data-feature="pipelines">
           <svg class="ic" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
@@ -78,7 +69,7 @@
           </svg>
           <span class="inbox-badge" hidden>0</span>
         </button>
-        <button id="btnRefresh" class="icon-btn" type="button" title="Refresh pull requests" aria-label="Refresh pull requests">
+        <button id="btnRefresh" class="icon-btn" type="button" title="Refresh the Workspace" aria-label="Refresh the Workspace">
           <svg class="ic" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
             <path d="M13.25 3.75V7H10"></path>
             <path d="M12.9 7a5 5 0 1 0-1.4 4.55"></path>
@@ -94,45 +85,7 @@
     </header>
 
     <div class="workspace">
-      <section id="listPane" class="list-pane" aria-label="Pull request queue">
-        <div id="filterbar" class="filterbar" hidden>
-          <h1 class="list-title visually-hidden">Pull requests</h1>
-          <div id="queueTabs" class="seg queue-tabs" role="group" aria-label="Queue view">
-            <button type="button" class="seg-btn" data-view="feed" aria-pressed="false">My feed <span class="seg-n"></span></button>
-            <button type="button" class="seg-btn" data-view="all" aria-pressed="false">All <span class="seg-n"></span></button>
-          </div>
-          <label class="queue-search">
-            <svg class="ic" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-              <circle cx="7" cy="7" r="4.25"></circle>
-              <path d="m10.25 10.25 3.25 3.25"></path>
-            </svg>
-            <span class="visually-hidden">Search pull requests</span>
-            <input id="queueSearch" type="search" placeholder="Search pull requests" spellcheck="false" autocomplete="off"
-              title="Search pull requests (Ctrl+F). Try is:draft, -is:draft, is:reviewed, repo:, author:, branch:">
-            <kbd class="search-kbd" aria-hidden="true">Ctrl+F</kbd>
-          </label>
-          <!-- Narrow windows (responsive.css): the org and project pickers fold behind this toggle. -->
-          <button type="button" id="scopeToggle" class="icon-btn filter-toggle" title="Organization and project"
-            aria-label="Organization and project" aria-expanded="false" aria-controls="scopeFields" hidden>
-            <svg class="ic" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-              <path d="M2.5 4h11M4.5 8h7M6.5 12h3"></path>
-            </svg>
-          </button>
-          <div id="scopeFields" class="filterbar-fields">
-            <label class="filter-field">
-              <span class="visually-hidden">Organization</span>
-              <select id="orgFilter" class="filter-select"></select>
-            </label>
-            <label class="filter-field">
-              <span class="visually-hidden">Project</span>
-              <select id="projectFilter" class="filter-select"></select>
-            </label>
-          </div>
-          <div id="bulkReviewHost" class="bulk-review-host"></div>
-        </div>
-
-        <div id="listNotice" class="list-notice" role="status" hidden></div>
-
+      <section id="listPane" class="list-pane" aria-label="Settings">
         <main id="view" class="view" tabindex="-1">
           <div class="loading"><span class="spinner"></span> Loading…</div>
         </main>
@@ -154,15 +107,6 @@
           <path d="M6 2.75v10.5M10 2.75v10.5"></path>
         </svg>
         <span>Workspace</span>
-      </button>
-      <button type="button" class="tabbar-btn" data-feature="prs">
-        <svg class="ic" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-          <circle cx="4.5" cy="3.75" r="1.5"></circle>
-          <circle cx="4.5" cy="12.25" r="1.5"></circle>
-          <circle cx="11.5" cy="12.25" r="1.5"></circle>
-          <path d="M4.5 5.25v5.5M11.5 10.75V7a2.5 2.5 0 0 0-2.5-2.5H6.5M8 3l-1.5 1.5L8 6"></path>
-        </svg>
-        <span>Pull requests</span>
       </button>
       <button type="button" class="tabbar-btn" data-feature="pipelines">
         <svg class="ic" viewBox="0 0 16 16" aria-hidden="true" focusable="false">

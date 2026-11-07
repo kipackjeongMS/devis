@@ -19,11 +19,10 @@ assert.equal(activeSectionIndex([], 500, 120, false), -1);
 
 // ---- shell structure --------------------------------------------------------
 const read = (path) => readFile(new URL(path, import.meta.url), "utf8");
-const [html, css, detail, list, app, pane, nav, icons, main, ask, rephrase, inbox, selection] = await Promise.all([
+const [html, css, detail, app, pane, nav, icons, main, ask, rephrase, inbox, selection] = await Promise.all([
   read("../web/index.html"),
   read("../web/style.css"),
   read("../web/src/detail.ts"),
-  read("../web/src/list.ts"),
   read("../web/src/app.ts"),
   read("../web/src/readingPane.ts"),
   read("../web/src/sectionNav.ts"),
@@ -36,9 +35,15 @@ const [html, css, detail, list, app, pane, nav, icons, main, ask, rephrase, inbo
 ]);
 
 assert.ok(!existsSync(new URL("../web/src/modal.ts", import.meta.url)), "the slide-over modal is replaced by the reading pane");
-for (const id of ["btnInbox", "btnRefresh", "btnSettings", "filterbar", "orgFilter", "projectFilter", "queueTabs", "queueSearch", "scopeFields", "bulkReviewHost", "view", "toast", "listPane", "readingPane"]) {
+for (const id of ["btnInbox", "btnRefresh", "btnSettings", "view", "toast", "listPane", "readingPane"]) {
   assert.match(html, new RegExp(`id="${id}"`), `index.html keeps #${id}`);
 }
+// The aggregate Pull requests page is retired: Workspace is the PR hub.
+for (const id of ["filterbar", "orgFilter", "projectFilter", "queueTabs", "queueSearch", "scopeFields", "bulkReviewHost"]) {
+  assert.doesNotMatch(html, new RegExp(`id="${id}"`), `index.html no longer has #${id}`);
+}
+assert.doesNotMatch(html, /data-feature="pr"|data-act="feature-prs"/, "no Pull requests tab");
+assert.ok(!existsSync(new URL("../web/src/list.ts", import.meta.url)), "the aggregate list page is gone");
 assert.match(html, /class="titlebar"/);
 assert.match(html, /<section id="listPane" class="list-pane"/);
 assert.match(html, /<section id="readingPane" class="reading-pane"/);
@@ -61,21 +66,10 @@ for (const [name, src] of [["ask", ask], ["rephraseModal", rephrase], ["inboxPan
   assert.match(src, /e\.preventDefault\(\)/, `${name} marks a consumed Escape`);
 }
 
-// The queue keeps the open PR's review poll alive while filters re-render.
-assert.match(list, /if \(stopPolling && !isPaneOpen\(\)\) stopReviewPoll\(\)/);
-assert.match(list, /is-open/);
-// Two queue views: My feed lanes and All by repository, with persisted folds and a search.
-assert.match(list, /feedLane\(/);
-assert.match(list, /adoPrOps\.queueFolds/);
-assert.match(list, /aria-pressed/);
-assert.match(list, /aria-expanded/);
-assert.match(html, /data-view="feed"[^>]*>My feed/);
-assert.match(html, /data-view="all"[^>]*>All/);
-assert.match(html, /<input id="queueSearch" type="search"/);
-assert.doesNotMatch(html, /assignFilter|data-assign/);
+assert.match(pane, /solo/, "the PR window shows the detail alone");
+assert.doesNotMatch(html, /id="queueSearch"|assignFilter|data-assign/);
 assert.match(app, /setPage\("settings"\)/);
-assert.match(app, /setQueueView\(/);
-assert.match(app, /queueSearch\.focus\(\)/, "Ctrl+F focuses the queue search");
+assert.match(app, /bootPrWindow\(/);
 assert.match(css, /\.fold\.collapsed > \.fold-body\s*\{\s*display:\s*none;/);
 assert.doesNotMatch(css, /\.plate-(group|head|body)|\.queue-title/);
 
@@ -91,7 +85,7 @@ assert.match(css, /\[hidden\]\s*\{\s*display:\s*none\s*!important;?\s*\}/);
 assert.match(css, /\.reading-pane\b/);
 assert.match(css, /prefers-reduced-motion/);
 const emoji = /[\u{1F4AC}\u{23F3}\u{25F7}\u{26A0}\u{1F464}\u{2726}\u{29C9}\u{21A9}]/u;
-for (const file of ["prStatus", "list", "inboxPanel", "reviewPanel", "diff", "selection", "staleBanner"]) {
+for (const file of ["prStatus", "prPanel", "inboxPanel", "reviewPanel", "diff", "selection", "staleBanner"]) {
   const src = await read(`../web/src/${file}.ts`);
   assert.doesNotMatch(src, emoji, `${file}.ts renders icons instead of emoji`);
 }

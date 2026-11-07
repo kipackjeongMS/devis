@@ -3,9 +3,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 const read = (path) => readFile(new URL(path, import.meta.url), "utf8");
-const [cssRaw, app, notifyWatch, reviewPanel, azauth, ado, main] = await Promise.all([
+const [cssRaw, notifyWatch, reviewPanel, azauth, ado, main] = await Promise.all([
   read("../web/style.css"),
-  read("../web/src/app.ts"),
   read("../web/src/notifyWatch.ts"),
   read("../web/src/reviewPanel.ts"),
   read("../src/azauth.mts"),
@@ -43,18 +42,7 @@ assert.doesNotMatch(css, /reticle-scan[^;]*\binfinite\b/, "the idle reticle must
 // ---- Electron: Mica by default ---------------------------------------------------
 assert.match(main, /return pick === "acrylic" \|\| pick === "none" \? pick : "mica"/, "Mica is the default backdrop");
 
-// ---- Frontend: no per-keystroke or no-op full re-renders --------------------------
-assert.match(app, /const SEARCH_DEBOUNCE_MS = \d+;/, "queue search is debounced");
-assert.match(
-  app,
-  /queueSearch\.addEventListener\("input", \(\) => \{[\s\S]*?cancelSearchRender\(\);\s*searchTimer = setTimeout\(/,
-  "the search input schedules one render"
-);
-assert.match(
-  app,
-  /state\.query = "";\s*cancelSearchRender\(\);\s*renderList\(false\);/,
-  "Esc cancels a pending search render and renders at once"
-);
+// ---- Frontend: no no-op full re-renders --------------------------------------------
 assert.match(
   notifyWatch,
   /if \(sig !== lastSig\) \{\s*lastSig = sig;\s*window\.dispatchEvent\(new CustomEvent\("ado-pr-updated"\)\);/,

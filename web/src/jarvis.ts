@@ -33,7 +33,7 @@ import { effortLabel, effortsFor, nextChoice, type PickerState } from "./modelCh
 import { patchHtml } from "./patch.js";
 import { toast } from "./toast.js";
 import { state } from "./state.js";
-import { openDetail } from "./detail.js";
+import { openPrWindow } from "./prWindow.js";
 import { openActionDialog } from "./prActions.js";
 import { sendPrsToCopilot } from "./bridge.js";
 import { requestNotifyPermission } from "./notifyWatch.js";
@@ -54,7 +54,11 @@ import {
   toggleQuietMail,
   type CommunicationView,
 } from "./communicationView.js";
-import { openContextMenu, type ContextMenuEntry } from "./contextMenu.js";
+import { openContextMenu, menuPoint, type ContextMenuEntry } from "./contextMenu.js";
+import { copyText } from "./clipboard.js";
+import { linkMenuEntries } from "./prLinks.js";
+import { reviewPhase } from "./prReview.js";
+import { prIdentity } from "./prPanelModel.js";
 import { isOutlookLink, isTeamsLink, unseenRecaps, type ChatsInfo, type CommsChat, type CommsMail, type CommsMeeting, type MeetingScanInfo } from "./commsModel.js";
 import {
   ALL_SERVICES,
@@ -111,7 +115,7 @@ import {
   type TodayWorker,
   type WorkerRequest,
 } from "./jarvisModel.js";
-import { clearSearch, initPrPanel, loadOlder, prPanelHtml, setQuery, showMore, toggleFilter, toggleFold, watchSentinel } from "./prPanel.js";
+import { clearSearch, clearSelection, clickRow, contextIsSelectedRow, initPrPanel, isSelecting, loadOlder, prAt, prPanelHtml, selectedPrs, selectionSize, setContextRow, setQuery, setSelecting, showMore, syncSelectionUi, toggleAll, toggleFilter, toggleFold, watchSentinel } from "./prPanel.js";
 import { inboxItems, markPrRead } from "./inboxPanel.js";
 import { matchNotificationPr } from "./inboxRoute.js";
 import type { PR } from "./types.js";
@@ -423,7 +427,7 @@ const modalHost: TaskModalHost = {
       pr = res.pr as PR;
     }
     closeDrawer(false);
-    await openDetail(pr);
+    openPrWindow(pr);
   },
   close: () => closeDrawer(),
 };
@@ -481,7 +485,7 @@ function mount(): void {
   root = document.getElementById("jarvisView")!;
   const railTools: Partial<Record<RailSection, string>> = {
     tasks: `<select class="filter-select today-service" aria-label="Service"></select>${iconBtn("history", "clock", "History")}${iconBtn("new-task", "add", "New task")}`,
-    prs: iconBtn("prs-refresh", "sync", "Refresh pull requests"),
+    prs: `<button type="button" class="icon-btn" data-act="prs-select" aria-pressed="false" title="Select pull requests" aria-label="Select pull requests">${svg("check")}</button>${iconBtn("prs-refresh", "sync", "Refresh pull requests")}`,
     comms: iconBtn("comms-scan", "sync", "Read Teams and email now"),
     meetings: iconBtn("meetings-scan", "sync", "Read the calendar now"),
   };
@@ -596,6 +600,7 @@ function mount(): void {
   });
 
   root.addEventListener("click", onClick);
+  root.addEventListener("contextmenu", onContextMenu);
   root.addEventListener("dblclick", onDblClick);
   root.addEventListener("submit", onSubmit);
   root.addEventListener("input", onInput);
@@ -1103,6 +1108,10 @@ function renderPrs(force = false): void {
   paintNew("prs", view.newCount, view.newLabel);
   paintRailBadge();
   patchPane(prsBody, view.html);
+  syncSelectionUi(prsBody);
+  const selectBtn = root.querySelector('[data-act="prs-select"]');
+  selectBtn?.setAttribute("aria-pressed", String(isSelecting()));
+  selectBtn?.setAttribute("title", isSelecting() ? "Done selecting" : "Select pull requests");
   watchSentinel(prsBody);
 }
 
@@ -1500,7 +1509,7 @@ function askOf(node: Element): CommsAsk | undefined {
 /** Open the PR a Teams ask is about: here when the app knows enough of it, else in Azure DevOps. */
 function openAskPr(ask: CommsAsk): void {
   const pr = askPr(ask, state.prs);
-  if (pr) return void openDetail(pr);
+  if (pr) return void openPrWindow(pr);
   const enc = encodeURIComponent;
   const url = ask.url || `https://dev.azure.com/${enc(ask.org)}/${enc(ask.project)}/_git/${enc(ask.repo)}/pullrequest/${ask.prId}`;
   window.open(url, "_blank", "noopener");
@@ -2238,7 +2247,8 @@ const SECTION_TONE: Record<BoardSection, string> = { running: "run", idle: "idle
 
 /**
  * A task in the rail: its state, title and when it last moved. It opens in the drawer;
- * ✓ marks it done, and ⋯ has the rest (artifacts, status, pull requests, a worker, …).
+ * ✓ marks it done, and right-click (or Shift+F10 / the Menu key) has the rest: artifacts,
+ * status, pull requests, a worker, …
  */
 function taskCard(task: TodayTask, now: number, section: BoardSection): string {
   const asks = taskNeeds([task]);
@@ -2274,19 +2284,18 @@ function taskCard(task: TodayTask, now: number, section: BoardSection): string {
   const sub = doing ? `<span class="rr-doing ell">${esc(doing.label)} · ${esc(doing.activity)}</span>` : "";
   return `
     <div class="rr${asks.length ? " needs" : ""}${done ? " is-done" : ""}" data-key="task:${esc(task.id)}" data-task="${esc(task.id)}">
-      <button type="button" class="rr-main" data-act="open-task" title="${esc(tip)}">
+      <button type="button" class="rr-main" data-act="open-task" aria-haspopup="menu" aria-keyshortcuts="Shift+F10" title="${esc(tip)}">
         <span class="rdot tone-${tone}"></span>${task.kind === "devis" ? `<span class="rr-devis" title="A change to Devis itself">Devis</span>` : ""}<span class="rr-t ell">${esc(task.title)}</span><span class="rr-tm">${esc(ago(at, now))}</span>
       </button>
       <span class="rr-ha">
         ${done ? "" : `<button type="button" class="icon-btn" data-act="done" title="Mark done" aria-label="Mark done: ${esc(task.title)}">${svg("check")}</button>`}
-        <button type="button" class="icon-btn rr-more" data-act="task-more" title="More" aria-label="More for ${esc(task.title)}" aria-haspopup="menu">⋯</button>
       </span>
       ${sub || chips ? `<div class="rr-p">${sub}${chips}</div>` : ""}
     </div>`;
 }
 
-/** ⋯ on a task's row: everything its old card had, as a menu. */
-function taskMenu(task: TodayTask, anchor: HTMLElement): void {
+/** A task row's context menu: everything its old card had. `point` is where the menu opens. */
+function taskMenu(task: TodayTask, anchor: HTMLElement, point: { x: number; y: number }): void {
   const done = task.status === "done";
   const open = (tab?: LeftTab) => (): void => openDrawer({ kind: "task", taskId: task.id, tab });
   const status = (to: "done" | "open") => (): void =>
@@ -2307,8 +2316,73 @@ function taskMenu(task: TodayTask, anchor: HTMLElement): void {
   const url = task.workItem?.url;
   if (url) entries.push({ label: "Open in Azure DevOps", icon: "external", run: () => void window.open(url, "_blank", "noopener") });
   entries.push({ label: "Remove", icon: "trash", run: () => confirmDeleteTask(task) });
-  const r = anchor.getBoundingClientRect();
-  openContextMenu(r.right - 200, r.bottom + 4, `Task: ${task.title}`, entries, () => anchor.isConnected && anchor.focus());
+  openContextMenu(point.x, point.y, `Task: ${task.title}`, entries, () => anchor.isConnected && anchor.focus());
+}
+
+/** A PR row's context menu. It acts on the row it opened on, whatever else is selected. */
+function prMenu(pr: PR, anchor: HTMLElement, point: { x: number; y: number }): void {
+  const id = prIdentity(pr);
+  const entries: ContextMenuEntry[] = [
+    { label: "Open in Azure DevOps", icon: "azureDevOps", disabled: !pr.url, run: () => void window.open(pr.url, "_blank", "noopener") },
+    { label: "Open in separate window", icon: "panel", run: () => openPrWindow(pr) },
+  ];
+  for (const link of linkMenuEntries(pr, selectedPrs(), contextIsSelectedRow(id))) {
+    entries.push({
+      label: link.label,
+      icon: "copy",
+      run: () => void copyText(link.text).then((ok) => toast(ok ? (link.count > 1 ? `Copied ${link.count} links` : "Copied the link") : "Couldn't copy to the clipboard", ok ? "ok" : "err")),
+    });
+  }
+  setContextRow(id);
+  renderPrs(true);
+  openContextMenu(point.x, point.y, `Pull request #${pr.id}: ${pr.title}`, entries, () => anchor.isConnected && anchor.focus(), () => {
+    setContextRow(null);
+    renderPrs(true);
+  });
+}
+
+/** Right-click, or Shift+F10 / the Menu key on a focused row: the row's menu. */
+function onContextMenu(e: MouseEvent): void {
+  if (inTask(e)) return;
+  const target = e.target as HTMLElement;
+  if (target.closest("input, textarea, select")) return;
+  const rowEl = target.closest<HTMLElement>(".rr[data-pr], .rr[data-task]");
+  if (!rowEl) return;
+  const anchor = rowEl.querySelector<HTMLElement>(".rr-main");
+  if (!anchor) return;
+  const point = menuPoint(e, anchor);
+  if (rowEl.dataset.pr) {
+    const pr = prFor(rowEl);
+    if (!pr) return;
+    e.preventDefault();
+    return prMenu(pr, anchor, point);
+  }
+  const task = taskFor(rowEl);
+  if (!task) return;
+  e.preventDefault();
+  taskMenu(task, anchor, point);
+}
+
+/** Queue a Copilot review for each selected PR, skipping those already being reviewed. */
+async function bulkReview(prs: PR[]): Promise<void> {
+  const todo = prs.filter((p) => reviewPhase(p) !== "active");
+  const skipped = prs.length - todo.length;
+  if (!todo.length) return void toast("Those pull requests are already being reviewed.", "ok");
+  requestNotifyPermission();
+  for (const p of todo) queuing.add(prIdentity(p));
+  renderPrs(true);
+  try {
+    const result = await sendPrsToCopilot(todo);
+    const bits = [
+      result.accepted.length ? `Queued ${result.accepted.length} for a Copilot review` : "",
+      result.skipped.length || skipped ? `${result.skipped.length + skipped} already queued or being reviewed` : "",
+      result.failed.length ? `${result.failed.length} failed: ${result.failed[0].error}` : "",
+    ].filter(Boolean);
+    toast(bits.join(" · ") || "Nothing to queue", result.failed.length ? "err" : "ok");
+  } finally {
+    for (const p of todo) queuing.delete(prIdentity(p));
+    window.dispatchEvent(new CustomEvent("ado-pr-updated"));
+  }
 }
 
 // ---- events -------------------------------------------------------------------------
@@ -2465,10 +2539,6 @@ function onClick(e: MouseEvent): void {
       if (isFlat()) setSheet(false);
       return openDrawer({ kind: comms ? "comms" : "meetings" }, !!key);
     }
-    case "task-more": {
-      if (task) taskMenu(task, node);
-      return;
-    }
     case "todo-toggle":
       return void (todo && toggleTodo(todo));
     case "todo-edit":
@@ -2556,12 +2626,36 @@ function onClick(e: MouseEvent): void {
     case "open-pr": {
       const pr = prFor(node);
       if (!pr) return;
+      const how = clickRow(prIdentity(pr), { shift: e.shiftKey, toggle: e.ctrlKey || e.metaKey });
+      if (how !== "open") return renderPrs(true);
       // Opening your PR reads its new comments, so the row stops asking for you.
       const unread = inboxItems().filter((n) => n.unread && matchNotificationPr([pr], n));
       if (unread.length) void markPrRead(unread.map((n) => n.id));
-      void openDetail(pr);
+      openPrWindow(pr);
       return;
     }
+    case "pr-select": {
+      const pr = prFor(node);
+      if (pr) clickRow(prIdentity(pr), { shift: e.shiftKey, toggle: !e.shiftKey });
+      return renderPrs(true);
+    }
+    case "pr-select-all":
+      toggleAll();
+      return renderPrs(true);
+    case "pr-bulk-clear":
+      clearSelection();
+      return renderPrs(true);
+    case "prs-select":
+      setSelecting(!isSelecting());
+      renderPrs(true);
+      return void (isSelecting() ? prsBody.querySelector<HTMLInputElement>('[data-role="select-all"]') : node)?.focus();
+    case "pr-bulk-copy": {
+      const links = selectedPrs().map((p) => p.url).filter(Boolean);
+      if (!links.length) return;
+      return void copyText(links.join("\n")).then((ok) => toast(ok ? `Copied ${links.length} link${links.length === 1 ? "" : "s"}` : "Couldn't copy to the clipboard", ok ? "ok" : "err"));
+    }
+    case "pr-bulk-review":
+      return void bulkReview(selectedPrs());
     case "copilot-review": {
       const pr = prFor(node);
       if (pr) void queueCopilotReview(pr);
@@ -2679,6 +2773,13 @@ function onKeydown(e: KeyboardEvent): void {
     }
   }
   if (inTask(e)) return;
+  // Escape in the Pull Requests panel ends selecting, and the Select button takes the focus back.
+  if (e.key === "Escape" && isSelecting() && !e.isComposing && target.closest('[data-rs="prs"]') && !(target instanceof HTMLInputElement && target.type === "search" && target.value)) {
+    e.preventDefault();
+    setSelecting(false);
+    renderPrs(true);
+    return root!.querySelector<HTMLElement>('[data-act="prs-select"]')?.focus();
+  }
   // A task named in Today so far is inline text that acts as a button: Enter or Space follows it.
   if ((e.key === "Enter" || e.key === " ") && target.matches('span.ov-mention[role="button"]')) {
     e.preventDefault();

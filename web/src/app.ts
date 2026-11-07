@@ -4,26 +4,18 @@
 import {
   $,
   view,
-  filterbar,
-  orgFilter,
-  projectFilter,
-  queueTabs,
-  queueSearch,
-  scopeFields,
-  listPane,
   el,
   renderError,
   setPage,
 } from "./dom.js";
-import { esc, timeAgo } from "./util.js";
+import { esc } from "./util.js";
 import { getJSON, postJSON, bindIdentity } from "./api.js";
 import { state, loadReviews } from "./state.js";
 import { toast } from "./toast.js";
-import { renderList, setQueueView } from "./list.js";
 import { openDetail } from "./detail.js";
 import { initInbox } from "./inboxPanel.js";
 import { startInboxWatch, refreshInbox } from "./inboxWatch.js";
-import { initReadingPane, closePane } from "./readingPane.js";
+import { initReadingPane, closePane, setSoloPane } from "./readingPane.js";
 import { initUiZoom } from "./uiZoom.js";
 import { showPipelines, hidePipelines, reloadPipelines, showChainById } from "./pipelines.js";
 import { showJarvis, hideJarvis, reloadJarvis, resumeNoteDraft, openTaskById } from "./jarvis.js";
@@ -33,6 +25,7 @@ import { icon } from "./icons.js";
 import { showAgencyBanner } from "./staleBanner.js";
 import { applyShellClasses } from "./shell.js";
 import { loadPrRecency, prIdentity } from "./prRecency.js";
+import { announcePrUpdated, onPrUpdatedElsewhere } from "./prWindow.js";
 import type { PR } from "./types.js";
 
 interface CopilotRuntimeInfo {
@@ -102,75 +95,57 @@ async function boot(): Promise<void> {
   } catch (e: any) {
     return renderError("Could not read config: " + e.message);
   }
+  if (target) return bootPrWindow(target);
   initInbox();
   startInboxWatch();
   void checkCopilotRuntime();
   // A quick-note edit the last page didn't get to save goes in now, not only once the Workspace opens.
   resumeNoteDraft();
-  if (target) {
-    // Keep the normal list mounted underneath, but resolve/open the requested PR
-    // independently so list filters and activity enrichment cannot block routing.
-    const listPromise = loadPRs(false, false);
-    try {
-      await openDetail(await resolveCanvasTarget(target));
-    } catch (e) {
-      toast("Could not open target PR: " + (e as Error).message, "err");
-    }
-    await listPromise;
-    return;
-  }
   if (!state.config.organizations || state.config.organizations.length === 0) {
     return renderSettings();
   }
+  showFeature(currentFeature());
   await loadPRs();
 }
 
-let prsLoad = 0;
-/** When the list on screen was current: the last live load, or the snapshot's time. */
-let listAsOf: number | null = null;
-const listNotice = $("#listNotice");
-
-/** Say plainly when the list on screen couldn't be refreshed, with a retry; null clears it. */
-function noteStaleList(error: string | null): void {
-  if (error === null || listAsOf === null) {
-    listNotice.hidden = true;
-    listNotice.replaceChildren();
-    return;
+/**
+ * The PR window: one PR's full detail page, alone. The window is re-targeted by loading a new URL
+ * (src/pr-window.mts), so each page serves exactly one PR and nothing from the last one can reach this one.
+ * The Workspace owns the inbox, the background watchers and the list; this page leaves them to it.
+ */
+async function bootPrWindow(target: CanvasPrTarget): Promise<void> {
+  document.body.dataset.feature = "pr";
+  setSoloPane(true);
+  window.addEventListener("ado-pr-open", (e) => {
+    const pr = (e as CustomEvent<PR | null>).detail;
+    if (pr) document.title = `#${pr.id} ${pr.title} · Devis`;
+  });
+  // Anything done to the PR here (a vote, completing, a comment) refreshes the Workspace's panel.
+  window.addEventListener("ado-pr-updated", announcePrUpdated);
+  void loadReviews();
+  try {
+    await openDetail(await resolveCanvasTarget(target));
+  } catch (e) {
+    renderError("Could not open pull request #" + target.prId + ": " + (e as Error).message);
   }
-  const text = el(
-    `<span class="list-notice-text">Couldn't reach Azure DevOps, so this list is from ${esc(timeAgo(new Date(listAsOf).toISOString()))}. ${esc(error)}</span>`
-  );
-  const retry = el(`<button type="button" class="btn sm ghost">Retry</button>`);
-  retry.addEventListener("click", () => void loadPRs(true));
-  listNotice.replaceChildren(text, retry);
-  listNotice.hidden = false;
 }
 
-async function loadPRs(refreshActivity = false, stopPolling = true): Promise<void> {
+let prsLoad = 0;
+
+/** Load the PR list into state for the Workspace's panel, which paints from it on `ado-prs-loaded`. */
+async function loadPRs(refreshActivity = false): Promise<void> {
   const load = ++prsLoad;
-  // A refresh keeps the queue on screen (scroll, focus, open row) and swaps the rows in place when ADO answers.
-  const keepList = document.body.dataset.page === "queue" && !filterbar.hidden && state.prs.length > 0;
-  setPage("queue");
   const refreshBtn = $("#btnRefresh");
   refreshBtn.setAttribute("aria-busy", "true");
-  if (!keepList) {
-    noteStaleList(null);
-    view.innerHTML = '<div class="loading"><span class="spinner"></span> Loading pull requests…</div>';
-  }
   const reviews = loadReviews();
   const live = getJSON(`/api/prs${refreshActivity ? "?refresh=1" : ""}`);
   let settled = false;
-  let showingSnapshot = false;
-  if (!keepList && !state.prs.length) {
+  if (!state.prs.length) {
     // First paint: the list from the last time ADO answered, until the live one lands.
     void Promise.all([getJSON("/api/prs?cached=1"), reviews])
       .then(([snapshot]) => {
         if (settled || load !== prsLoad || !snapshot?.prs?.length) return;
-        showingSnapshot = true;
-        listAsOf = Date.parse(snapshot.at) || null;
         state.prs = snapshot.prs;
-        setupFilters();
-        renderList(stopPolling);
         window.dispatchEvent(new CustomEvent("ado-prs-loaded"));
       })
       .catch(() => undefined);
@@ -188,11 +163,7 @@ async function loadPRs(refreshActivity = false, stopPolling = true): Promise<voi
     // Older pages stay loaded across a refresh, minus any that moved onto the first page.
     const listed = new Set(state.prs.map((pr) => prIdentity(pr)));
     state.olderPrs = state.olderPrs.filter((pr) => !listed.has(prIdentity(pr)));
-    listAsOf = Date.now();
-    noteStaleList(null);
     if (res.errors && res.errors.length) toast(res.errors[0], "err");
-    setupFilters();
-    renderList(stopPolling);
     window.dispatchEvent(new CustomEvent("ado-prs-loaded"));
     if (res.activityPending > 0) void loadCommentActivity();
     // Last push and my last comment or vote, read in the background (/api/pr-recency).
@@ -200,8 +171,8 @@ async function loadPRs(refreshActivity = false, stopPolling = true): Promise<voi
   } catch (e: any) {
     settled = true;
     if (load !== prsLoad) return;
-    if (keepList || showingSnapshot) noteStaleList(e.message);
-    else renderError("Failed to load PRs: " + e.message);
+    // The panel keeps what it has and says so itself; a first load with nothing yet shows the error there.
+    toast("Failed to load PRs: " + e.message, "err");
     window.dispatchEvent(new CustomEvent("ado-prs-loaded"));
   } finally {
     if (load === prsLoad) refreshBtn.removeAttribute("aria-busy");
@@ -224,88 +195,37 @@ async function loadCommentActivity(): Promise<void> {
       }
     }
     if (res.errors && res.errors.length) toast(res.errors[0], "err");
-    if (changed && !filterbar.hidden) renderList(false);
+    if (changed) window.dispatchEvent(new CustomEvent("ado-prs-loaded"));
   } catch (e) {
     toast("Could not load comment activity: " + (e as Error).message, "err");
   }
 }
 
-// ---------- filters ----------
-function setupFilters(): void {
-  filterbar.hidden = false;
-  populateOrgFilter();
-  populateProjectFilter();
-}
-
-// A scope picker with a single choice is noise: hide it, and the row when both are.
-// Narrow windows fold the pickers behind #scopeToggle; its dot marks a narrowed scope.
-function syncScopeFields(): void {
-  const fields = [orgFilter, projectFilter].map((select) => select.closest<HTMLElement>(".filter-field")!);
-  scopeFields.hidden = fields.every((field) => field.hidden);
-  const toggle = $<HTMLButtonElement>("#scopeToggle");
-  toggle.hidden = scopeFields.hidden;
-  toggle.classList.toggle("is-scoped", state.org !== "all" || state.project !== "all");
-}
-
-function populateOrgFilter(): void {
-  const orgs = state.config.organizations;
-  orgFilter.innerHTML =
-    `<option value="all">All orgs (${state.prs.length})</option>` +
-    orgs
-      .map(
-        (o) =>
-          `<option value="${esc(o)}">${esc(o)} (${state.prs.filter((p) => p.org === o).length})</option>`
-      )
-      .join("");
-  orgFilter.value = state.org;
-  orgFilter.closest<HTMLElement>(".filter-field")!.hidden = orgs.length <= 1 && state.org === "all";
-  syncScopeFields();
-}
-
-// Project options are the distinct projects present in the current org scope —
-// covers both configured-project orgs and reviewer-fallback orgs.
-function populateProjectFilter(): void {
-  const scoped = state.org === "all" ? state.prs : state.prs.filter((p) => p.org === state.org);
-  const projects = [...new Set(scoped.map((p) => p.project).filter(Boolean))].sort((a, b) =>
-    a.localeCompare(b)
-  );
-  if (state.project !== "all" && !projects.includes(state.project)) state.project = "all";
-  projectFilter.innerHTML =
-    `<option value="all">All projects (${scoped.length})</option>` +
-    projects
-      .map(
-        (pr) =>
-          `<option value="${esc(pr)}">${esc(pr)} (${scoped.filter((p) => p.project === pr).length})</option>`
-      )
-      .join("");
-  projectFilter.value = state.project;
-  projectFilter.disabled = projects.length === 0;
-  projectFilter.closest<HTMLElement>(".filter-field")!.hidden = projects.length <= 1 && state.project === "all";
-  syncScopeFields();
-}
-
-// Return from settings to the queue (only meaningful once an org is configured).
-function showQueue(): void {
+// Return from settings to the page that was under it (only meaningful once an org is configured).
+function leaveSettings(): void {
   if (!(state.config.organizations || []).length) return;
   setPage("queue");
-  filterbar.hidden = false;
-  view.scrollTop = 0;
-  renderList();
+  showFeature(currentFeature());
 }
 
 // ---------- features ----------
-type Feature = "prs" | "pipelines" | "jarvis";
-const asFeature = (value: string | undefined): Feature =>
-  value === "pipelines" || value === "jarvis" ? value : "prs";
+type Feature = "pipelines" | "jarvis";
+const asFeature = (value: string | undefined): Feature => (value === "pipelines" ? "pipelines" : "jarvis");
 const currentFeature = (): Feature => asFeature(document.body.dataset.feature);
 const FEATURE_TEXT: Record<Feature, { skip: string; skipLabel: string; refresh: string }> = {
-  prs: { skip: "#view", skipLabel: "Skip to pull requests", refresh: "Refresh pull requests" },
   pipelines: { skip: "#pipelinesView", skipLabel: "Skip to pipelines", refresh: "Refresh pipelines" },
   jarvis: { skip: "#jarvisView", skipLabel: "Skip to the Workspace", refresh: "Refresh the Workspace" },
 };
 
 function setFeature(feature: Feature): void {
   const was = currentFeature();
+  if (was === "pipelines" && feature !== "pipelines") hidePipelines();
+  if (was === "jarvis" && feature !== "jarvis") hideJarvis();
+  showFeature(feature);
+}
+
+/** Put a feature on screen: its tab, its labels, its view. Settings gives way to it. */
+function showFeature(feature: Feature): void {
   document.body.dataset.feature = feature;
   for (const tab of document.querySelectorAll<HTMLElement>(".feature-tab")) {
     const on = tab.dataset.feature === feature;
@@ -320,30 +240,15 @@ function setFeature(feature: Feature): void {
   const refresh = $("#btnRefresh");
   refresh.title = text.refresh;
   refresh.setAttribute("aria-label", text.refresh);
-  const onSettings = document.body.dataset.page === "settings";
-  const hasOrgs = (state.config.organizations || []).length > 0;
-  if (was === "pipelines" && feature !== "pipelines") hidePipelines();
-  if (was === "jarvis" && feature !== "jarvis") hideJarvis();
-  if (feature === "pipelines" || feature === "jarvis") {
-    if (onSettings) {
-      if (hasOrgs) showQueue();
-      else setPage("queue");
-    }
-    if (feature === "pipelines") showPipelines({ openSettings: renderSettings });
-    else showJarvis({ openSettings: renderSettings });
-  } else {
-    if (onSettings || !hasOrgs) {
-      if (hasOrgs) showQueue();
-      else renderSettings();
-    }
-  }
+  if (document.body.dataset.page === "settings") setPage("queue");
+  if (feature === "pipelines") showPipelines({ openSettings: renderSettings });
+  else showJarvis({ openSettings: renderSettings });
 }
 
 // ---------- settings ----------
 function renderSettings(): void {
   closePane();
   setPage("settings");
-  filterbar.hidden = true;
   view.innerHTML = "";
   const wrap = el(`<div class="settings"></div>`);
   wrap.appendChild(
@@ -568,6 +473,7 @@ function renderSettings(): void {
       state.org = "all";
       state.project = "all";
       toast("Saved", "ok");
+      leaveSettings();
       await loadPRs();
       void reloadPipelines();
     } catch (e: any) {
@@ -577,7 +483,7 @@ function renderSettings(): void {
   });
   const cancel = el(`<button type="button" class="btn ghost">Cancel</button>`) as HTMLButtonElement;
   cancel.disabled = !(state.config.organizations || []).length;
-  cancel.addEventListener("click", showQueue);
+  cancel.addEventListener("click", leaveSettings);
   actions.appendChild(cancel);
   actions.appendChild(save);
   wrap.appendChild(actions);
@@ -615,11 +521,11 @@ $("#btnRefresh").addEventListener("click", () => {
   void refreshInbox();
   const onSettings = document.body.dataset.page === "settings";
   if (currentFeature() === "pipelines" && !onSettings) void reloadPipelines(true);
-  else if (currentFeature() === "jarvis" && !onSettings) {
-    // Today's review section reads the PR list, so refresh both.
+  else if (!onSettings) {
+    // The Workspace's Pull Requests panel reads the PR list, so refresh both.
     void reloadJarvis();
     if ((state.config.organizations || []).length) void loadPRs(true);
-  } else if ((state.config.organizations || []).length) loadPRs(true);
+  } else if ((state.config.organizations || []).length) void loadPRs(true);
   else boot();
 });
 $(".feature-nav").addEventListener("click", (e) => {
@@ -627,21 +533,6 @@ $(".feature-nav").addEventListener("click", (e) => {
   if (!tab) return;
   const feature = asFeature(tab.dataset.feature);
   if (feature !== currentFeature() || document.body.dataset.page === "settings") setFeature(feature);
-});
-orgFilter.addEventListener("change", () => {
-  state.org = orgFilter.value;
-  state.project = "all";
-  populateProjectFilter();
-  renderList();
-});
-projectFilter.addEventListener("change", () => {
-  state.project = projectFilter.value;
-  syncScopeFields();
-  renderList();
-});
-$("#scopeToggle").addEventListener("click", () => {
-  const open = filterbar.classList.toggle("scope-open");
-  $("#scopeToggle").setAttribute("aria-expanded", String(open));
 });
 // Phone-width bottom tab bar: each button forwards to the title bar control it mirrors,
 // so feature switching stays in one place. aria-current follows the body's page/feature.
@@ -666,58 +557,9 @@ function initTabbar(): void {
   sync();
 }
 initTabbar();
-queueTabs.addEventListener("click", (e) => {
-  const tab = (e.target as HTMLElement).closest<HTMLElement>("[data-view]");
-  if (tab) setQueueView(tab.dataset.view === "all" ? "all" : "feed");
-});
-// Rebuilding the queue costs tens of ms with a few hundred rows, so typing waits
-// for a short pause instead of re-rendering on every keystroke.
-const SEARCH_DEBOUNCE_MS = 120;
-let searchTimer: ReturnType<typeof setTimeout> | null = null;
-function cancelSearchRender(): void {
-  if (searchTimer) clearTimeout(searchTimer);
-  searchTimer = null;
-}
-queueSearch.addEventListener("input", () => {
-  state.query = queueSearch.value;
-  cancelSearchRender();
-  searchTimer = setTimeout(() => {
-    searchTimer = null;
-    renderList(false);
-  }, SEARCH_DEBOUNCE_MS);
-});
-// Esc clears the search, then a second Esc leaves the field. Consuming the event
-// keeps the reading pane open underneath.
-queueSearch.addEventListener("keydown", (e) => {
-  if (e.key !== "Escape") return;
-  e.preventDefault();
-  if (!queueSearch.value) {
-    queueSearch.blur();
-    return;
-  }
-  queueSearch.value = "";
-  state.query = "";
-  cancelSearchRender();
-  renderList(false);
-});
-// Ctrl+F finds in the queue, matching the pipeline catalog's search shortcut.
-window.addEventListener("keydown", (e) => {
-  if (e.defaultPrevented || !(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
-  if (e.key.toLowerCase() !== "f" || currentFeature() !== "prs") return;
-  if (document.body.dataset.page === "settings" || filterbar.hidden || listPane.inert) return;
-  if (document.querySelector(".ask-overlay")) return;
-  e.preventDefault();
-  queueSearch.focus();
-  queueSearch.select();
-});
-window.addEventListener("ado-pr-updated", () => {
-  if (document.body.dataset.page !== "settings" && !filterbar.hidden) renderList(false);
-});
-// Opening a PR (e.g. from the inbox or Jarvis) returns to the Pull requests feature and its queue.
-window.addEventListener("ado-pr-open", (e) => {
-  if (!(e as CustomEvent).detail) return;
-  if (currentFeature() !== "prs") setFeature("prs");
-  else if (document.body.dataset.page === "settings") showQueue();
+// A PR changed in the PR window: the panel's list follows.
+onPrUpdatedElsewhere(() => {
+  if ((state.config.organizations || []).length) void loadPRs(false);
 });
 // A task's validation chain, opened from the task: Pipelines shows it once its chains load.
 window.addEventListener("ado-open-chain", (e) => {

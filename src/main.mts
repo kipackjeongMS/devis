@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 import { endService, ensureService, serviceFiles, serviceStatus, stopService, watchService, type ServiceStatus } from "./service-files.mjs";
 import { APP_NAME, DATA_FOLDER, FORMER_APP_NAME } from "./brand.mjs";
 import { CODE_WINDOW_MIN, codeWindowUrl, codeWindowWorker, isFocusMainUrl, parsePlacement, placeCodeWindow, type SavedPlacement } from "./code-window.mjs";
+import { createPrWindowController, PR_WINDOW_MIN, PR_WINDOW_SIZE, prWindowTarget, type PrWindowHandle } from "./pr-window.mjs";
 import { nextZoom, titleBarHeight, zoomCommand, zoomLevelOf } from "./ui-zoom.mjs";
 
 // Kept from the app's first name: Windows ties toast settings to it.
@@ -73,13 +74,15 @@ function openOutside(url: string): void {
 
 /**
  * Keep the window on the service's origin (it can change when the service restarts); everything else opens in the browser.
- * The page's own window.opens are a worker's code window (the shell builds it, not the page) and a code window's
- * "back to the main window" (`/?focus=main`), which only brings that window forward.
+ * The page's own window.opens are a worker's code window and the one pull request window (the shell builds both,
+ * not the page) and a code window's "back to the main window" (`/?focus=main`), which only brings that window forward.
  */
 function confineToOrigin(contents: WebContents): void {
     contents.setWindowOpenHandler(({ url }) => {
         const worker = codeWindowWorker(url, origin);
+        const pr = worker ? null : prWindowTarget(url, origin);
         if (worker) openCodeWindow(worker);
+        else if (pr) prWindow.open(pr);
         else if (isFocusMainUrl(url, origin)) focusMainWindow();
         else if (isWebUrl(url)) openOutside(url);
         return { action: "deny" };
@@ -129,11 +132,11 @@ function renderMode(): Promise<"lean" | "full"> {
 }
 
 /** Load a page of the service, telling it which shell it's in. The page draws its own title bar and lets the backdrop tint through its glass. */
-async function load(window: BrowserWindow, url: string): Promise<void> {
+async function load(window: BrowserWindow, url: string, current: () => boolean = () => true): Promise<void> {
     const target = new URL(url);
     target.searchParams.set("shell", glass ? "glass" : "solid");
     target.searchParams.set("render", await renderMode());
-    if (!window.isDestroyed()) await window.loadURL(target.toString()).catch(() => undefined);
+    if (!window.isDestroyed() && current()) await window.loadURL(target.toString()).catch(() => undefined);
 }
 
 /** Point the main window at the service. */
@@ -234,6 +237,7 @@ function createWindow(url: string): BrowserWindow {
         if (mainWindow === window) mainWindow = null;
         // The code windows belong to the main one: closing it closes the app.
         for (const code of codeWindows.values()) if (!code.isDestroyed()) code.close();
+        for (const pr of prBrowserWindows) if (!pr.isDestroyed()) pr.close();
     });
     void show(window, url);
     return window;
@@ -301,6 +305,46 @@ function openCodeWindow(worker: string): void {
     });
     void load(window, codeWindowUrl(origin, worker));
 }
+
+// ---- the pull request window ---------------------------------------------------------
+
+/** Every pull request click lands in this one window; the controller re-targets it instead of opening another. */
+const prBrowserWindows = new Set<BrowserWindow>();
+const prWindow = createPrWindowController({
+    origin: () => origin,
+    create: () => {
+        const mainArea = (mainWindow && !mainWindow.isDestroyed() ? screen.getDisplayMatching(mainWindow.getBounds()) : screen.getPrimaryDisplay()).workArea;
+        const width = Math.min(PR_WINDOW_SIZE.width, mainArea.width);
+        const height = Math.min(PR_WINDOW_SIZE.height, mainArea.height);
+        const window = new BrowserWindow({
+            ...chromeOptions(),
+            width,
+            height,
+            x: mainArea.x + Math.round((mainArea.width - width) / 2),
+            y: mainArea.y + Math.round((mainArea.height - height) / 2),
+            minWidth: Math.min(PR_WINDOW_MIN.width, mainArea.width),
+            minHeight: Math.min(PR_WINDOW_MIN.height, mainArea.height),
+        });
+        prBrowserWindows.add(window);
+        confineToOrigin(window.webContents);
+        followUiZoom(window);
+        window.once("ready-to-show", () => window.show());
+        const handle: PrWindowHandle = {
+            isDestroyed: () => window.isDestroyed(),
+            reveal: () => {
+                if (window.isMinimized()) window.restore();
+                window.show();
+                window.focus();
+            },
+            load: (url, current) => load(window, url, current),
+        };
+        window.on("closed", () => {
+            prBrowserWindows.delete(window);
+            prWindow.closed(handle);
+        });
+        return handle;
+    },
+});
 
 /** The service came back on another port: move the code windows with it, keeping each one's open file (the page keeps it in the hash). */
 function moveCodeWindows(to: string): void {
@@ -430,6 +474,7 @@ async function recover(): Promise<void> {
         if (moved) {
             origin = next;
             moveCodeWindows(next);
+            prWindow.moveTo(next);
         }
         console.log(`[ado-pr-ops] reconnected to the service at ${status.url}`);
     } catch (error) {

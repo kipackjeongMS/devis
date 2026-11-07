@@ -3626,6 +3626,12 @@ body[data-feature="jarvis"]:not([data-page="settings"]) .jarvis-view {
   order: 2;
 }
 
+/* The PR window (prWindow.ts): one PR's full detail page and nothing else. The Workspace's panel is where PRs are listed. */
+body[data-feature="pr"] :is(.feature-nav, #btnLayout, #btnRefresh, #btnSettings, #btnInbox, nav.tabbar) { display: none; }
+body[data-feature="pr"]:not([data-page="settings"]) .list-pane { display: none; }
+body[data-feature="pr"]:not([data-page="settings"]) .workspace { grid-template-columns: minmax(0, 1fr); }
+body[data-feature="pr"] .pane-back { display: none; }
+
 /* Edit layout: the titlebar button, only on the Workspace. */
 #btnLayout { display: none; }
 body[data-feature="jarvis"]:not([data-page="settings"]) #btnLayout:not([hidden]) { display: inline-grid; }
@@ -4258,6 +4264,41 @@ button.rr-main { cursor: pointer; }
 .pp-showing { color: var(--text-3); font-size: 12px; line-height: 18px; font-variant-numeric: tabular-nums; }
 .pp-err { color: var(--critical); font-size: 12px; line-height: 18px; }
 .pp-sentinel { height: 1px; }
+/* Select mode: a checkbox gutter on each row, and a bulk bar above the lists. */
+.pp-row { position: relative; }
+.pp-check {
+  position: absolute;
+  top: 7px;
+  left: 8px;
+  z-index: 1;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.pp-check:focus-visible,
+.pp-check-box:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.pp-row.is-selecting .rr-main { padding-left: 34px; }
+.pp-row.is-selecting .rr-p { padding-left: 50px; }
+.pp-row.is-selected { background: var(--accent-tint); }
+.pp-row.is-selected:hover { background: var(--accent-tint); }
+.pp-row.is-ctx { background: var(--fill-selected); box-shadow: inset 0 0 0 1px var(--divider); }
+.pp-bulk {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 6px;
+  padding: 2px 0 6px;
+  border-bottom: 1px solid var(--divider);
+}
+.pp-all { display: inline-flex; align-items: center; gap: 8px; min-width: 0; color: var(--text-2); font-size: 12.5px; line-height: 18px; cursor: pointer; }
+.pp-check-box { flex: none; width: 16px; height: 16px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.pp-count { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.pp-bulk-sp { flex: 1 1 auto; }
+.pp-bulk .btn { flex: none; }
+.pp-bulk .btn svg.ic { width: 14px; height: 14px; }
+.icon-btn[aria-pressed="true"] { background: var(--accent-tint); color: var(--accent-text); }
 /* A PR that starts needing you lights up once as it moves to the top. */
 .rr.flash { animation: rr-flash 1.4s var(--ease); }
 @keyframes rr-flash { 0%, 35% { background: var(--accent-tint); } }

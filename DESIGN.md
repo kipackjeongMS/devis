@@ -246,8 +246,8 @@ Every font size comes from one ramp of role tokens in `web/style.css`: `--fs-dis
 ## Layout
 
 - **The field and gutters.** The title bar sits directly on the field. Below it, panes float with an 8px gutter (`gutter`) on every side and between panes.
-- **Title bar (40px):** a glowing cyan brand mark and the app name, then the feature tabs (Workspace, Pull requests, Pipelines), and the inbox, refresh and settings on the right. The active feature tab carries a 16×3 cyan pill with a glow. In the desktop shell the native caption buttons are overlaid (`html.wco`); with the backdrop on (`html.glass`) their background is transparent so the field shows behind them.
-- **Queue pane (`--list-w`, 360–460px):** the My feed / All tabs, a search field, scope pickers (shown only when there is more than one org or project) and the bulk bar. See [Queue views](#queue-views).
+- **Title bar (40px):** a glowing cyan brand mark and the app name, then the feature tabs (Workspace, Pipelines), and the inbox, refresh and settings on the right. The active feature tab carries a 16×3 cyan pill with a glow. In the desktop shell the native caption buttons are overlaid (`html.wco`); with the backdrop on (`html.glass`) their background is transparent so the field shows behind them.
+- **PR window:** there is no Pull requests page. Workspace's Pull Requests panel lists and manages PRs, and a PR opens in one reusable window (see [The PR window](#the-pr-window)) that holds only the reading pane.
 - **Reading pane:** a frosted sticky detail head (title, ID, status, severity lights, author, branch, command bar and section tabs) above a single scrolling column with 24px side padding (`pane-pad`). That column holds the Review, Description, Discussion and Files sections, and the tabs follow the scroll. With nothing open, the pane shows the scanning reticle.
 - **Below 1100px** (`body.layout-stacked`), the reading pane floats over the queue as a solid sheet inset by the gutter. A back button appears in the detail head, and Esc returns to the originating row.
 - **Interface size:** Ctrl+= or Ctrl++ makes the whole interface larger, Ctrl+− smaller, and Ctrl+0 resets it to 100%, which is the size everything is designed at. Every part scales together, in every window (the main window and code windows), so proportions hold. Steps run from 50% to 200%, and a toast confirms each one ("Interface 110%"). The shell takes the keys before the page sees them, sets each window's zoom, and grows the caption buttons' strip with the 40px title bar. The level is saved in the data folder (`ui-zoom.json`), so the app opens at it. Electron's own zoom roles are removed from the menu. The task sheet reads 12.5% larger than the rest, since it's where a task is read.
@@ -319,38 +319,7 @@ Text fields use the `control` tint with a hairline border and a `stroke-input` b
 
 ### Navigation
 
-The feature tabs, the queue tabs and the section tabs share one language: plain labels in `text-2`, `text-1` when active, and a glowing 3px cyan pill or underline that slides in under the active one.
-
-### Queue row
-
-`.pr-card` holds a full-width `.pr-open` button, with a selection checkbox beside it. The row shows:
-- a two-line title;
-- a meta line with the mono ID, the repository (My feed only, since All already groups by it), the author (dropped in Your pull requests), age and branch;
-- a badge line.
-
-The open row is lit: a cyan wash that fades from left to right, a faint cyan ring and a glowing 3px cyan bar at its left edge. Selected rows get `accent-tint`; a row that is open and selected gets `accent-tint-2`.
-
-### Queue views
-
-Two tabs, remembered across launches. Counts in the tabs follow the search and scope.
-
-- **My feed** puts each PR that concerns you in exactly one lane, checked in this order:
-  1. **Your pull requests**: you authored it. PRs where a reviewer is waiting on you or rejected float to the top, and drafts fold into a closed "N drafts" group at the bottom of the lane.
-  2. **You've weighed in**: you voted or commented.
-  3. **Needs your review**: it is assigned to you.
-  4. **Copilot reviewed**: a Copilot review is queued, running, done or failed. Reviews in progress lead, then the most recently finished.
-
-  Lanes show in the order Needs your review, Copilot reviewed, You've weighed in, Your pull requests. Inside every lane, drafts sink below published PRs and the newest PR leads. A lane head may add one quiet note: the oldest review waiting, reviews in progress or failed, or PRs waiting on you.
-- **All** lists every PR in scope, grouped by repository (folded by default, sorted by name) with an Expand all / Collapse all command.
-- **Hide and restore.** Select rows in My feed and choose Hide; they leave the feed but stay in All. A footer counts hidden PRs and can show them in a "Hidden from your feed" lane, where Restore returns them. Queuing a Copilot review restores a PR automatically.
-- **Search** (Ctrl+F) filters both views. Terms are ANDed and case-insensitive; free text matches title, #ID, author, repository, project and branches. Qualifiers: `is:draft`, `is:published`, `is:reviewed`, `is:yours`, `is:assigned`, `repo:`, `author:`, `branch:`; a leading `-` negates any term. While searching, every group is open. Esc clears the field, then leaves it.
-- **Folds** remember their state per lane and per repository. The tabs, lane heads and repository heads are buttons with `aria-pressed` or `aria-expanded`.
-- **Keyboard:** Up and Down move between rows and group heads, Home and End jump to the ends, Right opens a group, and Left closes it or moves to the parent head.
-- **Bulk bar:** select-all covers only rows in open groups. At rest it shows a summary of the view; with a selection it shows the count, Hide or Restore (My feed), and Review All.
-- **Empty states** name what happened and offer the next step: clear the search, search all PRs, or browse all PRs when the feed is empty.
-- **Load failures** stay visible in the queue until the user retries with Refresh. Failed retrieval is never presented as "No open pull requests"; partial results remain usable with a warning, and background review updates cannot replace the error.
-- **Loading:** the queue opens on the last list ADO returned (kept for 7 days, and only for the same organizations and projects) while the live one loads, and Refresh swaps rows in place without blanking the list or losing the scroll position. The refresh button spins meanwhile. If ADO can't be reached, the list stays with a notice above it saying how old it is and why, with Retry; with nothing to show, the failure is the error screen.
-- **Rendering:** rows off screen skip layout and paint. A rebuilt row keeps the height its previous copy had, so the scroll position lands on the same row.
+The feature tabs and the section tabs share one language: plain labels in `text-2`, `text-1` when active, and a glowing 3px cyan pill or underline that slides in under the active one.
 
 ### Detail head
 
@@ -539,7 +508,7 @@ Covers every service; the service filter belongs to Tasks.
 - **Today so far:** see [below](#today-so-far).
 - **Needs you:** a worker is asking a question, waiting for an approval, or failed; or a task's validation needs you (a proposal to review, or a run that failed and you haven't looked at). One compact item per ask, longest wait first: the task's title, who asks (the worker, or who proposed the chain), how long it has waited, and the ask itself, answerable right there (the choices and answer box, Allow, Allow all and Deny, the repositories to confirm, Review the proposal, See what failed, or Open the chat for a failed worker). The task's title opens the task. A worker's open request is listed even after its task is marked done, so an approval is never hidden. With Today folded, Needs you moves to the top of Tasks, so it's never out of sight.
 - **→ To-do:** every Needs you item has a **To-do** button. It takes the ask on: the item leaves Needs you at once (and the "N need you" count with it), and a to-do takes its place in To-dos, worded from the ask ("Answer api: Which region?", "Allow or deny api: Run npm test", "Confirm api's repositories", "See why ui's turn failed", "Review the validation chain api proposed", "Look at the failed validation run", "Review PR 17701581: Add ARM staging (Dana asked)", "Confirm the canary date (Dana Lee in Teams)", "Approve the plan (Ann Lu by email)"). A toast offers **Undo** for six seconds (longer while the pointer is on it), which puts the ask back. The keyboard moves to the next item's To-do, or to the new to-do. The task's card keeps its warning, since the ask is still open; its label and jump go to the to-do instead.
-- **From Teams:** a pull request someone asked you to review in Teams is a Needs you item too (see [Teams: PR review asks](#teams-pr-review-asks)). Its head is the PR's title (two lines at most) with To-do and ✕ (Dismiss); under it, who asked, where ("in a 1:1 chat", "in Release crew") and when, what they wrote, and up to two more people who asked about the same PR. **Review PR** opens it in the Pull requests tab, even a PR not in your list; **Open in Teams** opens the message in the Teams app (the browser when Teams isn't installed). Dismiss takes it out at once.
+- **From Teams:** a pull request someone asked you to review in Teams is a Needs you item too (see [Teams: PR review asks](#teams-pr-review-asks)). Its head is the PR's title (two lines at most) with To-do and ✕ (Dismiss); under it, who asked, where ("in a 1:1 chat", "in Release crew") and when, what they wrote, and up to two more people who asked about the same PR. **Review PR** opens it in [the PR window](#the-pr-window), even a PR not in your list; **Open in Teams** opens the message in the Teams app (the browser when Teams isn't installed). Dismiss takes it out at once.
 - **From chats and email:** a Teams chat or email thread whose summary says someone waits on you (see [Communication](#communication)) is a Needs you item too: one per conversation, from its latest day that says so, this week. Its head is the conversation (the email's subject, a group's topic, "Chat with Dana Lee" for a 1:1) with To-do and ✕ (Dismiss); under it, who, where ("in a 1:1 chat", "in Release crew", "by email", "by email (cc)", "by email to a list") and when, and what they need. The head opens it in the Communication tab, opened and in view; **Open in Teams** or **Open in Outlook** opens the chat or the email. It leaves by itself once you write back (the next summary clears it). Dismiss says nobody waits: the conversation stops waiting on you that day and before, in Communication too, until someone asks again. A chat with an open PR review ask from Teams leaves its review line to that ask, which opens the PR.
 - **To-dos** and the **Quick note:** see [To-dos and the quick note](#to-dos-and-the-quick-note).
 - The head shows the date, how many need you, and how many to-dos are open.
@@ -557,7 +526,8 @@ Sections in order: Running, Open tasks, then Done today.
 - Empty sections stay quiet: Running, Open tasks and Done today hide.
 - The head holds the service filter, History and **+ Task**; in a narrow pane the buttons show icons only. The footer sums up the board ("1 needs you · 1 running · 2 open").
 - Clicking a task card, or its title, opens the task.
-- A task's pull requests show as chips under its title (`PR 17553390 · Active · 1 of 2 required approvals`), up to two, open ones first, then "+N". A chip turns amber when the PR needs someone: rejected, waiting for its author, a failing check or merge conflicts. Clicking one opens the task's Pull requests tab.
+- A task's pull requests show as chips under its title (`PR 17553390 · Active · 1 of 2 required approvals`), up to two, open ones first, then "+N". A chip turns amber when the PR needs someone: rejected, waiting for its author, a failing check or merge conflicts. Clicking one opens the PR window.
+- A task card has no visible menu button. Right-click it, or focus it and press Shift+F10 or the Menu key, for its menu; the actions, permissions and disabled states are the same as before.
 
 #### Pull Requests
 
@@ -569,9 +539,15 @@ A Workspace panel of its own, right after Tasks by default. It has two parts, **
 - **Reviews:** other people's PRs. Ones someone asked for in Teams lead, with an amber "Asked by Dana" link that opens the message in Teams. The rest go newest first, by the latest of a Copilot review, your comment or vote, the author's push, or when it opened. The line under the title says which ("Copilot reviewed", "You commented", "Pushed").
 - **Search and filters:** a search box and chips for **Assigned** (you're a reviewer), **Copilot reviewed**, **Weighed in** (you voted or commented) and **Drafts**. Chips combine. When nothing matches, one line says so, with **Clear search and filters**.
 - **Loading more:** 20 show at first. Scrolling to the end, or **Show 20 more**, adds the next 20. For a busy project the service reads only the first page of its active PRs, so past the end the panel reads the next page from Azure DevOps, by itself while you scroll or with **Load older pull requests**. A page that fails says so, with **Try again**.
-- **Every row:** has **Copilot review**, the same as on the Pull requests page, and its chip once reviewed or failed. Clicking a row opens the PR in the Pull requests tab.
+- **Every row:** has **Copilot review**, and its chip once reviewed or failed. Clicking a row opens the PR in [the PR window](#the-pr-window).
+- **Right-click:** a row's menu (also Shift+F10 or the Menu key on a focused row) has **Open in Azure DevOps** (with the ADO icon), **Open in separate window**, and **Copy link** (**Copy N links** when the row is part of a multi-selection). The menu always acts on the row you pointed at, never on the rest of the selection, and it never changes the selection. While it's open the row shows a quiet fill.
+- **Selecting:** the head's **Select** button (`aria-pressed`) turns on select mode, which puts a checkbox on every row. Ctrl/Cmd+click toggles a row and Shift+click selects the range from the last one, either of which also turns select mode on; in select mode a plain click toggles. Selected rows take `accent-tint`. Esc ends select mode. Folding a section, searching or filtering drops hidden rows from the selection, so a bulk action never touches a row you can't see.
+- **Bulk bar:** while selecting, a bar above the rows holds a tri-state select-all checkbox that reads "N selected" (or "Select pull requests"), **Clear**, **Copy links (N)** and **Review (N)**. Review queues a Copilot review for each selected PR that isn't already being reviewed, and one toast reports what was queued, skipped or failed. Hide/Restore from the old My feed went away with the feed.
 - **Saved layouts:** a layout saved before this panel existed gets it right after Tasks.
 
+#### The PR window
+
+A PR opens in a window of its own, the same detached-window pattern as View changes, and it shows the complete PR detail page (head, command bar, Review, Description, Discussion, Files). There is one: opening PR A creates it, opening PR B brings it forward and swaps in B, and the latest open always wins, so rapid clicks never leave a stale PR or its state behind. Closing it lets the next open create a fresh one at the same bounds. Changes made there (a vote, a review) show in Workspace at once. A `?prId=` deep link opens the same window.
 #### To-dos and the quick note
 
 Your own list and scratchpad in the Today pane. They belong to no day and no task, and stay until you change them.

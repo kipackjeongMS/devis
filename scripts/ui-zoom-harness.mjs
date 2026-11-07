@@ -71,7 +71,7 @@ assert.match(main, /setTitleBarOverlay\(\{ height: titleBarHeight\(uiZoom\) \}\)
 assert.match(main, /zoomFactor: uiZoom/, "a new window opens at the size");
 assert.match(main, /"ui-zoom\.json"/, "the size is saved in the data folder");
 assert.match(main, /contents\.on\("did-navigate", \(\) => sizeWindow\(window\)\)/, "a reload onto a new port keeps the size");
-assert.equal(main.match(/followUiZoom\(window\);/g)?.length, 2, "the main window and code windows both follow");
+assert.equal(main.match(/followUiZoom\(window\);/g)?.length, 3, "the main window, code windows and the PR window all follow");
 assert.match(main, /devis:ui-zoom/);
 assert.match(main, /Menu\.setApplicationMenu\(\s*Menu\.buildFromTemplate\(/);
 assert.doesNotMatch(main, /zoomIn|zoomOut|resetZoom/, "Electron's zoom roles would size one window on their own");
@@ -88,7 +88,7 @@ for (const [name, text] of [["readingPane", pane], ["jarvis", jarvis], ["jarvisT
 }
 assert.doesNotMatch(css, /--pane-zoom|data-zoom-view|--view-zoom|--view-base/);
 assert.match(css, /\.tm:not\(\.is-embedded\) > \* \{ zoom: 1\.125; \}/, "the task sheet reads a step larger");
-assert.match(pane, /if \(feature === "pipelines" \|\| feature === "jarvis"\) return;/, "the hidden reading pane leaves Escape to Pipelines and the Workspace");
+assert.match(pane, /if \(solo \|\| feature === "pipelines" \|\| feature === "jarvis"\) return;/, "the hidden reading pane leaves Escape to Pipelines and the Workspace");
 
 // Client rects are visual px inside a CSS-zoomed subtree (the task sheet); layout and scroll offsets stay local px.
 assert.match(nav, /scroller\.currentCSSZoom/, "section offsets convert rects to scroll space");

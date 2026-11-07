@@ -29,10 +29,10 @@ assert.deepEqual(entries.map((e) => e.kind), ["checked"]);
 assert.equal(entries[0].text, `${pr(1).url}\n${pr(2).url}`);
 assert.equal(entries[0].count, 2);
 
-// ---- wiring: the queue listens for right-clicks on PR rows and uses the checked set ----
-const list = await readFile(new URL("../web/src/list.ts", import.meta.url), "utf8");
-assert.match(list, /view\.addEventListener\("contextmenu"/);
-assert.match(list, /closest<HTMLElement>\("\.pr-card"\)/);
-assert.match(list, /linkMenuEntries\(pr, checkedPrs\(\), reviewSel\.has\(key\)\)/);
+// ---- wiring: a PR row's right-click menu acts on that row and uses the selection ----
+const jarvis = await readFile(new URL("../web/src/jarvis.ts", import.meta.url), "utf8");
+assert.match(jarvis, /root\.addEventListener\("contextmenu", onContextMenu\)/);
+assert.match(jarvis, /closest<HTMLElement>\("\.rr\[data-pr\], \.rr\[data-task\]"\)/);
+assert.match(jarvis, /linkMenuEntries\(pr, selectedPrs\(\), contextIsSelectedRow\(id\)\)/);
 
 console.log("PR link copy harness passed");

@@ -512,7 +512,8 @@ for (const [graph, id, resources] of [
 const source = (file) => readFile(new URL(file, import.meta.url), "utf8");
 const html = await source("../web/index.html");
 assert.match(html, /<nav[^>]+class="feature-nav"[^>]+aria-label="Features"/);
-assert.match(html, /data-feature="prs"/);
+assert.doesNotMatch(html, /data-feature="prs"/, "the Pull requests tab is retired");
+assert.match(html, /data-feature="jarvis"/);
 assert.match(html, /data-feature="pipelines"/);
 assert.match(html, /id="pipelinesView"/);
 const css = await source("../web/style.css");
@@ -540,7 +541,7 @@ assert.match(canvasSource, /onBlockAction/);
 assert.match(canvasSource, /repoCount/, "blocks show how many repository branches they set");
 assert.match(canvasSource, /not part of this run/, "blocks outside a live run say so to screen readers");
 const reading = await source("../web/src/readingPane.ts");
-assert.match(reading, /if \(feature === "pipelines" \|\| feature === "jarvis"\) return;/, "the hidden reading pane leaves Escape to Pipelines");
+assert.match(reading, /if \(solo \|\| feature === "pipelines" \|\| feature === "jarvis"\) return;/, "the hidden reading pane leaves Escape to Pipelines");
 const app = await source("../web/src/app.ts");
 assert.match(app, /from "\.\/pipelines\.js"/);
 assert.match(app, /setFeature\(/);

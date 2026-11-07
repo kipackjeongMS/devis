@@ -9,7 +9,14 @@ import { SPLIT_MIN_WIDTH } from "./shellModel.js";
 let scroller: HTMLElement | null = null;
 let onCloseCb: (() => void) | null = null;
 let returnFocus: HTMLElement | null = null;
+/** The PR window: the pane is the whole page, so it never stacks, never goes modal and Esc doesn't close it. */
+let solo = false;
 const split = window.matchMedia(`(min-width: ${SPLIT_MIN_WIDTH}px)`);
+
+export function setSoloPane(on: boolean): void {
+  solo = on;
+  syncMode();
+}
 
 function renderEmpty(): void {
   readingPane.replaceChildren(
@@ -40,7 +47,7 @@ function onKey(e: KeyboardEvent): void {
   if (e.defaultPrevented) return;
   // Pipelines and the Workspace hide the pane; Escape there is theirs.
   const feature = document.body.dataset.feature;
-  if (feature === "pipelines" || feature === "jarvis") return;
+  if (solo || feature === "pipelines" || feature === "jarvis") return;
   if (e.key !== "Escape" || !scroller) return;
   if (isTextEntry(e.target) || document.querySelector(".ask-overlay")) return;
   e.preventDefault();
@@ -48,7 +55,7 @@ function onKey(e: KeyboardEvent): void {
 }
 
 function syncMode(): void {
-  const stacked = !split.matches;
+  const stacked = !solo && !split.matches;
   const modal = stacked && scroller != null;
   readingPane.setAttribute("role", modal ? "dialog" : "region");
   if (modal) readingPane.setAttribute("aria-modal", "true");

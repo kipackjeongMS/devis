@@ -8,6 +8,10 @@ export interface ContextMenuEntry {
   label: string;
   icon?: IconName;
   run: () => void;
+  /** Shown but not available: it stays in the arrow-key order (aria-disabled) and doesn't run. */
+  disabled?: boolean;
+  /** The entry's reason or detail, as a second line. */
+  hint?: string;
 }
 
 let closeOpen: (() => void) | null = null;
@@ -17,15 +21,26 @@ export function closeContextMenu(): void {
 }
 
 /**
+ * Where a context menu opens for a `contextmenu` event on `anchor`. The pointer's own position, or,
+ * when the keyboard opened it (Shift+F10, the Menu key: the event reports 0, 0), the anchor's edge.
+ */
+export function menuPoint(e: MouseEvent, anchor: HTMLElement): { x: number; y: number } {
+  if (e.clientX !== 0 || e.clientY !== 0) return { x: e.clientX, y: e.clientY };
+  const rect = anchor.getBoundingClientRect();
+  return { x: rect.left + 24, y: rect.top + rect.height / 2 };
+}
+
+/**
  * Open a menu at viewport point (x, y), clamped to the window. `restoreFocus`
- * runs when the menu closes by Esc, Tab, or choosing an item.
+ * runs when the menu closes by Esc, Tab, or choosing an item; `onClose` runs on every close.
  */
 export function openContextMenu(
   x: number,
   y: number,
   label: string,
   entries: ContextMenuEntry[],
-  restoreFocus?: () => void
+  restoreFocus?: () => void,
+  onClose?: () => void
 ): void {
   closeContextMenu();
   if (!entries.length) return;
@@ -33,12 +48,15 @@ export function openContextMenu(
   const menu = el(`<div class="detail-menu ctx-menu" role="menu" aria-label="${esc(label)}"></div>`);
   const items = entries.map((entry) => {
     const item = el<HTMLButtonElement>(
-      `<button type="button" class="detail-menu-item" role="menuitem">` +
+      `<button type="button" class="detail-menu-item" role="menuitem"${entry.disabled ? ' aria-disabled="true"' : ""}>` +
         `<span class="detail-menu-check" aria-hidden="true">${entry.icon ? icon(entry.icon) : ""}</span>` +
-        `<span class="detail-menu-text"><span class="detail-menu-label">${esc(entry.label)}</span></span>` +
+        `<span class="detail-menu-text"><span class="detail-menu-label">${esc(entry.label)}</span>${
+          entry.hint ? `<span class="detail-menu-hint">${esc(entry.hint)}</span>` : ""
+        }</span>` +
         `</button>`
     );
     item.addEventListener("click", () => {
+      if (entry.disabled) return;
       close(true);
       entry.run();
     });
@@ -90,6 +108,7 @@ export function openContextMenu(
     window.removeEventListener("blur", dismiss);
     menu.remove();
     closeOpen = null;
+    onClose?.();
     if (restore) restoreFocus?.();
   }
 

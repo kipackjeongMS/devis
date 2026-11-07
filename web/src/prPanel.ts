@@ -6,7 +6,7 @@ import { getJSON } from "./api.js";
 import { esc } from "./util.js";
 import { icon } from "./icons.js";
 import { state } from "./state.js";
-import { reviewPhase } from "./list.js";
+import { reviewPhase } from "./prReview.js";
 import { reviewStateKey } from "./reviewKey.js";
 import { loadPrRecency } from "./prRecency.js";
 import { inboxItems } from "./inboxPanel.js";
@@ -25,6 +25,18 @@ import {
   type PrFilter,
   type ReviewRow,
 } from "./prPanelModel.js";
+import {
+  checkState,
+  contextIsSelected,
+  pruned,
+  ranged,
+  rowClick,
+  selectedInOrder,
+  toggled,
+  toggledAll,
+  type ClickMods,
+  type RowClick,
+} from "./prSelectionModel.js";
 import type { CappedProject, PR } from "./types.js";
 
 export interface PrPanelContext {
@@ -97,6 +109,76 @@ let flashTimer = 0;
 /** The panel repaints through jarvis.ts, which knows when the Workspace is on screen. */
 export function initPrPanel(repaint: () => void): void {
   rerender = repaint;
+}
+
+// ---- selection ----------------------------------------------------------------------
+// Select mode shows a checkbox on every row and the bulk bar. Selection is by identity and
+// only ever holds rows that are listed, so the count matches what's on screen.
+
+let selecting = false;
+let selected: ReadonlySet<string> = new Set();
+let anchor: string | null = null;
+/** The rows on screen, in order, and the PRs behind them. */
+let order: string[] = [];
+const listed = new Map<string, PR>();
+/** The row whose context menu is open. */
+let ctxId: string | null = null;
+
+export const contextIsSelectedRow = (id: string): boolean => contextIsSelected(selected, id);
+export const isSelecting = (): boolean => selecting;
+export const selectionSize = (): number => selected.size;
+export const prAt = (id: string): PR | undefined => listed.get(id);
+export const isSelected = (id: string): boolean => selected.has(id);
+export const setContextRow = (id: string | null): void => void (ctxId = id);
+
+/** The selected PRs, in the order they're listed. */
+export const selectedPrs = (): PR[] => selectedInOrder(selected, order).flatMap((id) => listed.get(id) ?? []);
+
+export function setSelecting(on: boolean): void {
+  selecting = on;
+  if (!on) {
+    selected = new Set();
+    anchor = null;
+  }
+}
+
+export const clearSelection = (): void => void (selected = new Set());
+
+export function toggleAll(): void {
+  selected = toggledAll(selected, order);
+  anchor = null;
+}
+
+/** A click on a row's title or checkbox. Returns what it should do: open the PR, or repaint. */
+export function clickRow(id: string, mods: ClickMods): RowClick {
+  const how = rowClick(selecting, mods);
+  if (how === "open") return how;
+  selecting = true;
+  selected = how === "range" ? ranged(selected, order, anchor, id) : toggled(selected, id);
+  anchor = id;
+  return how;
+}
+
+/** The header checkbox is tri-state, which HTML can't carry; call after each paint. */
+export function syncSelectionUi(body: HTMLElement): void {
+  const all = body.querySelector<HTMLInputElement>('[data-role="select-all"]');
+  if (all) all.indeterminate = checkState(selected, order) === "some";
+}
+
+function bulkBar(): string {
+  const n = selected.size;
+  const state = checkState(selected, order);
+  const tail = n ? ` (${n})` : "";
+  return `
+    <div class="pp-bulk" data-key="bulk" role="toolbar" aria-label="Selected pull requests">
+      <label class="pp-all" title="Select every listed pull request"><input type="checkbox" class="pp-check-box" data-act="pr-select-all" data-role="select-all" aria-label="Select all listed pull requests"${
+        state === "all" ? " checked" : ""
+      }${order.length ? "" : " disabled"}><span class="pp-count" aria-live="polite">${n ? `${n} selected` : "Select pull requests"}</span></label>
+      <button type="button" class="btn sm ghost" data-act="pr-bulk-clear"${n ? "" : " disabled"}>Clear</button>
+      <span class="pp-bulk-sp"></span>
+      <button type="button" class="btn sm ghost" data-act="pr-bulk-copy" title="Copy a link to each selected pull request"${n ? "" : " disabled"}>${icon("copy")}<span>Copy links${tail}</span></button>
+      <button type="button" class="btn sm" data-act="pr-bulk-review" title="Queue a Copilot review for each selected pull request"${n ? "" : " disabled"}>${icon("sparkle")}<span>Review${tail}</span></button>
+    </div>`;
 }
 
 export function toggleFold(which: string | undefined): void {
@@ -246,9 +328,13 @@ function row(pr: PR, ctx: PrPanelContext, dot: string, at: string, line: string)
   const id = prIdentity(pr);
   const flash = (flashing.get(id) || 0) > ctx.now ? " flash" : "";
   const meta = `#${pr.id} · ${pr.repo} · ${pr.author} · opened ${agoPhrase(pr.created, ctx.now) || "a while ago"}${pr.isDraft ? " · Draft" : ""}`;
+  const on = selected.has(id);
+  const check = selecting
+    ? `<input type="checkbox" class="pp-check" data-act="pr-select" aria-label="Select #${pr.id} ${esc(pr.title)}"${on ? " checked" : ""}>`
+    : "";
   return `
-    <div class="rr pp-row${flash}" data-key="pr:${esc(id)}" data-pr="${esc(JSON.stringify([pr.org, pr.project, pr.repoId, pr.id]))}">
-      <button type="button" class="rr-main" data-act="open-pr" title="${esc(meta)}">
+    <div class="rr pp-row${flash}${on ? " is-selected" : ""}${ctxId === id ? " is-ctx" : ""}${selecting ? " is-selecting" : ""}" data-key="pr:${esc(id)}" data-pr="${esc(JSON.stringify([pr.org, pr.project, pr.repoId, pr.id]))}">
+      ${check}<button type="button" class="rr-main" data-act="open-pr" aria-haspopup="menu" aria-keyshortcuts="Shift+F10" title="${esc(meta)}">
         <span class="rdot tone-${dot}"></span><span class="rr-t ell">${esc(pr.title)}</span><span class="rr-tm">${esc(ago(at, ctx.now))}</span>
       </button>
       <span class="rr-ha">${copilotButton(pr, ctx)}</span>
@@ -343,6 +429,16 @@ export function prPanelHtml(ctx: PrPanelContext): PrPanelView {
   });
   lastTotal = reviews.length;
 
+  // What's listed now, in order. A folded section lists nothing.
+  const shownReviews = reviews.slice(0, shown);
+  const rows = [...(folded.has("mine") ? [] : mine.map((r) => r.pr)), ...(folded.has("reviews") ? [] : shownReviews.map((r) => r.pr))];
+  order = rows.map(prIdentity);
+  listed.clear();
+  for (const pr of rows) listed.set(prIdentity(pr), pr);
+  selected = pruned(selected, order);
+  if (anchor !== null && !listed.has(anchor)) anchor = null;
+  if (ctxId !== null && !listed.has(ctxId)) ctxId = null;
+
   // Rows that start needing you, or get new activity, flash once.
   if (ctx.loaded && inboxReady) {
     const keys = new Set<string>();
@@ -369,13 +465,13 @@ export function prPanelHtml(ctx: PrPanelContext): PrPanelView {
   else if (!reviews.length && searching)
     list = `<p class="rs-empty" data-key="empty">No pull requests match.</p><button type="button" class="rs-more" data-key="clear" data-act="pr-clear">Clear search and filters</button>`;
   else if (!reviews.length) list = '<p class="rs-empty" data-key="empty">No pull requests to review.</p>';
-  else list = reviews.slice(0, shown).map((r) => reviewRowHtml(r, ctx)).join("");
+  else list = shownReviews.map((r) => reviewRowHtml(r, ctx)).join("");
   const busy = cappedInScope(ctx.service).some((c) => olderOf(c).loading);
   const reviewsBody = `${reviewsTools()}<div class="pp-list" data-key="list"${busy ? ' aria-busy="true"' : ""}>${list}</div>${ctx.loaded ? reviewsFoot(reviews.length, ctx.service) : ""}`;
 
   const newCount = mine.filter((r) => r.attention === "activity").length;
   return {
-    html: subSection("mine", "My PRs", mine.length, mineBody) + subSection("reviews", "Reviews", reviews.length, reviewsBody),
+    html: (selecting ? bulkBar() : "") + subSection("mine", "My PRs", mine.length, mineBody) + subSection("reviews", "Reviews", reviews.length, reviewsBody),
     count: mine.length + reviews.length,
     newCount,
     newLabel: `${newCount} with new comments`,

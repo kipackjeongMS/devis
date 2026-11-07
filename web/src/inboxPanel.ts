@@ -1,9 +1,8 @@
 // The notification bell + flyout. Renders the persisted inbox feed, marks items
-// read on click, and routes a click to the PR (in-canvas detail when the PR is
-// in the current list, else the ADO url in a new tab).
+// read on click, and routes a click to the PR window.
 import { postJSON } from "./api.js";
 import { state } from "./state.js";
-import { openDetail } from "./detail.js";
+import { openPrWindow } from "./prWindow.js";
 import { esc, plainSnippet, timeAgo } from "./util.js";
 import { requestNotifyPermission } from "./notifyWatch.js";
 import { matchNotificationPr } from "./inboxRoute.js";
@@ -210,7 +209,7 @@ async function onRow(id: string): Promise<void> {
 function route(n: Notification): void {
   const pr = matchNotificationPr(state.prs, n);
   if (pr) {
-    void openDetail(pr);
+    openPrWindow(pr);
     return;
   }
   if (n.url) window.open(n.url, "_blank", "noopener");
