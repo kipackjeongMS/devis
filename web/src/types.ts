@@ -38,10 +38,11 @@ export interface PR {
   url: string;
 }
 
-/** A project whose active PRs ran past the first page of /api/prs. */
+/** A project, or one picked repo in it, whose active PRs ran past the first page of /api/prs. */
 export interface CappedProject {
   org: string;
   project: string;
+  repo?: string;
 }
 
 /** The commit anchors for a PR's latest iteration. */
@@ -178,6 +179,8 @@ export interface ActiveReviewJob {
 export interface Config {
   organizations: string[];
   projects: Record<string, string[]>;
+  /** Per org and project, the repos picked to narrow a busy project; a project without any loads whole. */
+  repos?: Record<string, Record<string, string[]>>;
   reviewModel: string;
   reviewsDir: string;
   /** Repos Jarvis workers can work in, cloned under the Jarvis folder. */

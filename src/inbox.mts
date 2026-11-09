@@ -20,7 +20,7 @@
 //                    comment, qualify — robust to ADO's flat parentCommentId
 //                    (replies don't reliably point at the specific comment they
 //                    answer, only at the thread root).
-import { readConfig } from "./config.mjs";
+import { prScopes, readConfig } from "./config.mjs";
 import {
     getMe,
     getPrSummary,
@@ -395,11 +395,11 @@ export async function scanInbox(deps: InboxAdoDependencies = defaultDeps): Promi
         // the same pass.
         const handledThreadKeys = new Set<string>();
         let discoveryPool: Pr[] = [];
-        const projects = cfg.projects[org] || [];
+        const scopes = prScopes(cfg, org);
         try {
-            if (projects.length) {
-                const perProject = await mapPool(projects, PROJECT_CONCURRENCY, (project) =>
-                    deps.listActivePRs(org, project),
+            if (scopes.length) {
+                const perProject = await mapPool(scopes, PROJECT_CONCURRENCY, ({ project, repo }) =>
+                    deps.listActivePRs(org, project, repo),
                 );
                 for (const list of perProject) discoveryPool.push(...list);
             } else {

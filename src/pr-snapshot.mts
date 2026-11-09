@@ -12,6 +12,7 @@ export const PR_SNAPSHOT_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
 interface Scope {
     organizations: string[];
     projects: Record<string, string[]>;
+    repos?: Record<string, Record<string, string[]>>;
 }
 
 interface Snapshot {
@@ -20,9 +21,18 @@ interface Snapshot {
     prs: Pr[];
 }
 
-/** The orgs and projects a list was loaded for; a list from other settings is never shown. */
+/** The orgs, projects and picked repos a list was loaded for; a list from other settings is never shown. */
 export function prScopeKey(cfg: Scope): string {
-    return JSON.stringify(cfg.organizations.map((org) => [org, [...(cfg.projects[org] || [])].sort()]));
+    return JSON.stringify(
+        cfg.organizations.map((org) => {
+            const projects = [...(cfg.projects[org] || [])].sort();
+            const repos = projects
+                .map((p) => [p, [...(cfg.repos?.[org]?.[p] || [])].map((r) => r.toLowerCase()).sort()] as const)
+                .filter(([, list]) => list.length);
+            // Without picked repos the key stays as it was, so a kept list still shows.
+            return repos.length ? [org, projects, repos] : [org, projects];
+        }),
+    );
 }
 
 /** Keep a complete list (one where every org and project answered). */

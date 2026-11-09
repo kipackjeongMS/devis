@@ -433,14 +433,14 @@ export async function listAssignedPRs(org: string): Promise<Pr[]> {
     return prs;
 }
 
-// All active PRs in one (org, project), each tagged `mine` when the current user
-// is a reviewer OR the author. Two parallel project-scoped calls: the full active
-// set, plus the reviewer=me subset (ADO expands group/team reviewers server-side,
-// so a PR assigned to me via a group is still correctly flagged `mine`) — the
-// full set already contains PRs I authored, so mapPr folds those in too.
-export async function listActivePRs(org: string, project: string): Promise<Pr[]> {
+// All active PRs in one (org, project), or in one repo of it, each tagged `mine`
+// when the current user is a reviewer OR the author. Two parallel calls: the full
+// active set, plus the reviewer=me subset. reviewer=me matches only a direct
+// assignment; ADO doesn't expand group or team reviewers. The full set already
+// contains PRs I authored, so mapPr folds those in too.
+export async function listActivePRs(org: string, project: string, repo?: string): Promise<Pr[]> {
     const me = await getMe(org);
-    const base = `${orgBase(org)}/${enc(project)}/_apis/git/pullrequests`;
+    const base = activePrBase(org, project, repo);
     const q = `searchCriteria.status=active&$top=${ACTIVE_PR_PAGE}&${API}`;
     const [allData, mineData] = await Promise.all([
         adoJson("GET", `${base}?${q}`),
@@ -476,14 +476,25 @@ export async function getPrSummary(
     return mapPr(org, raw, assignedDirectly, me.id);
 }
 
-/** How many active PRs listActivePRs reads per project; a full page means there are older ones. */
+/** How many active PRs listActivePRs reads per project or repo; a full page means there are older ones. */
 export const ACTIVE_PR_PAGE = 200;
 const OLDER_PR_PAGE = 100;
 
-/** The next page of a project's active PRs past the first `skip`, for loading older PRs on demand. */
-export async function listOlderActivePRs(org: string, project: string, skip: number): Promise<{ prs: Pr[]; more: boolean }> {
+/** The pull requests endpoint for a project, or for one repo (by name) in it. */
+function activePrBase(org: string, project: string, repo?: string): string {
+    const scope = repo ? `git/repositories/${enc(repo)}/pullrequests` : "git/pullrequests";
+    return `${orgBase(org)}/${enc(project)}/_apis/${scope}`;
+}
+
+/** The next page of a project's (or repo's) active PRs past the first `skip`, for loading older PRs on demand. */
+export async function listOlderActivePRs(
+    org: string,
+    project: string,
+    skip: number,
+    repo?: string,
+): Promise<{ prs: Pr[]; more: boolean }> {
     const me = await getMe(org);
-    const base = `${orgBase(org)}/${enc(project)}/_apis/git/pullrequests`;
+    const base = activePrBase(org, project, repo);
     const data = await adoJson(
         "GET",
         `${base}?searchCriteria.status=active&$top=${OLDER_PR_PAGE}&$skip=${Math.max(0, Math.floor(skip))}&${API}`,

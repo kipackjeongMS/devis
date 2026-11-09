@@ -3,7 +3,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { BodyTooLargeError, sendJson, sendBuffer, readBody } from "./http.mjs";
-import { readConfig, writeConfig } from "./config.mjs";
+import { prScopes, readConfig, writeConfig } from "./config.mjs";
 import { ensureDb, getReview, listReviews, listActiveReviewJobs, upsertReview, publishReviewRun, expireStaleReviews, markFindingPosted, markSemanticFindingPosted, setFindingHumanizedComment, setSemanticFindingHumanizedComment, setDismissed, listPlateDismissals, onPlateDismissed, setPlateDismissed, listNotifications, unreadCount, markNotificationsRead, markAllNotificationsRead, reviewIdentityKey, legacyReviewKey, pruneCommentActivity, prunePrRecency, type ReviewIdentity } from "./store.mjs";
 import { commentActivity } from "./comment-activity.mjs";
 import { prRecency } from "./pr-recency.mjs";
@@ -228,7 +228,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
 
         // ---- active PRs across all configured (org, project) scopes ----
         // Orgs with configured projects return ALL active PRs in those projects
-        // (each tagged `mine`); orgs without projects fall back to reviewer=me.
+        // (or only in a project's picked repos, each tagged `mine`); orgs without
+        // projects fall back to reviewer=me.
         // Filtering by org/project/assignment happens client-side.
         if (p === "/api/prs" && req.method === "GET") {
             const cfg = await readConfig();
@@ -243,21 +244,21 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
             const refreshActivity = q.get("refresh") === "1";
             const prs: Pr[] = [];
             const authoredAll: Pr[] = [];
-            const capped: Array<{ org: string; project: string }> = [];
+            const capped: Array<{ org: string; project: string; repo?: string }> = [];
             const errors: string[] = [];
             const tasks: Promise<void>[] = [];
             for (const org of cfg.organizations) {
-                const projects = cfg.projects[org] || [];
-                if (projects.length) {
-                    for (const project of projects) {
+                const scopes = prScopes(cfg, org);
+                if (scopes.length) {
+                    for (const { project, repo } of scopes) {
                         tasks.push(
                             (async () => {
                                 try {
-                                    const found = await listActivePRs(org, project);
+                                    const found = await listActivePRs(org, project, repo);
                                     prs.push(...found);
-                                    if (found.length >= ACTIVE_PR_PAGE) capped.push({ org, project });
+                                    if (found.length >= ACTIVE_PR_PAGE) capped.push(repo ? { org, project, repo } : { org, project });
                                 } catch (e) {
-                                    errors.push(`${org}/${project}: ${(e as Error).message}`);
+                                    errors.push(`${org}/${project}${repo ? `/${repo}` : ""}: ${(e as Error).message}`);
                                 }
                             })(),
                         );
@@ -311,17 +312,19 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
             return sendJson(res, 200, { prs, authored, capped, errors, activityPending, recencyPending });
         }
 
-        // ---- older active PRs in one configured project, past the first `skip` ----
+        // ---- older active PRs in one configured project (or picked repo), past the first `skip` ----
         if (p === "/api/prs/older" && req.method === "GET") {
             const cfg = await readConfig();
             const org = q.get("org") || "";
             const project = q.get("project") || "";
+            const repo = q.get("repo") || "";
             const skip = Number(q.get("skip"));
-            if (!cfg.organizations.includes(org) || !(cfg.projects[org] || []).includes(project)) {
-                return sendJson(res, 400, { error: "not a configured project" });
-            }
+            const scope = cfg.organizations.includes(org)
+                ? prScopes(cfg, org).find((s) => s.project === project && (s.repo || "") === repo)
+                : undefined;
+            if (!scope) return sendJson(res, 400, { error: "not a configured project or repo" });
             if (!Number.isFinite(skip) || skip < 0) return sendJson(res, 400, { error: "skip must be a number" });
-            const page = await listOlderActivePRs(org, project, skip);
+            const page = await listOlderActivePRs(org, project, skip, scope.repo);
             await ensureDb();
             markDismissed(page.prs);
             const activityPending = await commentActivity.apply(page.prs);

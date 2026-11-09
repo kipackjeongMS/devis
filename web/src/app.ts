@@ -26,6 +26,7 @@ import { showAgencyBanner } from "./staleBanner.js";
 import { applyShellClasses } from "./shell.js";
 import { loadPrRecency, prIdentity } from "./prRecency.js";
 import { announcePrUpdated, onPrUpdatedElsewhere } from "./prWindow.js";
+import { addScope, removeScope, scopeChips } from "./prScopes.js";
 import type { PR } from "./types.js";
 
 interface CopilotRuntimeInfo {
@@ -263,13 +264,18 @@ function renderSettings(): void {
   scopes.appendChild(el(`<h2 id="settingsScopes">Organizations &amp; projects</h2>`));
   scopes.appendChild(
     el(
-      `<div class="desc">Add <b>projects</b> under an org to load <b>all active PRs</b> in those projects; leave projects empty to load only PRs where you're a reviewer. Auth uses your local <code>az</code> login.</div>`
+      `<div class="desc">Add <b>projects</b> under an org to       load <b>all active PRs</b> in those projects; leave projects empty to load only PRs where you're a reviewer. For a busy project, add <code>Project/Repo</code> to load only that repo's PRs. Auth uses your local <code>az</code> login.</div>`
     )
   );
 
   const orgs = [...(state.config.organizations || [])];
   const projects: Record<string, string[]> = {};
-  for (const o of orgs) projects[o] = [...((state.config.projects && state.config.projects[o]) || [])];
+        const repos: Record<string, Record<string, string[]>> = {};
+        for (const o of orgs) {
+          projects[o] = [...((state.config.projects && state.config.projects[o]) || [])];
+          repos[o] = {};
+          for (const [p, list] of Object.entries(state.config.repos?.[o] || {})) repos[o][p] = [...list];
+        }
 
   const listEl = el(`<div class="org-list"></div>`);
 
@@ -285,6 +291,7 @@ function renderSettings(): void {
       rm.addEventListener("click", () => {
         orgs.splice(i, 1);
         delete projects[o];
+        delete repos[o];
         paint();
       });
       head.appendChild(rm);
@@ -293,14 +300,19 @@ function renderSettings(): void {
       const projWrap = el(`<div class="proj-wrap"></div>`);
       const chips = el(`<div class="proj-chips"></div>`);
       const list = projects[o] || (projects[o] = []);
+      const picked = repos[o] || (repos[o] = {});
       if (!list.length) chips.appendChild(el(`<span class="proj-empty">Assigned-to-me only</span>`));
-      list.forEach((proj, j) => {
-        const chip = el(`<span class="proj-chip">${esc(proj)}</span>`);
+      scopeChips(list, picked).forEach((c) => {
+        const label = c.repo ? `${c.project} / ${c.repo}` : c.project;
+        const what = c.repo ? "repo" : "project";
+        const chip = el(
+          `<span class="proj-chip" title="${c.repo ? "Only this repo's PRs" : "All PRs in this project"}">${esc(label)}</span>`
+        );
         const x = el(
-          `<button type="button" class="chip-x" title="Remove project" aria-label="Remove project ${esc(proj)}">${icon("dismiss")}</button>`
+          `<button type="button" class="chip-x" title="Remove ${what}" aria-label="Remove ${what} ${esc(label)}">${icon("dismiss")}</button>`
         );
         x.addEventListener("click", () => {
-          list.splice(j, 1);
+          removeScope(list, picked, c);
           paint();
         });
         chip.appendChild(x);
@@ -309,18 +321,17 @@ function renderSettings(): void {
       projWrap.appendChild(chips);
 
       const addRow = el(
-        `<div class="proj-add"><input type="text" placeholder="Add project (e.g. Azure AppConfig)" aria-label="Add project to ${esc(o)}" /><button type="button" class="btn sm">Add</button></div>`
+        `<div class="proj-add"><input type="text" placeholder="Add project or Project/Repo" aria-label="Add project or Project/Repo to ${esc(o)}" /><button type="button" class="btn sm">Add</button></div>`
       );
       const pin = addRow.querySelector("input") as HTMLInputElement;
       const pbtn = addRow.querySelector("button") as HTMLButtonElement;
       const addProj = () => {
-        const v = pin.value.trim();
-        if (v && !list.includes(v)) {
-          list.push(v);
-          paint();
-        }
+        const changed = addScope(list, picked, pin.value);
         pin.value = "";
-        pin.focus();
+        if (changed) {
+          paint();
+          (listEl.querySelectorAll(".proj-add input")[i] as HTMLInputElement | undefined)?.focus();
+        } else pin.focus();
       };
       pbtn.addEventListener("click", addProj);
       pin.addEventListener("keydown", (e) => {
@@ -347,6 +358,7 @@ function renderSettings(): void {
     if (v && !orgs.includes(v)) {
       orgs.push(v);
       projects[v] = [];
+      repos[v] = {};
       paint();
     }
     input.value = "";
@@ -465,6 +477,7 @@ function renderSettings(): void {
       state.config = await postJSON("/api/config", {
         organizations: orgs,
         projects,
+        repos,
         reviewModel: selectedModel,
         reviewsDir: reviewsDir.trim(),
         ...jarvis.values(),

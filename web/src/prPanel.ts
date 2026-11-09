@@ -91,7 +91,7 @@ interface OlderPages {
   error: string;
 }
 const older = new Map<string, OlderPages>();
-const olderKey = (c: CappedProject): string => `${c.org}/${c.project}`;
+const olderKey = (c: CappedProject): string => `${c.org}/${c.project}/${c.repo || ""}`;
 function olderOf(c: CappedProject): OlderPages {
   let pages = older.get(olderKey(c));
   if (!pages) older.set(olderKey(c), (pages = { skip: FIRST_PAGE, more: true, loading: false, error: "" }));
@@ -240,7 +240,8 @@ export async function loadOlder(service: string, manual: boolean): Promise<void>
     targets.map(async (c) => {
       const pages = olderOf(c);
       try {
-        const res = await getJSON(`/api/prs/older?org=${encodeURIComponent(c.org)}&project=${encodeURIComponent(c.project)}&skip=${pages.skip}`);
+        const repo = c.repo ? `&repo=${encodeURIComponent(c.repo)}` : "";
+        const res = await getJSON(`/api/prs/older?org=${encodeURIComponent(c.org)}&project=${encodeURIComponent(c.project)}${repo}&skip=${pages.skip}`);
         const page: PR[] = res.prs || [];
         pages.skip += page.length;
         pages.more = !!res.more && page.length > 0;

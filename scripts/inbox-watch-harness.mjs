@@ -106,6 +106,7 @@ function setSummary(orgName, project, repoId, prId, pr, error = null) {
     org(orgName).summaries.set(groupKey(project, repoId, prId), { pr, error });
 }
 
+const activeCalls = [];
 const deps = {
     async getMe(orgName) {
         const rec = org(orgName);
@@ -117,7 +118,8 @@ const deps = {
         if (rec.authoredError) throw new Error(rec.authoredError);
         return rec.authoredPrs;
     },
-    async listActivePRs(orgName, project) {
+    async listActivePRs(orgName, project, repo) {
+        activeCalls.push({ org: orgName, project, repo });
         const rec = org(orgName);
         if (rec.discoveryError) throw new Error(rec.discoveryError);
         return rec.activePool.filter((p) => p.project === project);
@@ -459,6 +461,25 @@ try {
     assert.equal(store.listInboxWatches("org-a").some((w) => w.pr_id === "901"), false, "a PR that no longer exists is dropped");
     assert.equal(gonePoll.diagnostics.find((d) => d.org === "org-a").watermarkAdvanced, true, "and doesn't hold the org's watermark back");
     console.log("Case 10 (watch upkeep: touch, quiet prune, gone PRs) passed");
+
+    // =========================================================================
+    // CASE 11 -- a busy project narrowed to picked repos: discovery lists each
+    // picked repo, not the whole project; a project without picks stays whole.
+    // =========================================================================
+    await writeConfigFile({
+        organizations: ["org-a", "org-b"],
+        projects: { "org-a": [], "org-b": ["ProjB", "ProjC"] },
+        repos: { "org-b": { ProjB: ["repo-one", "repo-two"] } },
+        reviewModel: "",
+        reviewsDir: "",
+    });
+    activeCalls.length = 0;
+    await inbox.scanInbox(deps);
+    assert.deepEqual(
+        activeCalls.filter((call) => call.org === "org-b").map(({ project, repo }) => `${project}/${repo ?? "*"}`).sort(),
+        ["ProjB/repo-one", "ProjB/repo-two", "ProjC/*"],
+    );
+    console.log("Case 11 (repo-scoped discovery) passed");
 
     // =========================================================================
     // Scoped UI route helper: matchNotificationPr must scope by org/project/

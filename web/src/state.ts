@@ -16,7 +16,7 @@ function savedQueueView(): QueueView {
 }
 
 export const state: AppState = {
-  config: { organizations: [], projects: {}, reviewModel: "", reviewsDir: "", codebase: [], taskRoot: "" },
+  config: { organizations: [], projects: {}, repos: {}, reviewModel: "", reviewsDir: "", codebase: [], taskRoot: "" },
   prs: [],
   authoredPrs: [],
   cappedProjects: [],
