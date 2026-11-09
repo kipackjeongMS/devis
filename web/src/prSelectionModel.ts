@@ -53,7 +53,7 @@ export function toggledAll(sel: ReadonlySet<string>, order: readonly string[]): 
 
 export const selectedInOrder = (sel: ReadonlySet<string>, order: readonly string[]): string[] => order.filter((id) => sel.has(id));
 
-/** A right-click acts on the clicked row alone; it never adds to or reads the selection. */
+/** Whether a right-click on `id` may offer the selection-wide entries: only when that row is itself part of a multi-selection. */
 export function contextIsSelected(sel: ReadonlySet<string>, id: string): boolean {
   return sel.has(id) && sel.size > 1;
 }

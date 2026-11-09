@@ -130,6 +130,7 @@ export const selectionSize = (): number => selected.size;
 export const prAt = (id: string): PR | undefined => listed.get(id);
 export const isSelected = (id: string): boolean => selected.has(id);
 export const setContextRow = (id: string | null): void => void (ctxId = id);
+export const contextRow = (): string | null => ctxId;
 
 /** The selected PRs, in the order they're listed. */
 export const selectedPrs = (): PR[] => selectedInOrder(selected, order).flatMap((id) => listed.get(id) ?? []);
@@ -142,7 +143,10 @@ export function setSelecting(on: boolean): void {
   }
 }
 
-export const clearSelection = (): void => void (selected = new Set());
+export function clearSelection(): void {
+  selected = new Set();
+  anchor = null;
+}
 
 export function toggleAll(): void {
   selected = toggledAll(selected, order);
@@ -165,10 +169,12 @@ export function syncSelectionUi(body: HTMLElement): void {
   if (all) all.indeterminate = checkState(selected, order) === "some";
 }
 
-function bulkBar(): string {
+function bulkBar(queuing: ReadonlySet<string>): string {
   const n = selected.size;
   const state = checkState(selected, order);
   const tail = n ? ` (${n})` : "";
+  // While every selected PR is still being queued, a second Review would only repeat the first.
+  const sending = n > 0 && [...selected].every((id) => queuing.has(id));
   return `
     <div class="pp-bulk" data-key="bulk" role="toolbar" aria-label="Selected pull requests">
       <label class="pp-all" title="Select every listed pull request"><input type="checkbox" class="pp-check-box" data-act="pr-select-all" data-role="select-all" aria-label="Select all listed pull requests"${
@@ -177,7 +183,7 @@ function bulkBar(): string {
       <button type="button" class="btn sm ghost" data-act="pr-bulk-clear"${n ? "" : " disabled"}>Clear</button>
       <span class="pp-bulk-sp"></span>
       <button type="button" class="btn sm ghost" data-act="pr-bulk-copy" title="Copy a link to each selected pull request"${n ? "" : " disabled"}>${icon("copy")}<span>Copy links${tail}</span></button>
-      <button type="button" class="btn sm" data-act="pr-bulk-review" title="Queue a Copilot review for each selected pull request"${n ? "" : " disabled"}>${icon("sparkle")}<span>Review${tail}</span></button>
+      <button type="button" class="btn sm" data-act="pr-bulk-review" title="Queue a Copilot review for each selected pull request"${n && !sending ? "" : " disabled"}${sending ? ' aria-busy="true"' : ""}>${icon("sparkle")}<span>Review${tail}</span></button>
     </div>`;
 }
 
@@ -471,7 +477,7 @@ export function prPanelHtml(ctx: PrPanelContext): PrPanelView {
 
   const newCount = mine.filter((r) => r.attention === "activity").length;
   return {
-    html: (selecting ? bulkBar() : "") + subSection("mine", "My PRs", mine.length, mineBody) + subSection("reviews", "Reviews", reviews.length, reviewsBody),
+    html: (selecting ? bulkBar(ctx.queuing) : "") + subSection("mine", "My PRs", mine.length, mineBody) + subSection("reviews", "Reviews", reviews.length, reviewsBody),
     count: mine.length + reviews.length,
     newCount,
     newLabel: `${newCount} with new comments`,

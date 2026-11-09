@@ -115,7 +115,7 @@ import {
   type TodayWorker,
   type WorkerRequest,
 } from "./jarvisModel.js";
-import { clearSearch, clearSelection, clickRow, contextIsSelectedRow, initPrPanel, isSelecting, loadOlder, prAt, prPanelHtml, selectedPrs, selectionSize, setContextRow, setQuery, setSelecting, showMore, syncSelectionUi, toggleAll, toggleFilter, toggleFold, watchSentinel } from "./prPanel.js";
+import { clearSearch, clearSelection, clickRow, contextIsSelectedRow, contextRow, initPrPanel, isSelecting, loadOlder, prAt, prPanelHtml, selectedPrs, selectionSize, setContextRow, setQuery, setSelecting, showMore, syncSelectionUi, toggleAll, toggleFilter, toggleFold, watchSentinel } from "./prPanel.js";
 import { inboxItems, markPrRead } from "./inboxPanel.js";
 import { matchNotificationPr } from "./inboxRoute.js";
 import type { PR } from "./types.js";
@@ -2316,7 +2316,13 @@ function taskMenu(task: TodayTask, anchor: HTMLElement, point: { x: number; y: n
   const url = task.workItem?.url;
   if (url) entries.push({ label: "Open in Azure DevOps", icon: "external", run: () => void window.open(url, "_blank", "noopener") });
   entries.push({ label: "Remove", icon: "trash", run: () => confirmDeleteTask(task) });
-  openContextMenu(point.x, point.y, `Task: ${task.title}`, entries, () => anchor.isConnected && anchor.focus());
+  openContextMenu(point.x, point.y, `Task: ${task.title}`, entries, () => refocusRow(anchor, `task:${task.id}`));
+}
+
+/** Back to the row the menu opened on; a repaint while it was open may have replaced the element. */
+function refocusRow(anchor: HTMLElement, key: string): void {
+  const main = anchor.isConnected ? anchor : root?.querySelector<HTMLElement>(`[data-key="${CSS.escape(key)}"] .rr-main`);
+  main?.focus();
 }
 
 /** A PR row's context menu. It acts on the row it opened on, whatever else is selected. */
@@ -2333,12 +2339,14 @@ function prMenu(pr: PR, anchor: HTMLElement, point: { x: number; y: number }): v
       run: () => void copyText(link.text).then((ok) => toast(ok ? (link.count > 1 ? `Copied ${link.count} links` : "Copied the link") : "Couldn't copy to the clipboard", ok ? "ok" : "err")),
     });
   }
-  setContextRow(id);
-  renderPrs(true);
-  openContextMenu(point.x, point.y, `Pull request #${pr.id}: ${pr.title}`, entries, () => anchor.isConnected && anchor.focus(), () => {
+  // Opening closes any menu already up (and its onClose clears its row), so mark this row after.
+  openContextMenu(point.x, point.y, `Pull request #${pr.id}: ${pr.title}`, entries, () => refocusRow(anchor, `pr:${id}`), () => {
+    if (contextRow() !== id) return;
     setContextRow(null);
     renderPrs(true);
   });
+  setContextRow(id);
+  renderPrs(true);
 }
 
 /** Right-click, or Shift+F10 / the Menu key on a focused row: the row's menu. */
@@ -2363,11 +2371,11 @@ function onContextMenu(e: MouseEvent): void {
   taskMenu(task, anchor, point);
 }
 
-/** Queue a Copilot review for each selected PR, skipping those already being reviewed. */
+/** Queue a Copilot review for each selected PR, skipping those already being reviewed or being queued. */
 async function bulkReview(prs: PR[]): Promise<void> {
-  const todo = prs.filter((p) => reviewPhase(p) !== "active");
+  const todo = prs.filter((p) => reviewPhase(p) !== "active" && !queuing.has(prIdentity(p)));
   const skipped = prs.length - todo.length;
-  if (!todo.length) return void toast("Those pull requests are already being reviewed.", "ok");
+  if (!todo.length) return void toast(prs.length === 1 ? "That pull request is already being reviewed." : "Those pull requests are already being reviewed.", "ok");
   requestNotifyPermission();
   for (const p of todo) queuing.add(prIdentity(p));
   renderPrs(true);
@@ -2379,6 +2387,8 @@ async function bulkReview(prs: PR[]): Promise<void> {
       result.failed.length ? `${result.failed.length} failed: ${result.failed[0].error}` : "",
     ].filter(Boolean);
     toast(bits.join(" · ") || "Nothing to queue", result.failed.length ? "err" : "ok");
+  } catch (e) {
+    toast("Could not queue the reviews: " + ((e as Error).message || e), "err");
   } finally {
     for (const p of todo) queuing.delete(prIdentity(p));
     window.dispatchEvent(new CustomEvent("ado-pr-updated"));
@@ -2650,8 +2660,8 @@ function onClick(e: MouseEvent): void {
       renderPrs(true);
       return void (isSelecting() ? prsBody.querySelector<HTMLInputElement>('[data-role="select-all"]') : node)?.focus();
     case "pr-bulk-copy": {
-      const links = selectedPrs().map((p) => p.url).filter(Boolean);
-      if (!links.length) return;
+      const links = selectedPrs().map((p) => (p.url || "").trim()).filter(Boolean);
+      if (!links.length) return void toast("The selected pull requests have no links to copy.", "err");
       return void copyText(links.join("\n")).then((ok) => toast(ok ? `Copied ${links.length} link${links.length === 1 ? "" : "s"}` : "Couldn't copy to the clipboard", ok ? "ok" : "err"));
     }
     case "pr-bulk-review":

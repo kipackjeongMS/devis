@@ -55,6 +55,20 @@ assert.match(prMenu, /label: "Open in separate window"[^\n]*openPrWindow\(pr\)/)
 assert.match(prMenu, /window\.open\(pr\.url, "_blank", "noopener"\)/);
 assert.doesNotMatch(prMenu, /clickRow|toggleAll|clearSelection|setSelecting/, "the menu targets its row and leaves the selection alone");
 assert.match(prMenu, /setContextRow\(null\)/, "the row's highlight clears when the menu closes");
+assert.match(prMenu, /if \(contextRow\(\) !== id\) return;/, "a menu replaced by the next one doesn't clear the next row's highlight");
+assert.ok(prMenu.indexOf("openContextMenu(") < prMenu.lastIndexOf("setContextRow(id)"), "the row is marked after the previous menu has closed");
+assert.match(jarvis, /function refocusRow\(/, "focus returns to the row even when a repaint replaced it");
+
+// Bulk review: no double send, and a failed send says so.
+const bulk = jarvis.match(/async function bulkReview\([\s\S]*?\r?\n}\r?\n/)[0];
+assert.match(bulk, /!queuing\.has\(prIdentity\(p\)\)/, "PRs still being queued are skipped");
+assert.match(bulk, /catch \(e\)[\s\S]*toast\(/, "a failed send becomes a toast");
+assert.match(panel, /const sending = n > 0 && \[\.\.\.selected\]\.every\(\(id\) => queuing\.has\(id\)\)/, "Review is disabled while its PRs are being queued");
+assert.match(panel, /export function clearSelection\(\): void \{\s*selected = new Set\(\);\s*anchor = null;/, "Clear also drops the range anchor");
+
+// The PR window hears its own broadcasts; only the Workspace reloads its list.
+const app = await readFile(new URL("../web/src/app.ts", import.meta.url), "utf8");
+assert.match(app, /onPrUpdatedElsewhere\(\(\) => \{\s*if \(document\.body\.dataset\.feature === "pr"\) return;/);
 
 // Task cards: no visible ⋯; the menu opens from right-click or the keyboard, with every entry kept.
 assert.doesNotMatch(jarvis, /task-more|rr-more/, "the ⋯ button is gone");

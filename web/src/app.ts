@@ -557,9 +557,15 @@ function initTabbar(): void {
   sync();
 }
 initTabbar();
-// A PR changed in the PR window: the panel's list follows.
+// A PR changed in the PR window: the panel's list follows. The PR window hears its own broadcasts
+// and has no list, so it ignores them; a burst of changes (a vote, then a refresh) reads the list once.
+let prUpdatedTimer: ReturnType<typeof setTimeout> | undefined;
 onPrUpdatedElsewhere(() => {
-  if ((state.config.organizations || []).length) void loadPRs(false);
+  if (document.body.dataset.feature === "pr") return;
+  clearTimeout(prUpdatedTimer);
+  prUpdatedTimer = setTimeout(() => {
+    if ((state.config.organizations || []).length) void loadPRs(false);
+  }, 250);
 });
 // A task's validation chain, opened from the task: Pipelines shows it once its chains load.
 window.addEventListener("ado-open-chain", (e) => {
