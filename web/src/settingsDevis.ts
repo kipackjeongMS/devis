@@ -6,6 +6,7 @@ import { getJSON, postJSON } from "./api.js";
 import { esc } from "./util.js";
 import { icon } from "./icons.js";
 import { toast } from "./toast.js";
+import { inDesktopShell, onSetupJob, pickFolder, setupActionHtml, setupJob, setupStatusHtml } from "./setupActions.js";
 import { ago, type DevisOverview, type DevisShip } from "./jarvisModel.js";
 
 type CardFactory = (name: Parameters<typeof icon>[0], title: string, descHtml: string, titleId: string, stacked?: boolean) => HTMLElement;
@@ -79,6 +80,16 @@ export function devisCard(card: CardFactory): HTMLElement {
       <input type="text" class="settings-folder-input dv-path" aria-label="Devis' source folder" placeholder="e.g. C:\\src\\devis" />
       <button type="button" class="btn sm dv-save" disabled>Use this folder</button>
     </div>
+    <details class="dv-get">
+      <summary>Don't have the source? Get it</summary>
+      <p class="teams-line">Devis clones its source from GitHub into a <code>devis</code> folder inside this one, installs its packages and uses it. It needs your GitHub access to the repo, and Node.js to build.</p>
+      <div class="dv-source">
+        <input type="text" id="dvGetFolder" class="settings-folder-input" aria-label="Folder to put Devis' source in" placeholder="e.g. C:\\src" />
+        ${inDesktopShell() ? `<button type="button" class="btn sm ghost dv-browse">${icon("folder")}<span>Browse</span></button>` : ""}
+        ${setupActionHtml("devis-source", "Get the source", { inputId: "dvGetFolder" })}
+      </div>
+      ${setupStatusHtml("devis-source")}
+    </details>
     <p class="dv-problem" role="alert" hidden></p>
     <p class="teams-line dv-line" role="status">Checking…</p>
     <ul class="dv-ships" aria-label="Devis updates"></ul>`;
@@ -88,6 +99,20 @@ export function devisCard(card: CardFactory): HTMLElement {
   const problem = control.querySelector<HTMLElement>(".dv-problem")!;
   const line = control.querySelector<HTMLElement>(".dv-line")!;
   const list = control.querySelector<HTMLUListElement>(".dv-ships")!;
+  const getSource = control.querySelector<HTMLDetailsElement>(".dv-get")!;
+  const getFolder = control.querySelector<HTMLInputElement>("#dvGetFolder")!;
+  control.querySelector<HTMLButtonElement>(".dv-browse")?.addEventListener("click", async () => {
+    const picked = await pickFolder();
+    if (picked) getFolder.value = picked;
+  });
+  // The job saves the clone as the source; the card shows it once it's done.
+  const offSource = onSetupJob((job, before) => {
+    if (!node.isConnected) return offSource();
+    if (job.action === "devis-source" && job.state === "done" && before?.state !== "done") {
+      editing = false;
+      void load();
+    }
+  });
 
   let current: DevisOverview | null = null;
   let poll: ReturnType<typeof setTimeout> | null = null;
@@ -101,6 +126,8 @@ export function devisCard(card: CardFactory): HTMLElement {
     save.disabled = !d || path.value.trim() === (d?.source || "");
     problem.textContent = d?.sourceProblem || "";
     problem.hidden = !d?.sourceProblem;
+    // Open while there's no source to use, or a clone is under way.
+    if (d && (!d.source || d.sourceProblem || setupJob("devis-source"))) getSource.open = true;
     line.textContent = devisStatusLine(d);
     const now = Date.now();
     // Keep an open log or file list open across repaints.

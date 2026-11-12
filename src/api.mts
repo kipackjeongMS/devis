@@ -230,6 +230,43 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
             const { runSetupChecks, machineProbes } = await import("./setup-checks.mjs");
             return sendJson(res, 200, { at: new Date().toISOString(), checks: await runSetupChecks(await machineProbes()) });
         }
+        // ---- first run: whether setup is finished, and start at sign-in ----
+        if (p === "/api/setup/state" && req.method === "GET") {
+            const { readSetupState } = await import("./setup-state.mjs");
+            return sendJson(res, 200, readSetupState());
+        }
+        if (p === "/api/setup/state" && req.method === "POST") {
+            const { writeSetupState } = await import("./setup-state.mjs");
+            const b = (await readBody(req)) as { done?: unknown; startAtSignIn?: unknown };
+            const patch: { done?: boolean; startAtSignIn?: boolean } = {};
+            if (typeof b.done === "boolean") patch.done = b.done;
+            if (typeof b.startAtSignIn === "boolean") patch.startAtSignIn = b.startAtSignIn;
+            return sendJson(res, 200, writeSetupState(patch));
+        }
+        // ---- the buttons in Setup and the first-run wizard: install and sign in, as jobs ----
+        if (p.startsWith("/api/setup/actions/") && req.method === "POST") {
+            const { startSetupAction, SetupError } = await import("./setup-actions.mjs");
+            const b = (await readBody(req)) as { folder?: unknown };
+            try {
+                return sendJson(res, 202, startSetupAction(decodeURIComponent(p.slice("/api/setup/actions/".length)), { folder: b?.folder }));
+            } catch (error) {
+                if (error instanceof SetupError) return sendJson(res, error.status, { error: error.message });
+                throw error;
+            }
+        }
+        if (p === "/api/setup/jobs" && req.method === "GET") {
+            const { setupJobs } = await import("./setup-actions.mjs");
+            return sendJson(res, 200, { jobs: setupJobs() });
+        }
+        // ---- the Azure DevOps organizations you belong to, for the first-run wizard ----
+        if (p === "/api/setup/orgs" && req.method === "GET") {
+            const { listMyOrgs } = await import("./ado.mjs");
+            try {
+                return sendJson(res, 200, { orgs: await listMyOrgs() });
+            } catch (error) {
+                return sendJson(res, 200, { orgs: [], error: (error as Error).message || String(error) });
+            }
+        }
 
         // ---- active PRs across all configured (org, project) scopes ----
         // Orgs with configured projects return ALL active PRs in those projects

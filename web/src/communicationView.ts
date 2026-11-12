@@ -8,6 +8,7 @@
 
 import { esc } from "./util.js";
 import { icon, type IconName } from "./icons.js";
+import { setupActionHtml, setupStatusHtml } from "./setupActions.js";
 import {
   chatWho,
   commDayLine,
@@ -143,7 +144,7 @@ export function communicationHtml(view: CommunicationView, now: number): string 
   };
   const noAgency = [view.status, view.mailStatus].some((s) => s?.enabled && s.agency === false);
   if (noAgency) {
-    html.push(`<div class="today-note warn" data-key="comms-agency">Teams catch-up and email summaries are waiting on Agency, which isn't installed. Install it and the next scan picks up.</div>`);
+    html.push(`<div class="today-note warn has-act" data-key="comms-agency"><span>Teams catch-up and email summaries are waiting on Agency, which isn't installed. Once it is, the next scan picks up.</span>${setupActionHtml("agency-install", "Install Agency", { tone: "accent" })}${setupStatusHtml("agency-install")}</div>`);
   } else {
     warn("chat", view.status, "comms-warn");
     warn("email", view.mailStatus, "mail-warn");

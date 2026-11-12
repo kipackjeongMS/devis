@@ -122,3 +122,15 @@ export function findAzureCli(): AzureCliInfo {
     }
     return { source: null, command: null };
 }
+
+/** The GitHub CLI, for updates and the source: on PATH, else where its installer puts it. Not remembered, so installing it later works. */
+export function findGh(): string | null {
+    if (!isWin) return onPath("gh")[0] ?? null;
+    const found = onPath("gh.exe")[0];
+    if (found) return found;
+    for (const root of [process.env.ProgramFiles, process.env.LOCALAPPDATA && join(process.env.LOCALAPPDATA, "Programs")]) {
+        const exe = root && join(root, "GitHub CLI", "gh.exe");
+        if (exe && existsSync(exe)) return exe;
+    }
+    return null;
+}

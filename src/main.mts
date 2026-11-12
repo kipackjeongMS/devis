@@ -17,6 +17,8 @@ import { APP_NAME, DATA_FOLDER, FORMER_APP_NAME } from "./brand.mjs";
 import { CODE_WINDOW_MIN, codeWindowUrl, codeWindowWorker, isFocusMainUrl, parsePlacement, placeCodeWindow, type SavedPlacement } from "./code-window.mjs";
 import { createPrWindowController, PR_WINDOW_MIN, PR_WINDOW_SIZE, prWindowTarget, type PrWindowHandle } from "./pr-window.mjs";
 import { nextZoom, titleBarHeight, zoomCommand, zoomLevelOf } from "./ui-zoom.mjs";
+import { folderPickedScript, loginItem, shellRequest } from "./shell-request.mjs";
+import { readSetupState, setupStatePath } from "./setup-state.mjs";
 
 // Kept from the app's first name: Windows ties toast settings to it.
 const APP_ID = "AdoPrOps.Desktop";
@@ -79,6 +81,12 @@ function openOutside(url: string): void {
  */
 function confineToOrigin(contents: WebContents): void {
     contents.setWindowOpenHandler(({ url }) => {
+        const request = shellRequest(url, origin);
+        if (request) {
+            if (request.kind === "pick-folder") void pickFolder(contents, request.id);
+            else syncLoginItem();
+            return { action: "deny" };
+        }
         const worker = codeWindowWorker(url, origin);
         const pr = worker ? null : prWindowTarget(url, origin);
         if (worker) openCodeWindow(worker);
@@ -96,6 +104,37 @@ function confineToOrigin(contents: WebContents): void {
         callback(ALLOWED_PERMISSIONS.has(permission)),
     );
     contents.session.setPermissionCheckHandler((_contents, permission) => ALLOWED_PERMISSIONS.has(permission));
+}
+
+/** A folder chooser over the window that asked; the answer goes back to that page. */
+async function pickFolder(contents: WebContents, id: string): Promise<void> {
+    const owner = BrowserWindow.fromWebContents(contents);
+    const options = { properties: ["openDirectory", "createDirectory"] as Array<"openDirectory" | "createDirectory"> };
+    let path: string | null = null;
+    try {
+        const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options);
+        path = result.canceled ? null : result.filePaths[0] || null;
+    } catch {
+        // Answered as cancelled, so the page isn't left waiting.
+    }
+    if (!contents.isDestroyed()) void contents.executeJavaScript(folderPickedScript(id, path)).catch(() => undefined);
+}
+
+/** Make Windows' start-at-sign-in entry match what setup saved. */
+function syncLoginItem(): void {
+    const configPath = process.env.ADO_PR_OPS_CONFIG_PATH || join(app.getPath("userData"), "config.json");
+    const item = loginItem(readSetupState(setupStatePath(configPath)).startAtSignIn, {
+        platform: process.platform,
+        packaged: app.isPackaged,
+        execPath: process.execPath,
+        userDataOverride: process.env.ADO_PR_OPS_USER_DATA,
+    });
+    if (!item) return;
+    try {
+        if (app.getLoginItemSettings({ path: item.path, args: item.args }).openAtLogin !== item.openAtLogin) app.setLoginItemSettings(item);
+    } catch (error) {
+        console.warn(`[ado-pr-ops] couldn't update start at sign-in: ${(error as Error).message}`);
+    }
 }
 
 /**
@@ -485,6 +524,7 @@ async function recover(): Promise<void> {
 }
 
 async function start(): Promise<void> {
+    syncLoginItem();
     const status = await connect();
     watch(status);
     console.log(`[ado-pr-ops] showing the service at ${status.url} (pid ${status.pid})`);
@@ -514,6 +554,19 @@ if (process.argv.includes("--install-shortcut")) {
     void app.whenReady().then(() => {
         const ok = installShortcut();
         app.exit(ok ? 0 : 1);
+    });
+} else if (process.argv.includes("--background")) {
+    // Windows starting Devis at sign-in: the service only, no window, and no questions (no one's there to answer).
+    void app.whenReady().then(async () => {
+        const configPath = process.env.ADO_PR_OPS_CONFIG_PATH || join(app.getPath("userData"), "config.json");
+        if (readSetupState(setupStatePath(configPath)).startAtSignIn) {
+            const result = await ensureService({ userData: app.getPath("userData"), appDir, execPath: process.execPath }).catch((error: Error) => {
+                console.warn(`[ado-pr-ops] background start failed: ${error.message}`);
+                return null;
+            });
+            if (result && result.kind !== "ready") console.warn(`[ado-pr-ops] background start left the service as it was (${result.kind})`);
+        }
+        app.exit(0);
     });
 } else if (!app.requestSingleInstanceLock()) {
     app.quit();

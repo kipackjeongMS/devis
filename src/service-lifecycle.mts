@@ -14,6 +14,8 @@ export interface LifecycleOptions {
     now?: () => number;
     /** A source that takes longer than this is skipped for that check. */
     sourceTimeoutMs?: number;
+    /** While this says true the service never idles out (start at sign-in keeps it running). */
+    keepAlive?: () => boolean;
 }
 
 export class ServiceLifecycle {
@@ -86,6 +88,10 @@ export class ServiceLifecycle {
     /** One look: returns true when the service should exit now. */
     async check(): Promise<boolean> {
         if (this.done) return false;
+        if (this.keptAlive()) {
+            this.idleSince = null;
+            return false;
+        }
         if (this.attachedCount > 0 || (await this.work()).length) {
             this.idleSince = null;
             return false;
@@ -95,6 +101,14 @@ export class ServiceLifecycle {
         if (this.attachedCount > 0) return false;
         if (this.idleSince === null) this.idleSince = now;
         return now - this.idleSince >= this.options.idleExitMs;
+    }
+
+    private keptAlive(): boolean {
+        try {
+            return !!this.options.keepAlive?.();
+        } catch {
+            return false;
+        }
     }
 
     start(): void {

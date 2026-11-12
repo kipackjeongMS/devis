@@ -310,6 +310,16 @@ export async function getMyAccount(org: string): Promise<string | null> {
     return _accountCache.get(org) || null;
 }
 
+/** Every Azure DevOps organization the signed-in account is a member of, by name. */
+export async function listMyOrgs(): Promise<string[]> {
+    const vssps = "https://app.vssps.visualstudio.com/_apis";
+    const profile = await adoJson("GET", `${vssps}/profile/profiles/me?api-version=7.1`);
+    if (typeof profile?.id !== "string" || !profile.id) throw new Error("Azure DevOps didn't say who you're signed in as.");
+    const data = await adoJson("GET", `${vssps}/accounts?memberId=${enc(profile.id)}&api-version=7.1`);
+    const names = ((data?.value || []) as any[]).map((a) => a?.accountName).filter((n): n is string => typeof n === "string" && !!n);
+    return [...new Set(names)].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+}
+
 /** The org's projects, by name. */
 export async function listProjects(org: string): Promise<string[]> {
     const names: string[] = [];

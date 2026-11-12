@@ -18,3 +18,6 @@ export const FORMER_APP_NAME = "ADO PR Ops";
  * settings, and the folders worker sessions run in, so moving it would strand them.
  */
 export const DATA_FOLDER = "ADO PR Ops";
+
+/** The private GitHub repository Devis' source and releases are published in. */
+export const RELEASES_REPO = "kipackjeongMS/devis";

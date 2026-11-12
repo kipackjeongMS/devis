@@ -15,6 +15,7 @@ function fixture(response, opts = {}) {
     const dispatched = [];
     const busy = [];
     const recency = [];
+    const azureNotes = [];
     const previousPrs = opts.firstLoad ? [] : [{ id: 1 }];
     const scope = {
         prsLoad: 0,
@@ -40,9 +41,14 @@ function fixture(response, opts = {}) {
         loadReviews: async () => {},
         loadCommentActivity: async () => {},
         toast: (message) => warnings.push(message),
+        // The Azure banner; true when the errors were an Azure sign-in problem it showed.
+        noteAzure: (errors, answered) => {
+            azureNotes.push(JSON.parse(JSON.stringify([errors, answered])));
+            return !!opts.azureBanner;
+        },
     };
     const load = vm.runInNewContext(compiled, scope);
-    return { load, scope, warnings, previousPrs, dispatched, busy, recency };
+    return { load, scope, warnings, previousPrs, dispatched, busy, recency, azureNotes };
 }
 
 // A refresh that fails keeps the list and says so; the panel still stops waiting.
@@ -65,6 +71,18 @@ await empty.load();
 assert.deepEqual(empty.scope.state.prs, [], "a genuinely empty result is the normal empty state");
 assert.deepEqual(empty.warnings, []);
 assert.deepEqual(empty.dispatched, ["ado-prs-loaded"]);
+assert.deepEqual(empty.azureNotes, [[[], true]], "a clean answer lets the Azure banner clear");
+
+// An Azure sign-in problem shows the banner with its fix instead of a toast.
+const signedOut = fixture({ prs: [{ id: 2 }], errors: ["msazure: az isn't signed in"] }, { azureBanner: true });
+await signedOut.load();
+assert.deepEqual(signedOut.warnings, [], "the banner says it, not a toast");
+assert.deepEqual(signedOut.scope.state.prs.map((p) => p.id), [2], "what did load still lands");
+const noAz = fixture(new Error("az isn't installed"), { azureBanner: true });
+await noAz.load();
+assert.deepEqual(noAz.warnings, []);
+assert.deepEqual(noAz.azureNotes, [[["az isn't installed"], false]], "a failed load can't clear the banner");
+assert.deepEqual(noAz.dispatched, ["ado-prs-loaded"]);
 
 // The panel's data: your own PRs, capped projects, older pages and recency.
 const panel = fixture(

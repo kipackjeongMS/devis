@@ -22,8 +22,10 @@ import { showJarvis, hideJarvis, reloadJarvis, resumeNoteDraft, openTaskById } f
 import { preferWorker } from "./jarvisTask.js";
 import { jarvisSettings } from "./settingsJarvis.js";
 import { setupCard } from "./settingsSetup.js";
+import { azureProblem, initSetupActions } from "./setupActions.js";
+import { needsFirstRun, showFirstRun } from "./firstRun.js";
 import { icon } from "./icons.js";
-import { showAgencyBanner } from "./staleBanner.js";
+import { showAgencyBanner, showAzureBanner, hideAzureBanner } from "./staleBanner.js";
 import { applyShellClasses } from "./shell.js";
 import { loadPrRecency, prIdentity } from "./prRecency.js";
 import { announcePrUpdated, onPrUpdatedElsewhere } from "./prWindow.js";
@@ -98,6 +100,9 @@ async function boot(): Promise<void> {
     return renderError("Could not read config: " + e.message);
   }
   if (target) return bootPrWindow(target);
+  initSetupActions();
+  // A new install sets up before anything else loads; the service decides that once, when it first starts.
+  if (await needsFirstRun()) return showFirstRun(state.config);
   initInbox();
   startInboxWatch();
   void checkCopilotRuntime();
@@ -134,6 +139,14 @@ async function bootPrWindow(target: CanvasPrTarget): Promise<void> {
 
 let prsLoad = 0;
 
+/** An Azure sign-in problem in a PR load gets the banner with its fix; a clean load clears it. True when it showed. */
+function noteAzure(errors: string[], answered: boolean): boolean {
+  const problem = azureProblem(errors);
+  if (problem) showAzureBanner(problem === "missing", () => void loadPRs());
+  else if (answered && !errors.length) hideAzureBanner();
+  return !!problem;
+}
+
 /** Load the PR list into state for the Workspace's panel, which paints from it on `ado-prs-loaded`. */
 async function loadPRs(refreshActivity = false): Promise<void> {
   const load = ++prsLoad;
@@ -156,6 +169,7 @@ async function loadPRs(refreshActivity = false): Promise<void> {
     const [res] = await Promise.all([live, reviews]);
     settled = true;
     if (load !== prsLoad) return;
+    const azure = noteAzure(res.errors || [], true);
     if (!res.prs?.length && res.errors?.length) {
       throw new Error(res.errors.join("\n"));
     }
@@ -165,7 +179,7 @@ async function loadPRs(refreshActivity = false): Promise<void> {
     // Older pages stay loaded across a refresh, minus any that moved onto the first page.
     const listed = new Set(state.prs.map((pr) => prIdentity(pr)));
     state.olderPrs = state.olderPrs.filter((pr) => !listed.has(prIdentity(pr)));
-    if (res.errors && res.errors.length) toast(res.errors[0], "err");
+    if (res.errors && res.errors.length && !azure) toast(res.errors[0], "err");
     window.dispatchEvent(new CustomEvent("ado-prs-loaded"));
     if (res.activityPending > 0) void loadCommentActivity();
     // Last push and my last comment or vote, read in the background (/api/pr-recency).
@@ -174,7 +188,7 @@ async function loadPRs(refreshActivity = false): Promise<void> {
     settled = true;
     if (load !== prsLoad) return;
     // The panel keeps what it has and says so itself; a first load with nothing yet shows the error there.
-    toast("Failed to load PRs: " + e.message, "err");
+    if (!noteAzure([e.message], false)) toast("Failed to load PRs: " + e.message, "err");
     window.dispatchEvent(new CustomEvent("ado-prs-loaded"));
   } finally {
     if (load === prsLoad) refreshBtn.removeAttribute("aria-busy");

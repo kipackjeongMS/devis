@@ -28,6 +28,11 @@ const _cache = new Map<string, TokenCache>();
 // resource -> the one `az` call in flight; concurrent callers share it.
 const _inflight = new Map<string, Promise<string>>();
 
+/** Forget the tokens read so far, after a sign-in, so the next call asks `az` again. */
+export function clearAzTokenCache(): void {
+    _cache.clear();
+}
+
 // With shell:true on Windows the child is cmd.exe, and killing it alone orphans
 // the python process az runs under it, so end the whole tree.
 function killTree(pid: number | undefined): void {

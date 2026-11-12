@@ -5,6 +5,7 @@
 
 import { esc } from "./util.js";
 import { icon, type IconName } from "./icons.js";
+import { setupActionHtml, setupStatusHtml } from "./setupActions.js";
 import {
   actionTodo,
   dayLine,
@@ -108,7 +109,7 @@ export function meetingsHtml(view: MeetingsView, _todos: Todo[] | undefined, now
         <button type="button" class="btn sm accent" data-act="meetings-settings">${svg("settings")}<span>Settings</span></button>
       </div>`);
   } else if (view.status?.agency === false) {
-    html.push(`<div class="today-note warn" data-key="meetings-agency">Meeting recaps are waiting on Agency, which isn't installed. Install it and the next scan picks up.</div>`);
+    html.push(`<div class="today-note warn has-act" data-key="meetings-agency"><span>Meeting recaps are waiting on Agency, which isn't installed. Once it is, the next scan picks up.</span>${setupActionHtml("agency-install", "Install Agency", { tone: "accent" })}${setupStatusHtml("agency-install")}</div>`);
   } else if (last && !last.ok && last.error) {
     html.push(`<div class="today-note warn" data-key="meetings-warn">${esc(last.throttled ? "Teams asked to slow down; the next read waits a little longer." : `The last read didn't finish: ${last.error}`)}</div>`);
   }

@@ -181,6 +181,9 @@ async function main(): Promise<void> {
 
     const { dbPath, configPath } = configureDataPaths();
     await migrateExtensionData(dbPath, configPath);
+    // Before anything reads the config, which creates it: no config yet means a new install, set up on first open.
+    const { initSetupState, readSetupState } = await import("./setup-state.mjs");
+    initSetupState(configPath);
     // Before anything runs git: Devis' own Git goes on PATH when the machine's won't do.
     (await import("./machine-tools.mjs")).prepareGit();
 
@@ -201,13 +204,16 @@ async function main(): Promise<void> {
     const { startMaintenance, stopMaintenance } = await import("./maintenance.mjs");
     const { watchShips } = await import("./devis-self.mjs");
     const { stopCopilotClient, warmCopilot } = await import("./copilot-runtime.mjs");
+    const { setupActivity } = await import("./setup-actions.mjs");
     const { closeDb } = await import("./store.mjs");
 
     const lifecycle = new ServiceLifecycle({
         idleExitMs: IDLE_EXIT_MS,
         checkMs: IDLE_CHECK_MS,
         onIdle: () => void stop("idle"),
+        keepAlive: () => readSetupState().startAtSignIn,
     });
+    lifecycle.register("setup", setupActivity);
     lifecycle.register("workers", workerActivity);
     lifecycle.register("lead", leadActivity);
     lifecycle.register("reviews", reviewRunnerActivity);
