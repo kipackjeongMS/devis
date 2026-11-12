@@ -880,6 +880,48 @@ await test("Teams chats and the calendar keep their own schedules: one slowing d
     await comms.setCommsEnabled(false, "meetings");
 });
 
+await test("without Agency nothing is read and nothing backs off: it looks again in 5 minutes, and reads once it's there", async () => {
+    comms.resetComms();
+    await comms.setCommsEnabled(true, "teams");
+    await comms.setCommsEnabled(true, "meetings");
+    clock = new Date(2026, 10, 25, 12, 0, 0).getTime();
+    let agency = false;
+    runtime.agency = () => agency;
+    let teamsReads = 0;
+    teamsServer = () => {
+        teamsReads++;
+        return fakeTeams({ chats: [], messages: {} }).client;
+    };
+    let calendarReads = 0;
+    calendarServer = () => {
+        calendarReads++;
+        return fakeCalendar({ events: [] }).client;
+    };
+    try {
+        const lastBefore = (await comms.commsStatus()).last;
+        comms.startCommsRunner();
+        await comms.scanComms("all");
+        let status = await comms.commsStatus();
+        assert.deepEqual([teamsReads, calendarReads, status.agency], [0, 0, false]);
+        assert.deepEqual(status.last, lastBefore, "no failed read is written");
+        assert.equal(Date.parse(status.nextAt), clock + comms.COMMS_LIMITS.agencyMs);
+        clock += comms.COMMS_LIMITS.agencyMs;
+        await comms.scanComms("due");
+        assert.equal(Date.parse((await comms.commsStatus()).nextAt), clock + comms.COMMS_LIMITS.agencyMs, "still 5 minutes, not an hour");
+        agency = true;
+        clock += comms.COMMS_LIMITS.agencyMs;
+        await comms.scanComms("due");
+        status = await comms.commsStatus();
+        assert.deepEqual([teamsReads, calendarReads, status.agency], [1, 1, true], "installed: the next look reads both");
+        assert.equal(Date.parse(status.nextAt), clock + comms.COMMS_LIMITS.everyMs);
+    } finally {
+        delete runtime.agency;
+        await comms.stopCommsRunner();
+        comms.resetComms();
+        await comms.setCommsEnabled(false, "meetings");
+    }
+});
+
 await test("an action item becomes a to-do linked to the meeting, once, and never ticks itself", async () => {
     const [m1] = (await comms.listCommsMeetings()).filter((m) => m.subject === "Meeting 1");
     const mineIndex = m1.actions.findIndex((a) => a.mine);

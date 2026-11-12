@@ -24,6 +24,8 @@ interface ScanInfo {
 interface CommsStatus {
   enabled: boolean;
   scanning: boolean;
+  /** Agency is installed; Teams, the calendar and Outlook are read through it. */
+  agency?: boolean;
   last: ScanInfo | null;
   nextAt: string | null;
   meetings?: { enabled: boolean; last: MeetingScanInfo | null };
@@ -45,10 +47,14 @@ interface MailScanInfo {
 
 const clock = (iso: string): string => new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 
+/** Said where Teams, the calendar or Outlook would be read, while Agency isn't installed. */
+export const AGENCY_WAIT = "Waiting on Agency, which isn't installed. Install it and the next scan picks up within 5 minutes.";
+
 /** What the last read of Teams chats did, in a line. */
 export function scanLine(s: CommsStatus | null, open: number | null): string {
   if (!s) return "Couldn't read what the last scan found.";
   if (!s.enabled) return "Off. Turn it on to see PR review asks from Teams under Needs you.";
+  if (s.agency === false) return AGENCY_WAIT;
   if (s.scanning) return "Reading Teams…";
   const last = s.last;
   const next = s.nextAt ? ` Next scan ${clock(s.nextAt)}.` : "";
@@ -66,6 +72,7 @@ export function meetingsLine(s: CommsStatus | null): string {
   const m = s?.meetings;
   if (!s || !m) return "Couldn't read what the last scan found.";
   if (!m.enabled) return "Off. Turn it on to see your meetings' recaps in the Meetings tab.";
+  if (s.agency === false) return AGENCY_WAIT;
   if (s.scanning) return "Reading the calendar…";
   const last = m.last;
   if (!last) return "Not read yet.";
@@ -81,6 +88,7 @@ export function chatsLine(s: CommsStatus | null): string {
   const c = s?.chats;
   if (!s || !c) return "Couldn't read what the last scan found.";
   if (!c.enabled) return "Off. Turn it on to see a line for each Teams chat that moved, in the Communication tab.";
+  if (s.agency === false) return AGENCY_WAIT;
   if (s.scanning) return "Reading Teams…";
   const last = c.last;
   if (!last) return "Nothing summarized yet.";
@@ -94,6 +102,7 @@ export function mailLine(s: CommsStatus | null): string {
   const m = s?.mail;
   if (!s || !m) return "Couldn't read what the last scan found.";
   if (!m.enabled) return "Off. Turn it on to see a line for each email thread from people, in the Communication tab.";
+  if (s.agency === false) return AGENCY_WAIT;
   if (s.scanning) return "Reading your email…";
   const last = m.last;
   if (!last) return "Not read yet.";

@@ -216,7 +216,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
             const catalog = await getModelCatalog();
             return sendJson(res, 200, { models: catalog.map((m) => m.id), catalog });
         }
-        // ---- how Copilot runs: through Agency, or the plain CLI with a warning ----
+        // ---- how Copilot runs: through Agency, or the built-in runtime / plain CLI with a warning ----
         if (p === "/api/copilot/runtime" && req.method === "GET") {
             try {
                 const { via, command, warning } = await resolveCopilotRuntime();
@@ -224,6 +224,11 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
             } catch (error) {
                 return sendJson(res, 200, { via: null, command: null, warning: `Copilot isn't available: ${(error as Error).message}` });
             }
+        }
+        // ---- Settings › Setup: what Devis needs from the machine, and what's missing ----
+        if (p === "/api/setup/checks" && req.method === "GET") {
+            const { runSetupChecks, machineProbes } = await import("./setup-checks.mjs");
+            return sendJson(res, 200, { at: new Date().toISOString(), checks: await runSetupChecks(await machineProbes()) });
         }
 
         // ---- active PRs across all configured (org, project) scopes ----

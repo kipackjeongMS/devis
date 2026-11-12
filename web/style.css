@@ -5253,6 +5253,26 @@ a.todo-src { text-decoration: none; }
   .dv-l1 { flex-wrap: wrap; }
 }
 
+/* Settings' "This machine" card: one row per thing Devis needs, with what waits for it. */
+.settings-card-control.setup-control { flex-direction: column; flex-wrap: nowrap; align-items: stretch; justify-content: flex-start; gap: 8px; }
+.setup-list { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--stroke-card); transition: opacity 0.15s ease; }
+.setup-list[aria-busy="true"] { opacity: 0.55; }
+.setup-row { display: flex; align-items: flex-start; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--stroke-card); }
+.setup-ico { flex: none; display: inline-flex; margin-top: 1px; color: var(--text-3); }
+.setup-ico .ic { width: 16px; height: 16px; }
+.setup-row.tone-ok .setup-ico { color: var(--success); }
+.setup-row.tone-warn .setup-ico { color: var(--caution); }
+.setup-row.tone-missing .setup-ico { color: var(--critical); }
+.setup-m { flex: 1 1 auto; min-width: 0; }
+.setup-name { color: var(--text-1); font-size: var(--fs-label); font-weight: 600; }
+.setup-detail { margin: 2px 0 0; color: var(--text-2); font-size: var(--fs-caption); line-height: var(--lh-caption); overflow-wrap: anywhere; }
+.setup-detail code { font: var(--fs-micro)/1.4 var(--mono); }
+.setup-needs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.setup-wait { display: flex; align-items: center; gap: 8px; padding: 10px 0; color: var(--text-3); font-size: var(--fs-caption); }
+.setup-wait.err { color: var(--critical); }
+.setup-foot { display: flex; align-items: center; gap: 10px; }
+.setup-at { color: var(--text-3); font-size: var(--fs-caption); }
+
 .ask-card {
   margin-top: 10px;
   padding: 10px 12px;

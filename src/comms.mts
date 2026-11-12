@@ -22,6 +22,7 @@ import { jarvisDb, JarvisError } from "./jarvis-store.mjs";
 import { snapshotOf } from "./jarvis-prs.mjs";
 import { addTodo, type Todo } from "./jarvis-notes.mjs";
 import { McpError, openMcp, type McpClient } from "./mcp-stdio.mjs";
+import { agencyExePath } from "./copilot-runtime.mjs";
 import { meFrom, scanTeams, TEAMS_LIMITS, type AskAudience, type ChatKind, type ChatLine, type SeenAsk, type TeamsMe, type TeamsScan } from "./comms-teams.mjs";
 import { CHAT_BRIEF, CHAT_LIMITS, MAIL_BRIEF, chatPrompt, mailPrompt, packInputs, parseSummaries, summarizeWithCopilot, type ChatInput, type ChatSummary, type Importance } from "./comms-chats.mjs";
 import { MAIL_LIMITS, scanMail, type MailLine, type MailScan, type MailTo } from "./comms-mail.mjs";
@@ -50,6 +51,8 @@ export const COMMS_LIMITS = {
     /** After throttling: doubles each time, up to the max. */
     backoffMs: 60 * 60_000,
     maxBackoffMs: 2 * 60 * 60_000,
+    /** Without Agency: how soon to look for it again, so its install is picked up. */
+    agencyMs: 5 * 60_000,
     /** An open ask nobody touched closes after this. */
     expireMs: 7 * 86_400_000,
     /** Closed asks are kept this long, so a re-read message doesn't open them again. */
@@ -122,6 +125,8 @@ export interface CommsScanInfo {
 export interface CommsStatus {
     enabled: boolean;
     scanning: boolean;
+    /** Agency is installed: Teams, the calendar and Outlook are read through its MCP servers. */
+    agency: boolean;
     last: CommsScanInfo | null;
     nextAt: string | null;
     meetings: { enabled: boolean; last: MeetingScanInfo | null };
@@ -262,6 +267,8 @@ export interface CommsRuntime {
     orgs(): Promise<string[]>;
     /** A small model's answer to a prompt, under a brief, in a session with no tools. */
     summarize(prompt: string, brief: string): Promise<string>;
+    /** Agency is installed, so its Teams, calendar and Outlook servers can start. Absent means yes. */
+    agency?(): boolean;
 }
 
 const sdkRuntime: CommsRuntime = {
@@ -272,6 +279,7 @@ const sdkRuntime: CommsRuntime = {
     adoMe: getMe,
     orgs: async () => (await readConfig()).organizations || [],
     summarize: summarizeWithCopilot,
+    agency: () => !!agencyExePath(),
 };
 
 let runtime: CommsRuntime = sdkRuntime;
@@ -1552,8 +1560,19 @@ export function scanComms(which: "all" | "due" = "all"): Promise<CommsScanInfo |
         const teamsOn = asksOn || chatsOn;
         const meetingsOn = await commsEnabled("meetings");
         const mailOn = await commsEnabled("mail");
+        // No Agency, so Teams, the calendar and Outlook can't be read: no failed read and no back-off,
+        // only a look again soon, so its install is picked up.
+        const agency = runtime.agency?.() ?? true;
+        if (!agency) {
+            const on = { teams: teamsOn, meetings: meetingsOn, mail: mailOn };
+            for (const source of ["teams", "meetings", "mail"] as const) {
+                if (!on[source] || !isDue(source)) continue;
+                runner.due[source] = runtime.now() + COMMS_LIMITS.agencyMs;
+                runner.backoff[source] = 0;
+            }
+        }
         let info: CommsScanInfo | null = null;
-        if (teamsOn && isDue("teams")) {
+        if (agency && teamsOn && isDue("teams")) {
             try {
                 info = await scanOnce({ asks: asksOn, chats: chatsOn });
             } catch (error) {
@@ -1589,7 +1608,7 @@ export function scanComms(which: "all" | "due" = "all"): Promise<CommsScanInfo |
                 else if (chats.summarized) console.log(`[comms] chat summaries: ${chats.summarized} conversation(s), ${chats.calls} call(s)`);
             }
         }
-        if (meetingsOn && isDue("meetings")) {
+        if (agency && meetingsOn && isDue("meetings")) {
             let meetings: MeetingScanInfo;
             try {
                 meetings = await scanMeetingsOnce();
@@ -1617,7 +1636,7 @@ export function scanComms(which: "all" | "due" = "all"): Promise<CommsScanInfo |
             runner.due.teams = null;
             runner.backoff.teams = 0;
         }
-        if (mailOn && isDue("mail")) {
+        if (agency && mailOn && isDue("mail")) {
             let mail: MailScanInfo;
             try {
                 mail = await scanMailOnce();
@@ -1678,6 +1697,7 @@ export async function commsStatus(): Promise<CommsStatus> {
     return {
         enabled: await commsEnabled("teams"),
         scanning: !!runner.scanning,
+        agency: runtime.agency?.() ?? true,
         last: await readState<CommsScanInfo | null>("teams.last", null),
         nextAt: runner.nextAt ? new Date(runner.nextAt).toISOString() : null,
         meetings: { enabled: await commsEnabled("meetings"), last: await readState<MeetingScanInfo | null>("meetings.last", null) },

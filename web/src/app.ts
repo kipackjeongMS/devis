@@ -21,6 +21,7 @@ import { showPipelines, hidePipelines, reloadPipelines, showChainById } from "./
 import { showJarvis, hideJarvis, reloadJarvis, resumeNoteDraft, openTaskById } from "./jarvis.js";
 import { preferWorker } from "./jarvisTask.js";
 import { jarvisSettings } from "./settingsJarvis.js";
+import { setupCard } from "./settingsSetup.js";
 import { icon } from "./icons.js";
 import { showAgencyBanner } from "./staleBanner.js";
 import { applyShellClasses } from "./shell.js";
@@ -30,7 +31,7 @@ import { addScope, removeScope, scopeChips } from "./prScopes.js";
 import type { PR } from "./types.js";
 
 interface CopilotRuntimeInfo {
-  via: "agency" | "copilot" | null;
+  via: "agency" | "bundled" | "copilot" | null;
   command: string | null;
   warning: string | null;
 }
@@ -260,6 +261,10 @@ function renderSettings(): void {
        </header>`
     )
   );
+  const setup = el(`<section class="settings-group" aria-labelledby="settingsSetupGroup"></section>`);
+  setup.appendChild(el(`<h2 id="settingsSetupGroup">Setup</h2>`));
+  setup.appendChild(setupCard(settingsCard));
+  wrap.appendChild(setup);
   const scopes = el(`<section class="settings-group" aria-labelledby="settingsScopes"></section>`);
   scopes.appendChild(el(`<h2 id="settingsScopes">Organizations &amp; projects</h2>`));
   scopes.appendChild(
@@ -374,17 +379,6 @@ function renderSettings(): void {
   const review = el(`<section class="settings-group" aria-labelledby="settingsReview"></section>`);
   review.appendChild(el(`<h2 id="settingsReview">Copilot review</h2>`));
   wrap.appendChild(review);
-
-  // ---- how Copilot runs ----
-  const runtimeCard = settingsCard("terminal", "Copilot runtime", "Checking…", "settingsRuntime");
-  const runtimeText = runtimeCard.querySelector<HTMLElement>(".settings-card-text p")!;
-  review.appendChild(runtimeCard);
-  void copilotRuntime().then((info) => {
-    if (!info) runtimeText.textContent = "Couldn't tell how Copilot runs.";
-    else if (info.warning) runtimeText.textContent = info.warning;
-    else
-      runtimeText.innerHTML = `Every Copilot session runs through Agency, with all of its MCP servers on: <code>${esc(info.command || "")} copilot</code>`;
-  });
 
   // ---- PR review model selector ----
   let selectedModel = state.config.reviewModel || "";

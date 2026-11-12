@@ -10,8 +10,9 @@ const IDES = {
 
 export type WorkspaceIde = keyof typeof IDES;
 
-function executable(ide: WorkspaceIde): string {
-    const { label, folder, exe } = IDES[ide];
+/** Where the editor is installed, or null. */
+export function findIde(ide: WorkspaceIde): string | null {
+    const { folder, exe } = IDES[ide];
     const candidates: string[] = [];
     if (process.env.LOCALAPPDATA) candidates.push(join(process.env.LOCALAPPDATA, "Programs", folder, exe));
     for (const root of [process.env.ProgramFiles, process.env["ProgramFiles(x86)"]]) {
@@ -24,8 +25,17 @@ function executable(ide: WorkspaceIde): string {
         // VS Code's CLI is usually on PATH through its installation's bin folder.
         if (basename(dir).toLowerCase() === "bin") candidates.push(join(dirname(dir), exe));
     }
-    const found = candidates.find((path) => statSync(path, { throwIfNoEntry: false })?.isFile());
-    if (!found) throw new JarvisError(`${label} was not found. Install it in its standard location or add its installation or bin folder to PATH, then restart the app.`, 409);
+    return candidates.find((path) => statSync(path, { throwIfNoEntry: false })?.isFile()) ?? null;
+}
+
+/** The editors on this machine, by name. */
+export function installedIdes(): string[] {
+    return (Object.keys(IDES) as WorkspaceIde[]).filter((ide) => findIde(ide)).map((ide) => IDES[ide].label);
+}
+
+function executable(ide: WorkspaceIde): string {
+    const found = findIde(ide);
+    if (!found) throw new JarvisError(`${IDES[ide].label} was not found. Install it in its standard location or add its installation or bin folder to PATH, then restart the app.`, 409);
     return found;
 }
 

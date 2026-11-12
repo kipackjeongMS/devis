@@ -1,6 +1,6 @@
-// How the app starts Copilot: through Agency when it's installed, the plain CLI
-// with a warning when it isn't, the same for the terminal buttons; and every
-// session's MCP servers on and callable.
+// How the app starts Copilot: through Agency when it's installed; without it, the runtime
+// built into Devis, else the plain CLI, with a warning; the same for the terminal buttons;
+// and every session's MCP servers on and callable.
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -27,14 +27,31 @@ try {
     assert.deepEqual(await rt.resumeCommand(id), { command: agency, args: ["copilot", "--resume", id] }, "terminals reopen through Agency too");
     assert.deepEqual(Object.keys(rt.reviewMcpServers("msazure", "Azure AppConfig")).sort(), ["ado", "bluebird"], "PR sessions scope ado and bluebird to the PR");
 
-    // ---- without it: the plain CLI, and a warning that says what's missing ----
+    // ---- without it: the runtime built into Devis, and a warning that says what's missing ----
     process.env.ADO_PR_OPS_AGENCY_PATH = join(root, "missing", "agency.exe");
+    rt = await load();
+    const bundledExe = rt.bundledRuntimePath();
+    assert.match(bundledExe ?? "", /copilot-sdk-win32-x64[\\/]prebuilds[\\/]win32-x64[\\/]copilot-runtime\.exe$/, "the SDK's runtime ships in node_modules");
+    const bundled = await rt.resolveCopilotRuntime();
+    assert.deepEqual([bundled.via, bundled.command, bundled.args], ["bundled", bundledExe, []]);
+    assert.match(bundled.warning, /Agency isn't installed \(looked for .+missing.+agency\.exe\), so Copilot runs on the runtime built into Devis/);
+    assert.deepEqual(await rt.resumeCommand(id), { command: copilot, args: ["--resume", id] }, "the built-in runtime has no terminal: the CLI reopens it");
+    delete process.env.ADO_PR_OPS_COPILOT_PATH;
+    const path = process.env.PATH;
+    process.env.PATH = root;
+    rt = await load();
+    await assert.rejects(rt.resumeCommand(id), /needs Agency or the Copilot CLI/);
+    process.env.PATH = path;
+    process.env.ADO_PR_OPS_COPILOT_PATH = copilot;
+
+    // ---- nor that: the plain CLI ----
+    process.env.ADO_PR_OPS_NO_BUNDLED_COPILOT = "1";
     rt = await load();
     const plain = await rt.resolveCopilotRuntime();
     assert.equal(plain.via, "copilot");
     assert.equal(plain.command, copilot);
     assert.deepEqual(plain.args, []);
-    assert.match(plain.warning, /Agency isn't installed \(looked for .+missing.+agency\.exe\)/);
+    assert.match(plain.warning, /Agency isn't installed \(looked for .+missing.+agency\.exe\), so Copilot runs on the Copilot CLI/);
     assert.deepEqual(await rt.resumeCommand(id), { command: copilot, args: ["--resume", id] });
     assert.deepEqual(rt.reviewMcpServers("msazure", "P"), {}, "no Agency, no Agency MCP servers");
 

@@ -21,7 +21,7 @@ import type { Todo } from "./jarvisModel.js";
 export interface MeetingsView {
   /** Null until they're read. */
   meetings: CommsMeeting[] | null;
-  status: { enabled: boolean; last: MeetingScanInfo | null } | null;
+  status: { enabled: boolean; last: MeetingScanInfo | null; agency?: boolean } | null;
   error: string;
   /** A scan asked for from the drawer is under way. */
   scanning: boolean;
@@ -64,6 +64,7 @@ export function meetingsSig(view: MeetingsView, todos: Todo[] | undefined, now: 
     view.meetings?.map((m) => [m.id, m.updatedAt, m.state]),
     view.status?.enabled,
     view.status?.last?.at,
+    view.status?.agency,
     view.error,
     view.scanning,
     selected,
@@ -106,6 +107,8 @@ export function meetingsHtml(view: MeetingsView, _todos: Todo[] | undefined, now
         <p>Turn them on to see what each Teams meeting covered, from the recap Teams writes, and its action items.</p>
         <button type="button" class="btn sm accent" data-act="meetings-settings">${svg("settings")}<span>Settings</span></button>
       </div>`);
+  } else if (view.status?.agency === false) {
+    html.push(`<div class="today-note warn" data-key="meetings-agency">Meeting recaps are waiting on Agency, which isn't installed. Install it and the next scan picks up.</div>`);
   } else if (last && !last.ok && last.error) {
     html.push(`<div class="today-note warn" data-key="meetings-warn">${esc(last.throttled ? "Teams asked to slow down; the next read waits a little longer." : `The last read didn't finish: ${last.error}`)}</div>`);
   }

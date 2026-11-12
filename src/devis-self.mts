@@ -37,6 +37,8 @@ export const SENSITIVE_FILES: readonly string[] = [
     "src/jarvis-lead.mts",
     "package.json",
     "package-lock.json",
+    "build/installer.nsh",
+    "build/stop-devis.ps1",
 ];
 
 const BUILD_MS = 10 * 60_000;

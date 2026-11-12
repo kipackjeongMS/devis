@@ -753,7 +753,7 @@ Every Copilot call the app makes runs through Agency: background reviews, the re
 - **Still refused:** PR sessions read other people's PR text, so they can't run shell commands, edit files or fetch URLs. The write-up can't either, and the Lead can't run shell commands or edit files. Workers ask you before shell commands and edits.
 - **Startup:** Agency takes about 10 seconds to start its MCP servers, so the service starts the runtime as soon as it starts. The first turn after that waits for the servers to connect (about half a minute); later turns take as long as before.
 - **Clean up:** stopping the service stops Agency and everything under it; if the service is killed, Agency's processes exit with it.
-- **Without Agency:** Copilot runs on the plain `copilot` CLI, without Agency's MCP servers and plugins. A banner says so until dismissed, and Settings shows how Copilot runs. Agency is looked for in `%APPDATA%\agency\CurrentVersion\agency.exe` (`ADO_PR_OPS_AGENCY_PATH` overrides it); install it and restart the app.
+- **Without Agency:** Copilot runs on the runtime built into Devis (`copilot-runtime` from the SDK's platform package), or on the plain `copilot` CLI when the build has none. Either way there are no Agency MCP servers or plugins, so Teams catch-up, meeting recaps, email summaries and code search wait. A banner says so until dismissed, and Settings shows how Copilot runs. The built-in runtime has no terminal, so Open in terminal takes the `copilot` CLI on PATH. Agency is looked for in `%APPDATA%\agency\CurrentVersion\agency.exe` (`ADO_PR_OPS_AGENCY_PATH` overrides it); install it and restart the app.
 
 ### Devis changing itself
 
@@ -769,6 +769,17 @@ Ask the Lead for a change to Devis (a fix, a feature, a tweak to the Workspace o
 - **Settling:** the service reads the result every 10 seconds. A build from the shipped commit that has run 5 minutes with no word counts as live; an updater that ended without a result, or a ship deploying 3 hours, failed. A ship that didn't go live goes back to its worker with the note and the log's tail, to fix and ship again.
 - **Telling you:** Today shows a banner while a ship deploys, for half an hour after one goes live, and for a week after one fails or rolls back, until dismissed. Settings lists the last 30 ships: what changed, the commit, the checks, the note and log, and which one is running.
 - **Undo:** a live ship's Undo starts a task whose worker reverts its commits on a new branch (keeping later changes when they overlap) and ships that like any other change, after your review. The ship then reads "undone by ship M".
+
+### Installing
+
+Devis installs from one `Devis-Setup-<version>.exe`, which `npm run installer` builds into `out\installer` (electron-builder's NSIS installer, set up under `build` in `package.json`).
+
+- **The install:** per user and without admin, into `%LOCALAPPDATA%\Programs\Devis`, the folder `deploy-desktop.ps1` uses. It adds a "Devis" Start menu shortcut and no desktop one. It isn't signed yet, so SmartScreen asks the first time. Uninstalling keeps the data folder. Setup opens Devis when it finishes; a silent run (`/S`) doesn't.
+- **What ships inside:** the Copilot runtime (`@github/copilot-sdk-win32-x64`), so Copilot works without the CLI, and MinGit in `resources\git`. Devis uses the machine's Git when it's 2.40 or newer and puts its own first on PATH otherwise. The Azure CLI isn't inside: Devis finds `az.cmd` on PATH, in `%LOCALAPPDATA%\Devis\azure-cli`, or where the Azure CLI's MSI puts it. Agency isn't inside either.
+- **This machine:** a Settings card checks Copilot and its GitHub sign-in, the Azure CLI's sign-in to Azure DevOps, Git, Agency and VS Code (`/api/setup/checks`), when Settings opens and on Check again. Copilot and the Azure CLI get 25 seconds each. A gap never stops Devis: each row says what waits for it.
+- **Over a running Devis:** Setup and the uninstaller run `build\stop-devis.ps1` (from `build\installer.nsh`) before touching files, instead of electron-builder's check, which kills everything in the install folder. It stops Devis the way `deploy-desktop.ps1` does. With work in flight, Setup lists it: Yes stops it now (workers carry on from their next message), No waits up to an hour for it, Cancel leaves Devis running and quits. A silent run waits up to 10 minutes, then quits with exit code 2 and installs nothing. When the script can't run or can't stop Devis, electron-builder's check takes over. It reads `ADO_PR_OPS_USER_DATA`, so a test install with its own data folder never stops the real service.
+- **Publishing:** off (`"publish": null`), so a `GH_TOKEN` in the environment doesn't send electron-builder looking for a GitHub release. Releases with a `latest.json` come later.
+- **From source:** `deploy-desktop.ps1` and the self-change updater still package and copy the build themselves, without Setup.
 
 ### Housekeeping
 The app runs all day, so everything it holds has a limit.

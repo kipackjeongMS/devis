@@ -214,15 +214,15 @@ export async function handleJarvisApi(req: IncomingMessage, res: ServerResponse,
         }
         if (p === "/api/jarvis/comms/meetings" && get) {
             const status = await commsStatus();
-            return sendJson(res, 200, { meetings: await listCommsMeetings(), digest: await meetingsDigest(), status: status.meetings });
+            return sendJson(res, 200, { meetings: await listCommsMeetings(), digest: await meetingsDigest(), status: { ...status.meetings, agency: status.agency } });
         }
         if (p === "/api/jarvis/comms/chats" && get) {
             const status = await commsStatus();
-            return sendJson(res, 200, { chats: await listCommsChats(), digest: await chatsDigest(), status: { ...status.chats, readAt: status.last?.at ?? null } });
+            return sendJson(res, 200, { chats: await listCommsChats(), digest: await chatsDigest(), status: { ...status.chats, readAt: status.last?.at ?? null, agency: status.agency } });
         }
         if (p === "/api/jarvis/comms/mail" && get) {
             const status = await commsStatus();
-            return sendJson(res, 200, { mail: await listCommsMail(), digest: await mailDigest(), status: { enabled: status.mail.enabled, last: status.mail.summaries, readAt: status.mail.last?.at ?? null } });
+            return sendJson(res, 200, { mail: await listCommsMail(), digest: await mailDigest(), status: { enabled: status.mail.enabled, last: status.mail.summaries, readAt: status.mail.last?.at ?? null, agency: status.agency } });
         }
         if (p === "/api/jarvis/comms/needs/dismiss" && post) {
             const b = await readBody(req);

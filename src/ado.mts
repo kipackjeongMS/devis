@@ -24,7 +24,7 @@ import {
     type Vote,
 } from "./pr-actions.mjs";
 
-const ADO_RESOURCE = "499b84ac-1321-427f-aa17-267ca6975798"; // Azure DevOps app id
+export const ADO_RESOURCE = "499b84ac-1321-427f-aa17-267ca6975798"; // Azure DevOps app id
 const API = "api-version=7.1";
 
 // ---------------------------------------------------------------------------

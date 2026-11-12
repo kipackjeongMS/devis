@@ -4,6 +4,7 @@
 
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { findAzureCli } from "./machine-tools.mjs";
 
 interface TokenCache {
     value: string;
@@ -44,9 +45,15 @@ function killTree(pid: number | undefined): void {
 
 function azToken(resource: string): Promise<AzTokenResult> {
     return new Promise((resolve, reject) => {
-        // `az` is a .cmd shim on Windows; run through the shell so it resolves.
+        const az = findAzureCli().command;
+        if (!az) {
+            reject(new Error("az token failed: the Azure CLI isn't installed. Install it and run `az login`, then try again."));
+            return;
+        }
+        // `az` is a .cmd shim on Windows; run through the shell so it resolves. The shell needs
+        // a path with spaces (Program Files) quoted.
         const isWin = process.platform === "win32";
-        const cmd = isWin ? "az.cmd" : "az";
+        const cmd = isWin && /\s/.test(az) ? `"${az}"` : az;
         let timedOut = false;
         const child = execFile(
             cmd,

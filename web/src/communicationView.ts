@@ -21,7 +21,7 @@ import {
   type CommsMail,
 } from "./commsModel.js";
 
-type Status = { enabled: boolean; last: ChatsInfo | null; readAt: string | null };
+type Status = { enabled: boolean; last: ChatsInfo | null; readAt: string | null; agency?: boolean };
 
 export interface CommunicationView {
   /** Null until they're read. */
@@ -86,6 +86,8 @@ export function communicationSig(view: CommunicationView, now: number): string {
     view.mailStatus?.enabled,
     view.mailStatus?.last?.at,
     view.mailStatus?.readAt,
+    view.status?.agency,
+    view.mailStatus?.agency,
     view.error,
     view.scanning,
     selected,
@@ -139,8 +141,13 @@ export function communicationHtml(view: CommunicationView, now: number): string 
     const last = s?.last;
     if (s?.enabled && last && !last.ok && last.error) html.push(`<div class="today-note warn" data-key="${key}">${esc(`The last ${what} summaries didn't all come through: ${last.error}`)}</div>`);
   };
-  warn("chat", view.status, "comms-warn");
-  warn("email", view.mailStatus, "mail-warn");
+  const noAgency = [view.status, view.mailStatus].some((s) => s?.enabled && s.agency === false);
+  if (noAgency) {
+    html.push(`<div class="today-note warn" data-key="comms-agency">Teams catch-up and email summaries are waiting on Agency, which isn't installed. Install it and the next scan picks up.</div>`);
+  } else {
+    warn("chat", view.status, "comms-warn");
+    warn("email", view.mailStatus, "mail-warn");
+  }
   const pending = (view.status?.enabled ? view.status.last?.pending || 0 : 0) + (view.mailStatus?.enabled ? view.mailStatus.last?.pending || 0 : 0);
   if (pending) {
     html.push(`<p class="today-empty comms-pending" data-key="comms-pending"><span class="spinner"></span>${pending} conversation${pending === 1 ? "" : "s"} waiting for a summary</p>`);

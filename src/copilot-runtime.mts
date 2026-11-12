@@ -4,7 +4,8 @@
 // (`agency copilot`), so every session gets Agency's MCP servers, plugins and
 // session tracking, on the user's own Copilot login and session store (a
 // session can be reopened with `agency copilot --resume <id>`). Without Agency
-// it falls back to the plain `copilot` CLI and says so.
+// it runs the Copilot runtime that ships inside Devis (the SDK's platform package),
+// and only when that's missing too, the `copilot` CLI on PATH; either way it says so.
 
 import {
     CopilotClient,
@@ -16,8 +17,9 @@ import {
 } from "@github/copilot-sdk";
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
+import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -57,7 +59,8 @@ export function resolveCopilotCliPath(): Promise<string> {
 
 /** How the app starts Copilot. */
 export interface CopilotRuntime {
-    via: "agency" | "copilot";
+    /** Agency's `copilot`, the runtime built into Devis, or the `copilot` CLI on PATH. */
+    via: "agency" | "bundled" | "copilot";
     /** The program to run, and the arguments that come before Copilot's own. */
     command: string;
     args: string[];
@@ -65,20 +68,44 @@ export interface CopilotRuntime {
     warning: string | null;
 }
 
+/**
+ * The headless Copilot runtime in the SDK's platform package, which ships inside Devis.
+ * It reads the same Copilot login and session store as the CLI. Null when it isn't there.
+ */
+export function bundledRuntimePath(): string | null {
+    if (process.env.ADO_PR_OPS_NO_BUNDLED_COPILOT) return null;
+    const platform = `${process.platform}-${process.arch}`;
+    try {
+        const pkg = createRequire(import.meta.url).resolve(`@github/copilot-sdk-${platform}/package.json`);
+        const exe = join(dirname(pkg), "prebuilds", platform, process.platform === "win32" ? "copilot-runtime.exe" : "copilot-runtime");
+        return existsSync(exe) && existsSync(join(dirname(exe), "runtime.node")) ? exe : null;
+    } catch {
+        return null;
+    }
+}
+
 let runtimePromise: Promise<CopilotRuntime> | null = null;
+
+const WITHOUT_AGENCY =
+    "no Agency MCP servers or plugins in reviews and the Workspace, so Teams catch-up, meeting recaps and code search wait for it. Install Agency, then restart Devis.";
 
 async function locateRuntime(): Promise<CopilotRuntime> {
     const agency = agencyExePath();
     if (agency) return { via: "agency", command: agency, args: ["copilot"], warning: null };
+    const looked = `Agency isn't installed (looked for ${agencyExpectedPath()})`;
+    const bundled = bundledRuntimePath();
+    if (bundled) {
+        const warning = `${looked}, so Copilot runs on the runtime built into Devis: ${WITHOUT_AGENCY}`;
+        console.warn(`[copilot] ${warning}`);
+        return { via: "bundled", command: bundled, args: [], warning };
+    }
     const cli = await resolveCopilotCliPath();
-    const warning =
-        `Agency isn't installed (looked for ${agencyExpectedPath()}), so Copilot runs without it: ` +
-        "no Agency MCP servers or plugins in reviews and the Workspace. Install Agency, then restart the app.";
+    const warning = `${looked}, so Copilot runs on the Copilot CLI: ${WITHOUT_AGENCY}`;
     console.warn(`[copilot] ${warning}`);
     return { via: "copilot", command: cli, args: [], warning };
 }
 
-/** Agency's `copilot` when it's installed, else the plain CLI. Read once per service. */
+/** Agency's `copilot` when it's installed, else the built-in runtime, else the CLI. Read once per service. */
 export function resolveCopilotRuntime(): Promise<CopilotRuntime> {
     if (!runtimePromise) {
         runtimePromise = locateRuntime().catch((error) => {
@@ -89,11 +116,24 @@ export function resolveCopilotRuntime(): Promise<CopilotRuntime> {
     return runtimePromise;
 }
 
-/** The command line that reopens a session in an interactive CLI, through Agency when it's there. */
+/**
+ * The command line that reopens a session in an interactive CLI, through Agency when it's there.
+ * The built-in runtime has no terminal of its own, so then it takes the `copilot` CLI on PATH,
+ * which reads the same session store.
+ */
 export async function resumeCommand(sessionId: string): Promise<{ command: string; args: string[] }> {
     const runtime = await resolveCopilotRuntime();
-    return { command: runtime.command, args: [...runtime.args, "--resume", sessionId] };
+    if (runtime.via !== "bundled") return { command: runtime.command, args: [...runtime.args, "--resume", sessionId] };
+    const cli = await resolveCopilotCliPath().catch(() => null);
+    if (!cli) throw new Error("Opening a session in a terminal needs Agency or the Copilot CLI. Install Agency, then restart Devis.");
+    return { command: cli, args: ["--resume", sessionId] };
 }
+
+const RUNTIME_LABEL: Record<CopilotRuntime["via"], string> = {
+    agency: "Agency",
+    bundled: "the runtime built into Devis",
+    copilot: "the plain Copilot CLI",
+};
 
 export function getCopilotClient(): Promise<CopilotClient> {
     if (!clientPromise) {
@@ -105,7 +145,7 @@ export function getCopilotClient(): Promise<CopilotClient> {
                 workingDirectory: sessionWorkingDirectory(),
             });
             await client.start();
-            console.log(`[copilot] runtime started through ${runtime.via === "agency" ? "Agency" : "the plain Copilot CLI"} (${runtime.command})`);
+            console.log(`[copilot] runtime started through ${RUNTIME_LABEL[runtime.via]} (${runtime.command})`);
             return client;
         })().catch((error) => {
             clientPromise = null;

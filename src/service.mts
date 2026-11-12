@@ -181,6 +181,8 @@ async function main(): Promise<void> {
 
     const { dbPath, configPath } = configureDataPaths();
     await migrateExtensionData(dbPath, configPath);
+    // Before anything runs git: Devis' own Git goes on PATH when the machine's won't do.
+    (await import("./machine-tools.mjs")).prepareGit();
 
     const { startServer } = await import("./server.mjs");
     const { apiActivity } = await import("./api.mjs");

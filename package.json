@@ -12,12 +12,37 @@
     "typecheck": "tsc -p tsconfig.backend.json --noEmit && tsc -p tsconfig.web.json --noEmit",
     "start": "npm run build && electron .",
     "package": "npm run build && node scripts/package-desktop.mjs",
+    "installer": "npm run package && electron-builder --win nsis --prepackaged out/Devis-win32-x64",
     "deploy": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/deploy-desktop.ps1"
+  },
+  "build": {
+    "appId": "AdoPrOps.Desktop",
+    "productName": "Devis",
+    "executableName": "devis",
+    "publish": null,
+    "directories": {
+      "output": "out/installer",
+      "buildResources": "build"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "artifactName": "Devis-Setup-${version}.exe",
+      "createDesktopShortcut": false,
+      "shortcutName": "Devis",
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true
+    }
   },
   "devDependencies": {
     "@electron/packager": "20.3.0",
     "@types/node": "^22.9.0",
     "electron": "44.5.1",
+    "electron-builder": "26.18.0",
     "typescript": "^5.6.3"
   },
   "dependencies": {
