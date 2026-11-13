@@ -296,7 +296,7 @@ export function openActionDialog(opts: ActionDialogOptions): HTMLElement {
       event.stopPropagation(); // keep the PR slide-over open
       if (!busy) close();
     } else if (event.key === "Tab") {
-      const focusable = [...dialog.querySelectorAll<HTMLElement>("button, input, textarea")].filter(
+      const focusable = [...dialog.querySelectorAll<HTMLElement>("button, input, select, textarea")].filter(
         (node) => !(node as HTMLButtonElement).disabled && node.offsetParent !== null
       );
       if (!focusable.length) return;

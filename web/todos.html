@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <!--
+    The To-dos window: one for the app, opened from the Workspace's To-dos panel.
+    Same glass field and title bar as index.html. todos.js mounts the full list (search, filters,
+    subtasks, due dates, select and start) into #todos, with the same controller as the panel.
+  -->
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>To-dos · Devis</title>
+    <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="responsive.css" />
+  </head>
+  <body data-page="todos">
+    <header class="titlebar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg class="ic" viewBox="0 0 16 16" focusable="false">
+            <path d="M2.5 4.25l1.1 1.1 2-2.1M2.5 10.25l1.1 1.1 2-2.1M7.75 4.5h5.75M7.75 10.5h5.75"></path>
+          </svg>
+        </span>
+        <span class="brand-name" id="todosTitle">To-dos</span>
+      </div>
+    </header>
+    <main id="todos" class="tw" aria-label="To-dos">
+      <div class="tw-toolbar" id="todosTools"></div>
+      <div class="tw-scroll">
+        <p class="tw-err" id="todosErr" role="alert" hidden></p>
+        <div class="tw-list" id="todosList"></div>
+      </div>
+    </main>
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+    <script type="module" src="todos.js"></script>
+  </body>
+</html>

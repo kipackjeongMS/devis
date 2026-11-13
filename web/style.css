@@ -2108,6 +2108,13 @@ button.thread-loc:focus-visible { outline-offset: -2px; }
 .detail-menu-item:focus-visible { outline-offset: -2px; }
 .detail-menu-item:active:not(:disabled) { background: var(--fill-press); }
 .detail-menu-item:disabled { color: var(--text-off); cursor: default; }
+/* A context menu's unavailable entry stays in the arrow-key order (aria-disabled), so it can take
+   focus; it reads as off and doesn't light up under the pointer. */
+.detail-menu-item[aria-disabled="true"] { color: var(--text-off); cursor: default; }
+.detail-menu-item[aria-disabled="true"]:hover:not(:focus-visible),
+.detail-menu-item[aria-disabled="true"]:active { background: transparent; }
+.detail-menu-item[aria-disabled="true"] .detail-menu-check,
+.detail-menu-item[aria-disabled="true"] .detail-menu-hint { color: var(--text-off); }
 .detail-menu-item.danger .detail-menu-label { color: var(--critical); }
 .detail-menu-check { display: grid; flex: none; place-items: center; width: 16px; height: 20px; color: var(--accent); }
 .detail-menu-check svg.ic { width: 14px; height: 14px; stroke-width: 2; }
@@ -4780,6 +4787,148 @@ button.rr-main { cursor: pointer; }
 .todo-done-head .tu-toggle { margin-left: 0; color: var(--text-3); }
 .todo-clear { min-height: 24px; margin-left: auto; padding: 0 8px; }
 
+/* To-dos: subtasks, priority, due dates and select mode (todoList.ts; the panel and the window).
+   A row is fold, box, words. Subtasks indent 26px, which puts a child's box under its parent's
+   words; a hairline drops from the parent's chevron down the side of its subtasks. */
+.todo-fold {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 16px;
+  height: 20px;
+  margin: 1px -4px 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-3);
+}
+button.todo-fold { cursor: pointer; transition: background var(--t-fast) linear, color var(--t-fast) linear; }
+button.todo-fold:hover { background: var(--fill-selected); color: var(--text-1); }
+button.todo-fold:focus-visible { outline: 2px solid var(--focus); outline-offset: 0; }
+.todo-fold svg.ic { width: 12px; height: 12px; transition: transform var(--t-normal) var(--ease); }
+.todo-fold[aria-expanded="true"] svg.ic { transform: rotate(90deg); }
+.todo-list.todo-sub { position: relative; padding-left: 26px; }
+.todo-sub::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 6px;
+  left: 12px;
+  width: 1px;
+  background: var(--divider);
+  pointer-events: none;
+}
+/* Select mode swaps the box for a checkbox of the same footprint, so nothing shifts. */
+.todo-pick { margin: 3px 1px 0; }
+.todo-pick-sp { flex: none; width: 18px; }
+.todo.is-selected,
+.todo.is-selected:hover,
+.todo.is-selected:focus-within { background: var(--accent-tint); }
+.todo.is-ctx { background: var(--fill-selected); box-shadow: inset 0 0 0 1px var(--divider); }
+.todo.is-selected.is-ctx { background: var(--accent-tint); }
+/* A filtered view keeps a match's parents for context; they read quieter than the matches. */
+.todo.is-context .todo-text { color: var(--text-3); }
+.todo-text mark { padding: 0 1px; border-radius: 2px; background: var(--accent-tint-2); color: inherit; }
+/* Priority (top-level only): the box takes its colour, and a flag says which. */
+.todo.prio-3,
+.todo-prio.prio-3 { --prio: var(--critical); }
+.todo.prio-2,
+.todo-prio.prio-2 { --prio: var(--caution); }
+.todo.prio-1,
+.todo-prio.prio-1 { --prio: var(--accent); }
+.todo[class*="prio-"] > .todo-check { border-color: var(--prio); background: color-mix(in srgb, var(--prio) 10%, transparent); }
+.todo[class*="prio-"] > .todo-check:hover { color: color-mix(in srgb, var(--prio) 60%, transparent); }
+/* Under the words: priority, due date, subtask progress, the task it started, where it came from. */
+.todo-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; max-width: 100%; }
+.todo-chip,
+.todo-prog,
+.todo-prio {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 0 7px;
+  border: 1px solid var(--stroke-card);
+  border-radius: 999px;
+  background: none;
+  color: var(--text-3);
+  font: var(--fs-readout)/18px var(--mono);
+  white-space: nowrap;
+}
+.todo-chip svg.ic,
+.todo-prog svg.ic,
+.todo-prio svg.ic { flex: none; width: 12px; height: 12px; }
+.todo-chip span { overflow: hidden; text-overflow: ellipsis; }
+button.todo-chip { cursor: pointer; transition: background var(--t-fast) linear, border-color var(--t-fast) linear, color var(--t-fast) linear; }
+button.todo-chip:hover { background: var(--fill-hover); color: var(--text-1); }
+button.todo-chip:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.todo-task { max-width: min(100%, 280px); }
+.todo-prio { border-color: color-mix(in srgb, var(--prio) 40%, transparent); color: var(--prio); }
+.todo-prog.is-done { border-color: color-mix(in srgb, var(--success) 35%, transparent); color: var(--success); }
+.todo-chip.todo-due.tone-over { border-color: color-mix(in srgb, var(--critical) 45%, transparent); color: var(--critical); }
+.todo-chip.todo-due.tone-today { border-color: color-mix(in srgb, var(--caution) 45%, transparent); color: var(--caution); }
+.todo-chip.todo-due.tone-soon { border-color: color-mix(in srgb, var(--accent) 32%, transparent); color: var(--accent-text); }
+/* Adding a subtask: a smaller add box where its first subtask goes, lined up with the boxes. */
+.todo-addsub { padding: 2px 0 4px 24px; }
+.todo-add.todo-add-sub { height: 28px; margin: 0; padding: 0 8px; }
+.todo-add-sub svg.ic { width: 13px; height: 13px; }
+.todo-add-sub input { font-size: var(--fs-caption); }
+.todo-list.is-done { margin-top: 2px; }
+.td-bulk .icon-btn { width: 28px; height: 28px; }
+.td-bulk .icon-btn svg.ic { width: 14px; height: 14px; }
+.td-bulk .pp-all { flex: 0 1 auto; }
+@media (pointer: coarse) {
+  .todo-fold { width: 24px; height: 24px; margin: -1px -4px -1px 0; }
+  .todo-sub::before { left: 16px; }
+  .todo-addsub { padding-left: 32px; }
+}
+@media (forced-colors: active) {
+  .todo.is-selected,
+  .todo.is-ctx { outline: 1px solid Highlight; outline-offset: -1px; }
+  .todo-sub::before { background: GrayText; }
+}
+
+/* Starting a task from to-dos: the split, who takes what, and the date picker. */
+.pa-radio input.td-num {
+  width: 44px;
+  height: 24px;
+  margin: 0 4px;
+  padding: 0 4px;
+  border: 1px solid var(--stroke-control);
+  border-radius: 4px;
+  background: var(--control);
+  color: var(--text-1);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  appearance: textfield;
+}
+.td-num::-webkit-inner-spin-button,
+.td-num::-webkit-outer-spin-button { margin: 0; -webkit-appearance: none; }
+.pa-radio input.td-num:focus { border-color: var(--accent); outline: none; background: var(--input-active); }
+.td-split .pa-radio:has(input[type="radio"]:disabled) { cursor: default; }
+.td-split .pa-radio:has(input[type="radio"]:disabled):hover { background: none; }
+.td-split .pa-radio:has(input[type="radio"]:disabled) .pa-radio-label { color: var(--text-3); }
+.td-plan {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 148px;
+  margin: 0;
+  padding: 6px 10px;
+  overflow: auto;
+  border-radius: var(--r-control);
+  background: var(--well);
+  list-style: none;
+}
+.td-plan:empty { display: none; }
+.td-plan li { display: flex; align-items: baseline; gap: 10px; min-width: 0; font-size: var(--fs-caption); line-height: var(--lh-caption); }
+.td-plan-w { flex: none; color: var(--text-3); font: var(--fs-readout)/18px var(--mono); white-space: nowrap; }
+.td-plan-t { min-width: 0; overflow: hidden; color: var(--text-2); text-overflow: ellipsis; white-space: nowrap; }
+.td-plan li.td-plan-warn { color: var(--caution); }
+.td-date { color-scheme: dark; }
+
 /* Today: the quick note. Saved as you type; Jarvis's additions are merged below your text. */
 .note-state {
   margin-left: auto;
@@ -6690,6 +6839,73 @@ html.lean .jv-layer.anim .jv-scrim { animation: fade-in var(--t-fast) linear; }
     animation-duration: 1.5s !important;
     animation-iteration-count: infinite !important;
   }
+}
+
+/* ---------- To-dos window (todos.html, todos.ts; the list is todoList.ts) ----------
+   The same pane as the code window: a toolbar (search, filters, Select), then one centred column
+   that scrolls. In select mode the bulk bar sticks to the top of the column. */
+.tw {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  margin: 0 var(--gutter) var(--gutter);
+  overflow: hidden;
+  border: 1px solid var(--edge);
+  border-top-color: var(--edge-top);
+  border-radius: var(--r-pane);
+  background: var(--gloss), var(--glass);
+  box-shadow: var(--sheen), var(--shadow-pane);
+  font-size: var(--fs-caption);
+  line-height: var(--lh-caption);
+}
+.tw-toolbar {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 10px 8px 12px;
+  border-bottom: 1px solid var(--divider);
+}
+.tw-search { flex: 1 1 220px; max-width: 320px; }
+.tw-chip-n { margin-left: 5px; color: var(--text-3); font: 400 11px/24px var(--mono); font-variant-numeric: tabular-nums; }
+.tw-chip-n:empty { display: none; }
+.pp-chip[aria-pressed="true"] .tw-chip-n { color: inherit; }
+.pp-chip.is-alert .tw-chip-n { color: var(--critical); }
+.tw-sp { flex: 1 1 auto; }
+.btn.tw-select[aria-pressed="true"],
+.btn.tw-select[aria-pressed="true"]:hover:not(:disabled) { background: var(--accent-tint); color: var(--accent-text); }
+.tw-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 0 12px 16px; }
+.tw-list { max-width: 880px; margin-inline: auto; padding-top: 10px; }
+.tw-err {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 880px;
+  margin: 10px auto 0;
+  padding: 8px 12px;
+  border-radius: var(--r-control);
+  background: var(--critical-tint);
+  color: var(--text-1);
+}
+.tw-err[hidden] { display: none; }
+.tw-err > svg.ic { flex: none; color: var(--critical); }
+.tw-err > span { flex: 1 1 auto; min-width: 0; }
+.td-mount.is-window .todo { min-height: 32px; padding-block: 5px; }
+.td-mount.is-window .todo-tools { top: 4px; }
+.td-mount.is-window .todo-add:not(.todo-add-sub) { height: 36px; margin-bottom: 8px; }
+.td-mount.is-window .td-bulk {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: -10px -8px 8px;
+  padding: 10px 8px 8px;
+  border-radius: 0 0 var(--r-control) var(--r-control);
+  background: var(--glass-float);
 }
 
 /* ---------- Code window (code.html, workerChanges.ts) ----------

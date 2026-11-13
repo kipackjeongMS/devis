@@ -12,6 +12,12 @@ export interface ContextMenuEntry {
   disabled?: boolean;
   /** The entry's reason or detail, as a second line. */
   hint?: string;
+  /** One of a set of choices (a radio item): true is the current one, marked with a check. */
+  checked?: boolean;
+  /** A hairline above it, to start a new group. */
+  sepBefore?: boolean;
+  /** Destructive: its label reads in the critical tone. */
+  danger?: boolean;
 }
 
 let closeOpen: (() => void) | null = null;
@@ -47,9 +53,14 @@ export function openContextMenu(
 
   const menu = el(`<div class="detail-menu ctx-menu" role="menu" aria-label="${esc(label)}"></div>`);
   const items = entries.map((entry) => {
+    const radio = entry.checked !== undefined;
+    const cls = `detail-menu-item${entry.sepBefore ? " sep-before" : ""}${entry.danger ? " danger" : ""}`;
+    const mark = radio ? (entry.checked ? icon("check") : "") : entry.icon ? icon(entry.icon) : "";
     const item = el<HTMLButtonElement>(
-      `<button type="button" class="detail-menu-item" role="menuitem"${entry.disabled ? ' aria-disabled="true"' : ""}>` +
-        `<span class="detail-menu-check" aria-hidden="true">${entry.icon ? icon(entry.icon) : ""}</span>` +
+      `<button type="button" class="${cls}" role="${radio ? "menuitemradio" : "menuitem"}"${
+        radio ? ` aria-checked="${entry.checked}"` : ""
+      }${entry.disabled ? ' aria-disabled="true"' : ""}>` +
+        `<span class="detail-menu-check" aria-hidden="true">${mark}</span>` +
         `<span class="detail-menu-text"><span class="detail-menu-label">${esc(entry.label)}</span>${
           entry.hint ? `<span class="detail-menu-hint">${esc(entry.hint)}</span>` : ""
         }</span>` +

@@ -263,8 +263,9 @@ try {
     assert.match(noteText, /- \[(\d+)\] Book the design review \(added by Devis\)/);
     assert.match(noteText, /Quick note:\n\[Devis, .+\] Canary is green\.$/);
     const todoId = Number(/\[(\d+)\] Book the design review/.exec(noteText)[1]);
+    assert.equal(await notes.handler({ action: "set_due", id: todoId, due: "2026-03-02" }), `[${todoId}] is due 2026-03-02.`, "the Lead can date a to-do");
     assert.match(await notes.handler({ action: "complete_todo", id: String(todoId) }), /^Checked off \[\d+\]: Book the design review$/, "an id given as text works too");
-    assert.match(await notes.handler({ action: "delete", id: todoId }), /^Use action read, add_todo, complete_todo, append_note\.$/);
+    assert.match(await notes.handler({ action: "delete", id: todoId }), /^Use action read, add_todo, complete_todo, set_due, append_note\.$/);
 
     // ---- status updates through the Lead ----
     assert.equal(await tools.devis_post_status.handler({ taskId: task.id, text: "Setup guide rewritten" }), "Posted: Setup guide rewritten");

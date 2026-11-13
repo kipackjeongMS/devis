@@ -16,6 +16,7 @@ import { endService, ensureService, serviceFiles, serviceStatus, stopService, wa
 import { APP_NAME, DATA_FOLDER, FORMER_APP_NAME } from "./brand.mjs";
 import { CODE_WINDOW_MIN, codeWindowUrl, codeWindowWorker, isFocusMainUrl, parsePlacement, placeCodeWindow, type SavedPlacement } from "./code-window.mjs";
 import { createPrWindowController, PR_WINDOW_MIN, PR_WINDOW_SIZE, prWindowTarget, type PrWindowHandle } from "./pr-window.mjs";
+import { createTodosWindowController, isTodosWindowUrl, TODOS_WINDOW_MIN, TODOS_WINDOW_SIZE, type TodosWindowHandle } from "./todos-window.mjs";
 import { nextZoom, titleBarHeight, zoomCommand, zoomLevelOf } from "./ui-zoom.mjs";
 import { folderPickedScript, loginItem, shellRequest } from "./shell-request.mjs";
 import { readSetupState, setupStatePath } from "./setup-state.mjs";
@@ -76,8 +77,8 @@ function openOutside(url: string): void {
 
 /**
  * Keep the window on the service's origin (it can change when the service restarts); everything else opens in the browser.
- * The page's own window.opens are a worker's code window and the one pull request window (the shell builds both,
- * not the page) and a code window's "back to the main window" (`/?focus=main`), which only brings that window forward.
+ * The page's own window.opens are a worker's code window, the one pull request window and the one to-dos window (the
+ * shell builds each, not the page) and "back to the main window" (`/?focus=main`), which only brings that window forward.
  */
 function confineToOrigin(contents: WebContents): void {
     contents.setWindowOpenHandler(({ url }) => {
@@ -91,6 +92,7 @@ function confineToOrigin(contents: WebContents): void {
         const pr = worker ? null : prWindowTarget(url, origin);
         if (worker) openCodeWindow(worker);
         else if (pr) prWindow.open(pr);
+        else if (isTodosWindowUrl(url, origin)) todosWindow.open();
         else if (isFocusMainUrl(url, origin)) focusMainWindow();
         else if (isWebUrl(url)) openOutside(url);
         return { action: "deny" };
@@ -277,6 +279,7 @@ function createWindow(url: string): BrowserWindow {
         // The code windows belong to the main one: closing it closes the app.
         for (const code of codeWindows.values()) if (!code.isDestroyed()) code.close();
         for (const pr of prBrowserWindows) if (!pr.isDestroyed()) pr.close();
+        for (const todos of todosBrowserWindows) if (!todos.isDestroyed()) todos.close();
     });
     void show(window, url);
     return window;
@@ -380,6 +383,46 @@ const prWindow = createPrWindowController({
         window.on("closed", () => {
             prBrowserWindows.delete(window);
             prWindow.closed(handle);
+        });
+        return handle;
+    },
+});
+
+// ---- the to-dos window -----------------------------------------------------------------
+
+/** The full to-dos view: one window, opened from the To-dos panel; opening it again brings it forward. */
+const todosBrowserWindows = new Set<BrowserWindow>();
+const todosWindow = createTodosWindowController({
+    origin: () => origin,
+    create: () => {
+        const mainArea = (mainWindow && !mainWindow.isDestroyed() ? screen.getDisplayMatching(mainWindow.getBounds()) : screen.getPrimaryDisplay()).workArea;
+        const width = Math.min(TODOS_WINDOW_SIZE.width, mainArea.width);
+        const height = Math.min(TODOS_WINDOW_SIZE.height, mainArea.height);
+        const window = new BrowserWindow({
+            ...chromeOptions(),
+            width,
+            height,
+            x: mainArea.x + Math.round((mainArea.width - width) / 2),
+            y: mainArea.y + Math.round((mainArea.height - height) / 2),
+            minWidth: Math.min(TODOS_WINDOW_MIN.width, mainArea.width),
+            minHeight: Math.min(TODOS_WINDOW_MIN.height, mainArea.height),
+        });
+        todosBrowserWindows.add(window);
+        confineToOrigin(window.webContents);
+        followUiZoom(window);
+        window.once("ready-to-show", () => window.show());
+        const handle: TodosWindowHandle = {
+            isDestroyed: () => window.isDestroyed(),
+            reveal: () => {
+                if (window.isMinimized()) window.restore();
+                window.show();
+                window.focus();
+            },
+            load: (url, current) => load(window, url, current),
+        };
+        window.on("closed", () => {
+            todosBrowserWindows.delete(window);
+            todosWindow.closed(handle);
         });
         return handle;
     },
@@ -514,6 +557,7 @@ async function recover(): Promise<void> {
             origin = next;
             moveCodeWindows(next);
             prWindow.moveTo(next);
+            todosWindow.moveTo(next);
         }
         console.log(`[ado-pr-ops] reconnected to the service at ${status.url}`);
     } catch (error) {

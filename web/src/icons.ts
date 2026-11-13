@@ -69,6 +69,8 @@ const PATHS = {
   files: '<path d="M5.75 1.75h4.5l2.5 2.5v7.5h-7z"/><path d="M3.25 4.25v10h6.5"/>',
   lines: '<path d="M2.5 4h11M2.5 8h11M2.5 12h7"/>',
   download: '<path d="M8 2.5v7.5M5 7l3 3 3-3M3 12.75h10"/>',
+  flag: '<path d="M3.75 14V2.5M3.75 3h8l-1.75 2.75 1.75 2.75h-8"/>',
+  subtask: '<path d="M3.5 2.5v6.5a1.5 1.5 0 0 0 1.5 1.5h7M10 8l2.5 2.5L10 13"/>',
 } as const;
 
 export type IconName = keyof typeof PATHS;

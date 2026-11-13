@@ -243,7 +243,13 @@ export async function handleJarvisApi(req: IncomingMessage, res: ServerResponse,
         }
 
         // ---- the user's notes: to-dos and the quick note ----
-        if (p === "/api/jarvis/todos" && get) return sendJson(res, 200, { todos: await listTodos() });
+        // With the tasks started from them, so the to-dos window can name each one without Today's poll.
+        if (p === "/api/jarvis/todos" && get) {
+            const todos = await listTodos();
+            const ids = [...new Set(todos.flatMap((t) => (t.taskId ? [t.taskId] : [])))];
+            const tasks = (await Promise.all(ids.map((id) => getTask(id)))).flatMap((t) => (t ? [{ id: t.id, title: t.title, status: t.status }] : []));
+            return sendJson(res, 200, { todos, tasks });
+        }
         if (p === "/api/jarvis/todos" && post) {
             const b = await readBody(req);
             const todo = await addTodo(b?.text, "you", b?.source, { parentId: b?.parentId, due: b?.due });

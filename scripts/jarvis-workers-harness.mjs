@@ -302,10 +302,13 @@ try {
     const notesTool = session.config.tools.find((t) => t.name === "user_notes");
     assert.ok(notesTool.skipPermission);
     const userNotes = (args, sessionId = plain.sessionId) => notesTool.handler(args, { sessionId });
-    assert.match(await userNotes({ action: "add_todo", text: "Ask about the rollout window" }), /^Added to-do \[\d+\]: Ask about the rollout window$/);
+    const added = await userNotes({ action: "add_todo", text: "Ask about the rollout window" });
+    assert.match(added, /^Added to-do \[\d+\]: Ask about the rollout window$/);
     assert.match(await userNotes({ action: "read" }), /Ask about the rollout window \(added by appconfig\)/, "signed by the worker, not by what it passed");
-    assert.match(await userNotes({ action: "complete_todo", id: 1 }), /^Use action read, add_todo\.$/, "workers can't check off the user's to-dos");
-    assert.match(await userNotes({ action: "append_note", text: "x" }), /^Use action read, add_todo\.$/, "…or edit the quick note");
+    const askId = Number(/\[(\d+)\]/.exec(added)[1]);
+    assert.equal(await userNotes({ action: "set_due", id: askId, due: "2026-03-02" }), `[${askId}] is due 2026-03-02.`, "workers can date a to-do");
+    assert.match(await userNotes({ action: "complete_todo", id: 1 }), /^Use action read, add_todo, set_due\.$/, "workers can't check off the user's to-dos");
+    assert.match(await userNotes({ action: "append_note", text: "x" }), /^Use action read, add_todo, set_due\.$/, "…or edit the quick note");
     assert.match(await userNotes({ action: "read" }, "not-a-worker"), /not one of the Workspace's workers/);
 
     // ---- the task's validation chain: every worker can read it and propose one ----

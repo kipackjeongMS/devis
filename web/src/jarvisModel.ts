@@ -792,6 +792,14 @@ export interface Todo {
   source?: TodoSource | null;
   /** Why it was checked off when it ticked itself. */
   doneNote?: string | null;
+  /** The to-do it's a subtask of; null on a top-level one. */
+  parentId: number | null;
+  /** The day it's due, as YYYY-MM-DD in the user's own calendar. */
+  due: string | null;
+  /** 3 high, 2 medium, 1 low, 0 none. Only top-level to-dos carry one. */
+  priority: number;
+  /** The task started from it, if one was. */
+  taskId: string | null;
 }
 
 /** A Needs you item a to-do was made from: the ask's key, and enough to show and open it. */

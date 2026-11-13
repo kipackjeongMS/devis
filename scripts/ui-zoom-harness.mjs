@@ -71,7 +71,7 @@ assert.match(main, /setTitleBarOverlay\(\{ height: titleBarHeight\(uiZoom\) \}\)
 assert.match(main, /zoomFactor: uiZoom/, "a new window opens at the size");
 assert.match(main, /"ui-zoom\.json"/, "the size is saved in the data folder");
 assert.match(main, /contents\.on\("did-navigate", \(\) => sizeWindow\(window\)\)/, "a reload onto a new port keeps the size");
-assert.equal(main.match(/followUiZoom\(window\);/g)?.length, 3, "the main window, code windows and the PR window all follow");
+assert.equal(main.match(/followUiZoom\(window\);/g)?.length, 4, "the main window, code windows, the PR window and the To-dos window all follow");
 assert.match(main, /devis:ui-zoom/);
 assert.match(main, /Menu\.setApplicationMenu\(\s*Menu\.buildFromTemplate\(/);
 assert.doesNotMatch(main, /zoomIn|zoomOut|resetZoom/, "Electron's zoom roles would size one window on their own");

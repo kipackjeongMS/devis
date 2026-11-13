@@ -617,6 +617,14 @@ if (typeof BroadcastChannel === "function") {
     openTaskById(d.taskId);
     window.focus();
   });
+  // The full To-dos window opens a task here: the one started from a to-do, or the one it came from.
+  new BroadcastChannel("devis-todos").addEventListener("message", (e: MessageEvent) => {
+    const d = e.data;
+    if (d?.type !== "open-task" || typeof d.taskId !== "string" || !d.taskId) return;
+    setFeature("jarvis");
+    openTaskById(d.taskId);
+    window.focus();
+  });
 }
 
 boot();

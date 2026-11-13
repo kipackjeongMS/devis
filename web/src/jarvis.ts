@@ -29,7 +29,9 @@ import {
 } from "./chatPane.js";
 import { loadModelCatalog, modelCatalog } from "./modelCatalog.js";
 import { ImageDraft, paintTray, sameImages, trayNote, uploadWith, wireImages, type ChatImage } from "./chatImages.js";
-import { effortLabel, effortsFor, nextChoice, type PickerState } from "./modelChoice.js";
+import { effortLabel, nextChoice, type PickerState } from "./modelChoice.js";
+import { MODEL_FIELDS, chosenModel, wireModelFields } from "./modelFields.js";
+import { createTodoList, onTodosChanged, type TodoList } from "./todoList.js";
 import { patchHtml } from "./patch.js";
 import { toast } from "./toast.js";
 import { state } from "./state.js";
@@ -173,7 +175,6 @@ const DRAWER_WIDTH_KEY = "adoPrOps.workspace.drawerWidth";
 const DRAWER_MIN = 560;
 const SERVICE_KEY = "adoPrOps.jarvis.service";
 const OVERVIEW_KEY = "adoPrOps.jarvis.overviewCollapsed";
-const DONE_TODOS_KEY = "adoPrOps.workspace.showDoneTodos";
 /** When the user last opened Meetings: recaps after it make its badge. */
 const MEETINGS_SEEN_KEY = "adoPrOps.workspace.meetingsSeen";
 /** When the user last opened Communication: important chats that moved after it make its badge. */
@@ -227,11 +228,9 @@ let overviewCollapsed = readPref(OVERVIEW_KEY, "0") === "1";
 let overviewRefreshing = false;
 let railFolded = readRailFolded();
 
-// The to-dos come with every Today poll. A poll that was on its way while a to-do
-// changed carries the list from before, so it's ignored: `todoRev` moves on each change.
-let todoRev = 0;
-let todoEditing: number | null = null;
-let showDoneTodos = readPref(DONE_TODOS_KEY, "0") === "1";
+// The to-dos come with every Today poll; todoList.ts owns the list. A poll that was on its way
+// while a to-do changed carries the list from before, so it's ignored: `todoList.rev` moves on each change.
+let todoList: TodoList;
 
 // The quick note: the saved copy, the user's unsaved edit and the saved copy it
 // started from. A save names that version; if the note moved on meanwhile (Devis
@@ -491,6 +490,7 @@ function mount(): void {
     prs: `<button type="button" class="icon-btn" data-act="prs-select" aria-pressed="false" title="Select pull requests" aria-label="Select pull requests">${svg("check")}</button>${iconBtn("prs-refresh", "sync", "Refresh pull requests")}`,
     comms: iconBtn("comms-scan", "sync", "Read Teams and email now"),
     meetings: iconBtn("meetings-scan", "sync", "Read the calendar now"),
+    todos: `<button type="button" class="icon-btn" data-act="todos-select" aria-pressed="false" title="Select to-dos" aria-label="Select to-dos">${svg("check")}</button>${iconBtn("todos-window", "external", "Open the full to-dos view")}`,
   };
   root.innerHTML = `
     <section class="jv-center pn pn-devis" data-panel="devis" data-pane-el="lead" aria-label="Devis, the Lead">
@@ -577,6 +577,25 @@ function mount(): void {
   meetRailCount = count("meetings");
   todosBody = body("todos");
   todosCount = count("todos");
+  const todosSelect = q<HTMLElement>('[data-act="todos-select"]');
+  todoList = createTodoList(todosBody, {
+    mode: "panel",
+    todos: () => data?.todos ?? null,
+    setTodos: (list) => {
+      if (data) data.todos = list;
+    },
+    reload: () => void loadToday(),
+    repaint: () => renderDay(true),
+    openTask: (id) => openTaskById(id),
+    taskTitle: (id) => data?.tasks.find((t) => t.id === id)?.title ?? null,
+    view: () => ({ filter: "all", query: "" }),
+    onSelecting: (on) => todosSelect.setAttribute("aria-pressed", String(on)),
+    selectButton: () => todosSelect,
+  });
+  // A change in the full To-dos window shows here at once, not at the next poll.
+  onTodosChanged(() => {
+    if (visible) void loadToday();
+  });
   noteBody = body("note");
   serviceSelect = q(".today-service");
   statusLine = q(".today-status-text");
@@ -606,7 +625,6 @@ function mount(): void {
 
   root.addEventListener("click", onClick);
   root.addEventListener("contextmenu", onContextMenu);
-  root.addEventListener("dblclick", onDblClick);
   root.addEventListener("submit", onSubmit);
   root.addEventListener("input", onInput);
   root.addEventListener("keydown", onKeydown);
@@ -1029,13 +1047,13 @@ async function loadToday(): Promise<void> {
   clearTimeout(todayTimer);
   if (!visible) return;
   const token = ++todayToken;
-  const rev = todoRev;
+  const rev = todoList.rev;
   const askedAt = Date.now();
   try {
     const since = new Date(dayStart(Date.now())).toISOString();
     const next: TodayData = await getJSON("/api/jarvis/today?since=" + encodeURIComponent(since));
     if (token !== todayToken) return;
-    if (rev !== todoRev && data) next.todos = data.todos;
+    if (rev !== todoList.rev && data) next.todos = data.todos;
     data = next;
     todayAskedAt = askedAt;
     loadError = "";
@@ -1071,13 +1089,11 @@ function pruneTodayState(today: TodayData): void {
   const taskIds = new Set(today.tasks.map((t) => t.id));
   const sessionIds = new Set(today.tasks.flatMap((t) => t.workers.map((w) => w.sessionId)));
   const requestIds = new Set(today.tasks.flatMap((t) => t.workers.flatMap((w) => w.requests.map((r) => r.id))));
-  const todoIds = new Set((today.todos || []).map((t) => String(t.id)));
   for (const key of [...drafts.keys()]) {
     const [kind, id] = [key.slice(0, key.indexOf(":")), key.slice(key.indexOf(":") + 1)];
     if ((kind === "st" && !taskIds.has(id)) || (kind === "ans" && !requestIds.has(id))) drafts.delete(key);
-    if (kind === "todo" && id !== "new" && !todoIds.has(id)) drafts.delete(key);
   }
-  if (todoEditing !== null && !todoIds.has(String(todoEditing))) todoEditing = null;
+  todoList.prune();
   pruneTaskModalState(taskIds, sessionIds, requestIds);
 }
 
@@ -1303,18 +1319,11 @@ async function meetingTodo(node: HTMLElement): Promise<void> {
   const index = Number(node.dataset.index);
   if (!id || !Number.isInteger(index)) return;
   if (node instanceof HTMLButtonElement) node.disabled = true;
-  todoRev++;
-  try {
-    const res = await postJSON("/api/jarvis/comms/meetings/todo", { id, index });
-    if (data && Array.isArray(res?.todos)) data.todos = res.todos;
-    toast("Added to your to-dos", "ok");
-  } catch (e) {
-    toast((e as Error).message, "err");
+  const ok = await todoList.act("/api/jarvis/comms/meetings/todo", { id, index }, () => {
     if (node instanceof HTMLButtonElement) node.disabled = false;
-  } finally {
-    todoRev++;
-    renderToday(true);
-  }
+  });
+  if (ok) toast("Added to your to-dos", "ok");
+  renderToday(true);
 }
 
 /**
@@ -1452,14 +1461,6 @@ function commsNeedHtml(n: Extract<NeedItem, { kind: "comms" }>, now: number): st
         </div>
       </div>
     </article>`;
-}
-
-/** Where a to-do from Teams, a meeting or an email came from, as a link to it. */
-function todoLinkHtml(src: NonNullable<Todo["source"]>): string {
-  const mail = src.key.startsWith("need:mail:");
-  const meet = src.key.startsWith("meet:");
-  const title = mail ? "Open the email in Outlook" : meet ? "Open the meeting's chat in Teams" : src.key.startsWith("need:chat:") ? "Open the chat in Teams" : "Open the message in Teams";
-  return `<a class="todo-src" data-key="src" href="${esc(src.link!)}" target="_blank" rel="noopener" title="${title}">${svg(mail ? "mail" : meet ? "calendar" : "chat")}<span>${esc(src.taskTitle || (mail ? "Email" : "Teams"))}${src.who ? ` · ${esc(src.who)}` : ""}</span></a>`;
 }
 
 /** The chats and email threads someone waits on you in. */
@@ -1624,9 +1625,7 @@ function renderDay(force: boolean): void {
     loadError,
     overviewCollapsed,
     overviewRefreshing,
-    data?.todos?.map((t) => [t.id, t.text, t.done, t.author, t.source?.key, t.doneNote]),
-    todoEditing,
-    showDoneTodos,
+    data?.todos?.map((t) => [t.id, t.text, t.done, t.author, t.source?.key, t.doneNote, t.parentId, t.due, t.priority, t.taskId && data?.tasks.find((x) => x.id === t.taskId)?.title]),
     note?.version,
     noteDraft === null,
     noteSaving,
@@ -1641,7 +1640,8 @@ function renderDay(force: boolean): void {
   daySig = sig;
 
   const todos = data?.todos || [];
-  const openTodos = todos.filter((t) => !t.done).length;
+  // The count is of what's on the list: open top-level to-dos, not their subtasks.
+  const openTodos = todos.filter((t) => !t.done && t.parentId === null).length;
   todosCount.textContent = openTodos ? String(openTodos) : "";
   // Needs you covers every service: the filter belongs to the board in Tasks.
   const needs = data ? visibleNeeds(needsItems(data.tasks, teamsAsks(), commsNeedsNow()), data.todos) : [];
@@ -1667,7 +1667,7 @@ function renderDay(force: boolean): void {
     staleNote() + (needs.length ? needs.map((n) => needHtml(n, now)).join("") : `<p class="rs-empty" data-key="none">${esc(SECTIONS[0].empty)}</p>`)
   );
   patchPane(overviewEl, renderOverview(data.tasks, now));
-  patchPane(todosBody, renderTodos(todos, now));
+  todoList.render(force);
   patchPane(noteBody, renderNote(now));
 }
 
@@ -1726,105 +1726,7 @@ function paintUpdateBanner(b: UpdateBanner | null): void {
 }
 
 // ---- Today: to-dos ------------------------------------------------------------------
-
-function renderTodos(todos: Todo[], now: number): string {
-  const open = todos.filter((t) => !t.done);
-  const done = todos.filter((t) => t.done);
-  const draft = drafts.get("todo:new") || "";
-  const add = `<form class="todo-add" data-form="todo-add" data-key="todo-add">
-      ${svg("add")}
-      <input type="text" maxlength="500" data-draft="todo:new" value="${esc(draft)}" placeholder="Add a to-do (Enter)" aria-label="Add a to-do" autocomplete="off">
-    </form>`;
-  const list = open.length
-    ? `<ul class="todo-list" data-key="todo-open">${open.map((t, i) => todoRow(t, now, i, open.length)).join("")}</ul>`
-    : `<p class="rs-empty" data-key="todo-none">Nothing on your list.</p>`;
-  const doneHead = done.length
-    ? `<div class="todo-done-head" data-key="todo-done-head">
-        <button type="button" class="tu-toggle" data-act="todo-show-done" aria-expanded="${showDoneTodos}">Done · ${done.length}${svg("chevron")}</button>
-        ${showDoneTodos ? `<button type="button" class="btn sm ghost todo-clear" data-act="todo-clear-done">Clear done</button>` : ""}
-      </div>`
-    : "";
-  const doneList =
-    done.length && showDoneTodos ? `<ul class="todo-list is-done" data-key="todo-done">${done.map((t) => todoRow(t, now, 0, 0)).join("")}</ul>` : "";
-  return `${list}${add}${doneHead}${doneList}`;
-}
-
-function todoRow(t: Todo, now: number, index: number, count: number): string {
-  const key = `todo:${t.id}`;
-  const editing = todoEditing === t.id && !t.done;
-  const text = editing
-    ? `<input type="text" class="todo-edit" data-key="edit" maxlength="500" data-draft="${key}" value="${esc(drafts.get(key) ?? t.text)}" aria-label="Edit the to-do" autocomplete="off">`
-    : `<span class="todo-text" data-key="text">${esc(t.text)}</span>`;
-  // From Needs you: the task it's about opens from here; one that ticked itself says why.
-  const src = t.source;
-  const from = src?.taskId
-    ? `<button type="button" class="todo-src" data-key="src" data-act="todo-open-task" data-src-task="${esc(src.taskId)}" title="Open ${esc(src.taskTitle)}">${svg("checklist")}<span>${esc(src.taskTitle || "the task")}${src.who ? ` · ${esc(src.who)}` : ""}</span></button>`
-    : src?.link
-      ? todoLinkHtml(src)
-      : "";
-  const note = t.done && t.doneNote ? `<span class="todo-note" data-key="note">Done by itself · ${esc(t.doneNote)}</span>` : "";
-  const by =
-    t.author !== "you"
-      ? `<span class="todo-by" data-key="by" title="Added by ${esc(t.author)} ${esc(agoPhrase(t.createdAt, now))}">${esc(t.author)}</span>`
-      : "";
-  // Keyed, so a repaint between mousedown and click (an edit saved on focusout) can't turn the pressed button into another one.
-  const tool = (act: string, name: IconName, label: string): string =>
-    `<button type="button" class="icon-btn" data-key="${act}" data-act="${act}" title="${label}" aria-label="${label}">${svg(name)}</button>`;
-  const tools = t.done
-    ? tool("todo-delete", "trash", "Delete")
-    : [
-        editing ? "" : tool("todo-edit", "edit", "Edit"),
-        index > 0 ? tool("todo-up", "up", "Move up (Alt+Up)") : "",
-        index < count - 1 ? tool("todo-down", "down", "Move down (Alt+Down)") : "",
-        tool("todo-delete", "trash", "Delete"),
-      ].join("");
-  // Every child is keyed: swapping the text for the edit box must not rebuild the tools under the pointer.
-  return `<li class="todo${t.done ? " done" : ""}${editing ? " editing" : ""}" data-key="${key}" data-todo="${t.id}">
-      <button type="button" class="todo-check" data-key="check" data-act="todo-toggle" role="checkbox" aria-checked="${t.done}"
-        aria-label="${t.done ? "Done" : "Not done"}: ${esc(t.text)}" title="${t.done ? "Mark not done" : "Check off"}">${svg("check")}</button>
-      <span class="todo-main" data-key="main">${text}${from}${note}</span>${by}<span class="todo-tools" data-key="tools">${tools}</span>
-    </li>`;
-}
-
-function todoFor(node: Element): Todo | undefined {
-  const id = Number(node.closest<HTMLElement>("[data-todo]")?.dataset.todo);
-  return data?.todos?.find((t) => t.id === id);
-}
-
-/** Change the to-dos, then show the list the answer carries; after a failure, read the list again. */
-async function todoAct(path: string, body: unknown, onFail?: () => void): Promise<boolean> {
-  todoRev++;
-  let ok = false;
-  try {
-    const res = await postJSON(path, body);
-    if (data && Array.isArray(res?.todos)) data.todos = res.todos;
-    ok = true;
-  } catch (e) {
-    // A to-do that's gone (deleted while its edit was on the way) isn't worth a toast; the reload settles it.
-    if ((e as ApiError).status !== 404) toast((e as Error).message, "err");
-    onFail?.();
-  } finally {
-    todoRev++;
-    renderDay(true);
-  }
-  // Started after the change settled, so this read isn't set aside as stale.
-  if (!ok) void loadToday();
-  return ok;
-}
-
-function addTodo(form: HTMLFormElement): void {
-  const input = form.querySelector<HTMLInputElement>("input")!;
-  const text = input.value.trim();
-  if (!text) return;
-  // Cleared at once so the next one can be typed; put back if it didn't save.
-  drafts.delete("todo:new");
-  input.value = "";
-  void todoAct("/api/jarvis/todos", { text }, () => {
-    if (input.value) return;
-    drafts.set("todo:new", text);
-    input.value = text;
-  });
-}
+// The list itself (subtasks, due dates, priority, selection, starting a task) is todoList.ts.
 
 /**
  * Take a Needs you item on as a to-do: it leaves Needs you at once, and the to-do it becomes
@@ -1838,82 +1740,36 @@ async function needToTodo(button: HTMLElement): Promise<void> {
   // Where the keyboard goes once the item is gone: the next item's To-do, else the new to-do.
   const next = button.closest(".need")?.nextElementSibling?.querySelector<HTMLElement>("[data-act='need-todo']")?.closest<HTMLElement>("[data-source]")?.dataset.source;
   const iso = new Date().toISOString();
-  const placeholder: Todo = { id: -Date.now(), text, done: false, author: "you", createdAt: iso, updatedAt: iso, doneAt: null, source: from, doneNote: null };
+  const placeholder: Todo = {
+    id: -Date.now(),
+    text,
+    done: false,
+    author: "you",
+    createdAt: iso,
+    updatedAt: iso,
+    doneAt: null,
+    source: from,
+    doneNote: null,
+    parentId: null,
+    due: null,
+    priority: 0,
+    taskId: null,
+  };
   data.todos = [...(data.todos || []), placeholder];
   renderToday(true);
-  const ok = await todoAct("/api/jarvis/todos", { text, source: from }, () => {
+  const ok = await todoList.act("/api/jarvis/todos", { text, source: from }, () => {
     if (data?.todos) data.todos = data.todos.filter((t) => t !== placeholder);
   });
   renderTasks(true);
   if (!ok) return;
   const added = data.todos?.find((t) => !t.done && t.source?.key === from.key);
-  const focusTarget = next
-    ? root!.querySelector<HTMLElement>(`[data-source="${CSS.escape(next)}"] [data-act='need-todo']`)
-    : added
-      ? todosBody.querySelector<HTMLElement>(`[data-todo="${added.id}"] .todo-check`)
-      : null;
-  focusTarget?.focus({ preventScroll: true });
-  toast("Moved to your to-dos", "ok", added ? { label: "Undo", run: () => void todoAct("/api/jarvis/todos/delete", { id: added.id }).then(() => renderTasks(true)) } : undefined);
-}
-
-function toggleTodo(todo: Todo): void {
-  // Checked at once; the answer settles it, or puts it back.
-  const was = todo.done;
-  todo.done = !was;
-  renderDay(true);
-  void todoAct("/api/jarvis/todos/update", { id: todo.id, done: !was }, () => {
-    todo.done = was;
-  });
-}
-
-function moveTodo(todo: Todo, direction: "up" | "down"): void {
-  const list = data?.todos;
-  if (!list || todo.done) return;
-  const open = list.filter((t) => !t.done);
-  const at = open.indexOf(todo);
-  const to = direction === "up" ? at - 1 : at + 1;
-  if (at < 0 || to < 0 || to >= open.length) return;
-  [open[at], open[to]] = [open[to], open[at]];
-  data!.todos = [...open, ...list.filter((t) => t.done)];
-  renderDay(true);
-  void todoAct("/api/jarvis/todos/move", { id: todo.id, direction }, () => {
-    if (data) data.todos = list;
-  });
-}
-
-function startTodoEdit(todo: Todo): void {
-  if (todo.done) return;
-  todoEditing = todo.id;
-  drafts.set(`todo:${todo.id}`, todo.text);
-  renderDay(true);
-  const input = todosBody.querySelector<HTMLInputElement>(`[data-todo="${todo.id}"] .todo-edit`);
-  input?.focus();
-  input?.setSelectionRange(input.value.length, input.value.length);
-}
-
-/** Save or drop the edit in progress; `refocus` puts the keyboard back on the row. */
-function endTodoEdit(save: boolean, refocus: boolean): void {
-  const id = todoEditing;
-  if (id === null) return;
-  const key = `todo:${id}`;
-  const text = (drafts.get(key) || "").trim();
-  todoEditing = null;
-  drafts.delete(key);
-  const todo = data?.todos?.find((t) => t.id === id);
-  const focusRow = (): void => {
-    if (refocus) todosBody.querySelector<HTMLElement>(`[data-todo="${id}"] .todo-check`)?.focus();
-  };
-  if (!save || !todo || !text || text === todo.text) {
-    renderDay(true);
-    return focusRow();
-  }
-  const before = todo.text;
-  todo.text = text;
-  renderDay(true);
-  focusRow();
-  void todoAct("/api/jarvis/todos/update", { id, text }, () => {
-    todo.text = before;
-  });
+  if (next) root!.querySelector<HTMLElement>(`[data-source="${CSS.escape(next)}"] [data-act='need-todo']`)?.focus({ preventScroll: true });
+  else if (added) todoList.focusTodo(added.id);
+  toast(
+    "Moved to your to-dos",
+    "ok",
+    added ? { label: "Undo", run: () => void todoList.act("/api/jarvis/todos/delete", { id: added.id }).then(() => renderTasks(true)) } : undefined
+  );
 }
 
 // ---- Today: the quick note ----------------------------------------------------------
@@ -2246,7 +2102,7 @@ function jumpToNeed(taskId: string): void {
   // Taken on as a to-do: that's where it is now. Else the task itself.
   revealRail("todos");
   const todo = todosBody.querySelector<HTMLElement>(`.todo-src[data-src-task="${CSS.escape(taskId)}"]`)?.closest<HTMLElement>(".todo");
-  if (todo) return flashInView(todo, todo.querySelector<HTMLElement>(".todo-check"));
+  if (todo) return flashInView(todo, todo.querySelector<HTMLElement>(".todo-check, .todo-pick"));
   openTaskById(taskId);
 }
 
@@ -2480,8 +2336,8 @@ function focusDetail(): void {
   if (ldDetail && list && !list.getClientRects().length) detail.focus({ preventScroll: true });
 }
 
-/** Inside the task drawer: the task handles its own events. */
-const inTask = (e: Event): boolean => !!(e.target as Element).closest?.(".tm-mount");
+/** Inside the task drawer or the to-do list: each handles its own events. */
+const inTask = (e: Event): boolean => !!(e.target as Element).closest?.(".tm-mount, .td-mount");
 
 function onClick(e: MouseEvent): void {
   if (inTask(e)) return;
@@ -2542,7 +2398,6 @@ function onClick(e: MouseEvent): void {
   const node = target.closest<HTMLElement>("[data-act]");
   if (!node) return;
   const task = taskFor(node);
-  const todo = todoFor(node);
   switch (node.dataset.act) {
     case "rail-open":
       return setSheet(true);
@@ -2588,25 +2443,11 @@ function onClick(e: MouseEvent): void {
       if (isFlat()) setSheet(false);
       return openDrawer({ kind: comms ? "comms" : "meetings" }, !!key);
     }
-    case "todo-toggle":
-      return void (todo && toggleTodo(todo));
-    case "todo-edit":
-      return void (todo && startTodoEdit(todo));
-    case "todo-up":
-    case "todo-down":
-      return void (todo && moveTodo(todo, node.dataset.act === "todo-up" ? "up" : "down"));
-    case "todo-delete":
-      if (!todo) return;
-      if (todoEditing === todo.id) todoEditing = null;
-      return void todoAct("/api/jarvis/todos/delete", { id: todo.id });
-    case "todo-show-done":
-      showDoneTodos = !showDoneTodos;
-      writePref(DONE_TODOS_KEY, showDoneTodos ? "1" : "0");
-      return renderDay(true);
-    case "todo-clear-done":
-      return void todoAct("/api/jarvis/todos/clear-done", {});
-    case "todo-open-task":
-      return void (node.dataset.srcTask && openTaskById(node.dataset.srcTask));
+    case "todos-select":
+      return todoList.setSelecting(!todoList.selecting);
+    case "todos-window":
+      // One window, named: a second click brings it forward.
+      return void window.open("/todos.html", "devis-todos");
     case "need-todo":
       return void needToTodo(node);
     case "need-pr": {
@@ -2784,7 +2625,6 @@ function onSubmit(e: SubmitEvent): void {
   const form = e.target as HTMLFormElement;
   e.preventDefault();
   if (form === leadPane.form) return void sendToLead(leadPane.input.value);
-  if (form.dataset.form === "todo-add") return addTodo(form);
   if (form.dataset.form === "status") {
     const input = form.querySelector<HTMLInputElement>("input");
     const task = taskFor(form);
@@ -2852,27 +2692,10 @@ function onKeydown(e: KeyboardEvent): void {
     target.click();
     return;
   }
-  // A to-do being edited: Enter keeps the change, Escape drops it.
-  if (target.classList.contains("todo-edit") && !e.isComposing) {
-    if (e.key === "Enter" || e.key === "Escape") {
-      e.preventDefault();
-      endTodoEdit(e.key === "Enter", true);
-    }
-    return;
-  }
   // Alt+arrows on a panel's header (or its grip) move the panel (a select keeps Alt+Down to open).
   if (e.altKey && e.key.startsWith("Arrow") && target.closest(".rs-h, .pn-grip") && !(target instanceof HTMLSelectElement)) {
     const id = target.closest<HTMLElement>("[data-panel]")?.dataset.panel;
     if (isPanelId(id) && keyMove(id, e.key)) e.preventDefault();
-    return;
-  }
-  // Alt+Up/Down moves the focused to-do.
-  if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
-    const todo = todoFor(target);
-    if (todo && !todo.done) {
-      e.preventDefault();
-      moveTodo(todo, e.key === "ArrowUp" ? "up" : "down");
-    }
     return;
   }
   // The Lead's box: Ctrl+Enter sends it now, into the turn that's running.
@@ -2888,18 +2711,9 @@ function onKeydown(e: KeyboardEvent): void {
   form.requestSubmit();
 }
 
-function onDblClick(e: MouseEvent): void {
-  if (inTask(e)) return;
-  const text = (e.target as HTMLElement).closest(".todo-text");
-  const todo = text && todoFor(text);
-  if (todo) startTodoEdit(todo);
-}
-
 function onFocusOut(e: FocusEvent): void {
   if (inTask(e)) return;
   const target = e.target as HTMLElement;
-  // Clicking away keeps a to-do edit, as Enter does.
-  if (target.classList.contains("todo-edit") && todoEditing !== null && document.hasFocus()) endTodoEdit(true, false);
   // Leaving the note saves it now rather than after the pause.
   if (target.dataset.role === "quick-note" && noteDraft !== null) void flushNote();
 }
@@ -3110,35 +2924,6 @@ function openNewTask(): void {
   paintRoot();
   requestAnimationFrame(() => dialog.querySelector<HTMLInputElement>("#jt-ref")?.focus());
 }
-
-/** A start dialog's Model and Reasoning effort fields. Effort shows for a model that takes one. */
-const MODEL_FIELDS = `<label class="rp-label" for="jw-model">Model</label>
-        <select id="jw-model" class="filter-select jv-field"><option value="">Copilot default</option></select>
-        <label class="rp-label" for="jw-effort" hidden>Reasoning effort</label>
-        <select id="jw-effort" class="filter-select jv-field" hidden><option value="">Default effort</option></select>`;
-
-function wireModelFields(dialog: HTMLElement): void {
-  const model = dialog.querySelector<HTMLSelectElement>("#jw-model")!;
-  const effort = dialog.querySelector<HTMLSelectElement>("#jw-effort")!;
-  const label = dialog.querySelector<HTMLElement>('label[for="jw-effort"]')!;
-  const sync = (): void => {
-    const efforts = effortsFor(modelCatalog(), model.value);
-    const keep = efforts.includes(effort.value) ? effort.value : "";
-    effort.replaceChildren(new Option("Default effort", ""), ...efforts.map((e) => new Option(effortLabel(e), e)));
-    effort.value = keep;
-    effort.hidden = label.hidden = !efforts.length;
-  };
-  model.addEventListener("change", sync);
-  void loadModelCatalog().then((catalog) => {
-    for (const m of catalog) model.append(new Option(m.id, m.id));
-    sync();
-  });
-}
-
-const chosenModel = (node: HTMLElement): { model: string | null; effort: string | null } => ({
-  model: node.querySelector<HTMLSelectElement>("#jw-model")!.value || null,
-  effort: node.querySelector<HTMLSelectElement>("#jw-effort")!.value || null,
-});
 
 function openStartWorker(task: TodayTask): void {
   if (task.folder) return openStartTaskWorker(task, task.folder);
