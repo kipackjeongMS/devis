@@ -553,6 +553,8 @@ body[data-page="settings"] .reading-pane { display: none; }
 .catalog-search input,
 .queue-search input,
 .insp-branch,
+.repo-branch,
+.repo-alias-input,
 .param-input,
 .param-code {
   min-height: 32px;
@@ -574,6 +576,8 @@ body[data-page="settings"] .reading-pane { display: none; }
 .catalog-search input:hover,
 .queue-search input:hover,
 .insp-branch:hover:not(:disabled),
+.repo-branch:hover:not(:disabled),
+.repo-alias-input:hover:not(:disabled),
 .param-input:hover,
 .param-code:hover { background: var(--control-hover); }
 .org-add input:focus,
@@ -586,6 +590,8 @@ body[data-page="settings"] .reading-pane { display: none; }
 .catalog-search input:focus,
 .queue-search input:focus,
 .insp-branch:focus,
+.repo-branch:focus,
+.repo-alias-input:focus,
 .param-input:focus,
 .param-code:focus,
 .chain-name:focus {
@@ -2377,7 +2383,8 @@ button.thread-loc:focus-visible { outline-offset: -2px; }
 .toast-action:hover { background: var(--accent-tint-2); }
 .toast-action:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 .toast.err::before { background: var(--critical); }
-@keyframes toast-in {
+/* Done, with something to know: saved, but not checked. */
+.toast.warn::before { background: var(--caution); }
   from { opacity: 0; transform: translate(-50%, 12px); }
   to { opacity: 1; transform: translate(-50%, 0); }
 }
@@ -2447,6 +2454,7 @@ button.thread-loc:focus-visible { outline-offset: -2px; }
 .toast::before { box-shadow: 0 0 8px currentColor; color: var(--accent); }
 .toast.ok::before { color: var(--success); }
 .toast.err::before { color: var(--critical); }
+.toast.warn::before { color: var(--caution); }
 .inbox-dot { box-shadow: 0 0 8px var(--accent-glow); }
 
 /* ---------- Settings ---------- */
@@ -3439,12 +3447,12 @@ svg.chain-edges { position: absolute; overflow: visible; pointer-events: none; }
 .param-error { margin: 0; color: var(--critical); font-size: var(--fs-caption); line-height: var(--lh-caption); overflow-wrap: anywhere; }
 
 /* Repository resources: the alias in mono, where it lives, and a branch to use instead of the YAML's ref. */
-.repo-list { display: flex; flex-direction: column; gap: 16px; }
-.repo { display: flex; min-width: 0; flex-direction: column; gap: 6px; }
-.repo-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.repo-fields { display: flex; flex-direction: column; gap: 16px; }
+.repo-field { display: flex; min-width: 0; flex-direction: column; gap: 6px; }
+.repo-field-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .repo-alias { flex: none; max-width: 60%; overflow: hidden; color: var(--text-1); font: 600 var(--fs-label)/20px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
 .repo-where { min-width: 0; overflow: hidden; color: var(--text-3); font-size: var(--fs-caption); line-height: var(--lh-caption); text-overflow: ellipsis; white-space: nowrap; }
-.repo.is-changed .repo-alias::before {
+.repo-field.is-changed .repo-alias::before {
   content: "";
   display: inline-block;
   width: 6px;
@@ -5979,6 +5987,19 @@ button.tm-pr-title:hover { color: var(--accent-text); text-decoration: underline
 .tv-block-why { margin: 6px 0 0; color: var(--text-2); font-size: var(--fs-caption); line-height: var(--lh-caption); }
 .tv-block-err { margin: 4px 0 0; color: var(--critical); font-size: var(--fs-caption); line-height: var(--lh-caption); overflow-wrap: anywhere; }
 .tv-block-params { margin: 6px 0 0; color: var(--text-3); font-size: var(--fs-caption); line-height: var(--lh-caption); overflow-wrap: anywhere; }
+.tv-block-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+/* The block's Repository branches dialog: the YAML's repositories when it compiles, typed alias + branch rows when it doesn't. */
+.tv-repo-main { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.tv-repo-main[aria-busy="true"] { cursor: progress; }
+.tv-repo-main .insp-warn { max-height: 160px; overflow: auto; }
+.tv-repo-rows { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.tv-repo-head,
+.tv-repo-row { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr) 32px; gap: 8px; align-items: center; }
+.tv-repo-head { color: var(--text-3); font-size: var(--fs-caption); line-height: var(--lh-caption); }
+.tv-repo-add { align-self: flex-start; }
+.repo-alias-input { width: 100%; font: var(--fs-label)/20px var(--mono); }
+.repo-branch[aria-invalid="true"],
+.repo-alias-input[aria-invalid="true"] { box-shadow: inset 0 -2px 0 var(--critical); }
 .tv-evidence { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
 .tv-ev { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 0 7px; border-radius: 999px; background: var(--tone-tint); color: var(--tone-text); font-size: var(--fs-readout); line-height: 18px; }
 .tv-ev > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -6599,7 +6620,11 @@ body.layout-stacked { --pane-pad: 16px; }
   .param-switch::before { background: ButtonText; }
   .param-switch:checked { border-color: Highlight; background: Highlight; }
   .param-switch:checked::before { background: HighlightText; }
-  .param.is-changed .param-label::before { forced-color-adjust: none; background: Highlight; }
+  .param.is-changed .param-label::before,
+  .repo-field.is-changed .repo-alias::before { forced-color-adjust: none; background: Highlight; }
+  /* The red underline is a box-shadow, which forced colors drop. */
+  .repo-branch[aria-invalid="true"],
+  .repo-alias-input[aria-invalid="true"] { border-bottom-width: 3px; padding-bottom: 3px; }
 }
 
 /* Lean rendering (html.lean): no GPU compositing, as on a virtual machine or a remote session.

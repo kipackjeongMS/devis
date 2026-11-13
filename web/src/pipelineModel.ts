@@ -175,6 +175,14 @@ export interface DefinitionInfo {
   /** Absent from an older background service. */
   repositories?: RepositoryResource[];
   errors: string[];
+  /**
+   * Read by compiling the YAML with the block's repository branches, because it doesn't
+   * compile without them. Parameters aren't listed then, and repository refs may be the
+   * overrides rather than the YAML's.
+   */
+  previewed?: boolean;
+  /** Even with the block's repository branches, Azure DevOps couldn't compile the YAML: why. */
+  rejected?: string;
 }
 
 export type RunStatus = "running" | "succeeded" | "failed" | "canceled";

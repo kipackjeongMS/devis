@@ -43,10 +43,11 @@ import {
     listBuildDefinitions,
     getDefinitionInfo,
     getRunParameters,
+    previewPipeline,
     type PipelineDefinition,
     type Pr,
 } from "./ado.mjs";
-import { normalizeBranch, validateGraph } from "./pipeline-graph.mjs";
+import { normalizeBranch, paramOverrides, repoBranchOverrides, validateGraph } from "./pipeline-graph.mjs";
 import {
     PipelineStoreError,
     appBuilds,
@@ -63,7 +64,7 @@ import {
     takeCommandResult,
     triggerNode,
 } from "./pipeline-store.mjs";
-import { describeAdoError, tickPipelineRunner, wakePipelineRunner } from "./pipeline-runner.mjs";
+import { describeAdoError, readRunInfo, tickPipelineRunner, wakePipelineRunner } from "./pipeline-runner.mjs";
 import { parseThreadStatus, parseVote, parseLifecycleAction, parseCompletionOptions } from "./pr-actions.mjs";
 import { parsePrCanvasTarget } from "./canvas-target.mjs";
 import { getModelCatalog } from "./models.mjs";
@@ -910,7 +911,9 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
             return sendJson(res, 200, { chain });
         }
         // Runtime parameters and pipeline resources of one YAML pipeline on a branch,
-        // for the block inspector. The runner looks these up again, uncached, at queue time.
+        // for the block inspector and the task card. The runner looks these up again, uncached,
+        // at queue time. `repos` (and `params`) are the block's overrides, as JSON: a YAML that
+        // only compiles with its repository branches is compiled again with them.
         if (p === "/api/pipeline-definition-info" && req.method === "GET") {
             const cfg = await readConfig();
             const org = cfg.organizations.find((o) => o.toLowerCase() === (q.get("org") || "").toLowerCase());
@@ -918,6 +921,14 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
             const definitionId = Number(q.get("id"));
             if (!org || !project || !Number.isInteger(definitionId) || definitionId <= 0) {
                 return sendJson(res, 400, { error: "Unknown pipeline" });
+            }
+            let repos: Record<string, string> | undefined;
+            let params: Record<string, string> | undefined;
+            try {
+                repos = q.get("repos") ? repoBranchOverrides(JSON.parse(q.get("repos")!)) : undefined;
+                params = q.get("params") ? paramOverrides(JSON.parse(q.get("params")!)) : undefined;
+            } catch (e) {
+                return sendJson(res, 400, { error: e instanceof SyntaxError ? "Invalid overrides" : (e as Error).message });
             }
             const refresh = q.get("refresh") === "1";
             try {
@@ -930,11 +941,27 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
                 const base = { yaml: definition.yaml, defaultBranch: definition.defaultBranch };
                 if (!definition.yaml) return sendJson(res, 200, { ...base, parameters: [], resources: [], repositories: [], errors: [] });
                 const branch = normalizeBranch(q.get("branch")) || definition.defaultBranch;
-                const info = await cachedLookup(
-                    `params\u0000${org}\u0000${project}\u0000${definitionId}\u0000${branch}`,
-                    RUN_PARAMETERS_MS,
-                    refresh,
-                    () => getRunParameters(org, project, definition.projectId, definitionId, branch),
+                const at = `${org}\u0000${project}\u0000${definitionId}\u0000${branch}`;
+                // Preview keys use the exact overrides sent: Azure DevOps reads aliases case-sensitively.
+                const sorted = (o: Record<string, string> | undefined) => JSON.stringify(Object.entries(o ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+                const info = await readRunInfo(
+                    {
+                        getRunParameters: (o, pr, pid, d, b) =>
+                            cachedLookup(`params\u0000${at}`, RUN_PARAMETERS_MS, refresh, () => getRunParameters(o, pr, pid, d, b)),
+                        previewPipeline: (o, pr, d, b, sentParams, sentRepos) =>
+                            cachedLookup(
+                                `preview\u0000${at}\u0000${sorted(sentParams)}\u0000${sorted(sentRepos)}`,
+                                RUN_PARAMETERS_MS,
+                                refresh,
+                                () => previewPipeline(o, pr, d, b, sentParams, sentRepos),
+                            ),
+                    },
+                    org,
+                    project,
+                    definition.projectId,
+                    definitionId,
+                    branch,
+                    { params, repos },
                 );
                 return sendJson(res, 200, { ...base, ...info });
             } catch (e) {

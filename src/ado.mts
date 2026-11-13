@@ -1059,6 +1059,40 @@ export async function runPipeline(
     return runToBuild(await adoJson("POST", url, pipelineRunBody(branch, pins, params, repos)));
 }
 
+export type PipelinePreview = { finalYaml: string } | { rejected: string };
+
+/**
+ * Compile a YAML pipeline the way a run would, without queuing it. Unlike getRunParameters it
+ * takes repository branches, so it tells whether the pipeline compiles with them: the final YAML
+ * when it does, or Azure DevOps's reason when it doesn't (a 400: a template missing on a branch,
+ * a template error, an unknown parameter). Other failures throw.
+ */
+export async function previewPipeline(
+    org: string,
+    project: string,
+    definitionId: number,
+    branch: string,
+    params: Record<string, string> | undefined,
+    repos?: Record<string, string>,
+): Promise<PipelinePreview> {
+    const token = await getToken();
+    const url = `${orgBase(org)}/${enc(project)}/_apis/pipelines/${enc(String(definitionId))}/preview?${API}`;
+    const r = await rawRequest("POST", url, { token, body: { ...pipelineRunBody(branch, [], params, repos), previewRun: true } });
+    if (r.status === 400) {
+        let message = "";
+        try {
+            message = String(JSON.parse(r.text)?.message ?? "");
+        } catch {
+            // not JSON: use the text
+        }
+        return { rejected: (message || r.text || "Azure DevOps couldn't compile the pipeline").trim().slice(0, 2000) };
+    }
+    if (r.status < 200 || r.status >= 300) throw new Error(`ADO POST ${r.status}: ${r.text.slice(0, 500)}`);
+    const data = r.text ? JSON.parse(r.text) : null;
+    if (typeof data?.finalYaml !== "string") throw new Error("Azure DevOps did not return the pipeline's compiled YAML");
+    return { finalYaml: data.finalYaml };
+}
+
 // ---------------------------------------------------------------------------
 // Work items (Jarvis tasks)
 // ---------------------------------------------------------------------------

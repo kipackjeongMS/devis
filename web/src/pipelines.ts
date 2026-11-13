@@ -27,6 +27,7 @@ import {
   paramSummary,
   placeNewNode,
   repoBranchFor,
+  repoSignature,
   repoSummary,
   resourceSources,
   runProgress,
@@ -52,6 +53,7 @@ import {
   type RunParameter,
 } from "./pipelineModel.js";
 import { openActionDialog } from "./prActions.js";
+import { branchLabel, openRepoBranchesDialog, repoHint } from "./repoBranchesDialog.js";
 import { toast } from "./toast.js";
 import { esc } from "./util.js";
 
@@ -87,6 +89,7 @@ const INSPECTOR_FOCUS_ATTRS = [
   "data-repo-remove",
   "data-repos-clear",
   "data-repos-reload",
+  "data-repos-dialog",
 ];
 const INSPECTOR_FOCUS_CLASSES = ["insp-close", "insp-add-up", "insp-branch", "insp-follow", "insp-link", "insp-params-summary", "insp-repos-summary"];
 
@@ -132,8 +135,19 @@ let lastUndoAt = 0;
 let fieldUndoPushed = false;
 
 // What each pipeline takes at run time, per branch: its parameters and the pipelines it consumes.
-type InfoEntry = { status: "loading" } | { status: "ready"; info: DefinitionInfo } | { status: "error"; error: string };
+// `sent` is the repository branches the read compiled the YAML with, when it needed them.
+type InfoEntry =
+  | { status: "loading" }
+  // `sent`: the repository branches it was read with; `sig`: those and the parameters that went along (see readSig).
+  | { status: "ready"; info: DefinitionInfo; sent?: Record<string, string>; sig: string }
+  | { status: "error"; error: string };
 const infoCache = new Map<string, InfoEntry>();
+/** The latest read per cache key, so a read that was superseded (Reload, a save) is dropped. `sig` is the repository branches it sent. */
+const infoReads = new Map<string, { seq: number; sig: string }>();
+/** What a read of the block sends beyond its branch: its repository branches, and its parameters with them ("" for nothing). */
+const readSig = (n: ChainNode): string =>
+  repoSignature(n.repoBranches) ? `${repoSignature(n.repoBranches)}\n\n${JSON.stringify(Object.entries(n.params ?? {}).sort())}` : "";
+let infoSeq = 0;
 let infoTimer = 0;
 let paramsOpen = false;
 let reposOpen = false;
@@ -851,15 +865,24 @@ function paramIssues(ids: string[]): string[] {
     const n = nodeById(id);
     const entry = n && infoCache.get(infoKey(n));
     if (!n || entry?.status !== "ready") continue;
-    const sum = paramSummary(entry.info.parameters, n.params);
-    const bad = sum.invalid + sum.stale.length;
+    const info = entry.info;
+    if (info.rejected) {
+      out.push(
+        `<li><b>${esc(n.name)}</b> doesn't compile with its repository branches. It fails when its turn comes unless you fix them first.</li>`
+      );
+      continue;
+    }
+    // A preview doesn't list parameters, so there's nothing to check them against.
+    const sum = info.previewed ? null : paramSummary(info.parameters, n.params);
+    const bad = sum ? sum.invalid + sum.stale.length : 0;
     if (bad) {
       out.push(
         `<li><b>${esc(n.name)}</b> has ${bad === 1 ? "a parameter" : `${bad} parameters`} to fix. It fails when its turn comes unless you fix ${bad === 1 ? "it" : "them"} first.</li>`
       );
     }
     const repoSet = Object.keys(n.repoBranches ?? {}).length;
-    const repoBad = entry.info.yaml ? repoSummary(entry.info.repositories ?? [], n.repoBranches).stale.length : repoSet;
+    // A YAML that didn't compile lists no repositories, so nothing set can be called stale yet.
+    const repoBad = !info.yaml ? repoSet : yamlUnread(info) ? 0 : repoSummary(info.repositories ?? [], n.repoBranches).stale.length;
     if (repoBad) {
       out.push(
         `<li><b>${esc(n.name)}</b> has ${repoBad === 1 ? "a repository branch for a repository" : `${repoBad} repository branches for repositories`} its YAML doesn't use. It fails when its turn comes unless you remove ${repoBad === 1 ? "it" : "them"} first.</li>`
@@ -1356,12 +1379,21 @@ function renderInspector(): void {
   const caret = textCaret(active);
   if (selection?.kind === "node") {
     const n = nodeById(selection.id);
-    if (n && !infoCache.has(infoKey(n))) void requestInfo(n);
+    if (n && !prPending(n)) {
+      if (!infoCache.has(infoKey(n))) void requestInfo(n);
+      // Mid-typing in a field, its `change` re-reads instead, so the read isn't redone per keystroke.
+      else if (!(caret && restore !== null && active!.matches("[data-repo], [data-param]"))) syncRead(n);
+    }
     inspector.innerHTML = nodeHtml(selection.id);
   } else if (selection?.kind === "edge") inspector.innerHTML = edgeHtml(selection.from, selection.to);
   else inspector.innerHTML = overviewHtml();
   if (restore === null) return;
-  const target = inspector.querySelector<HTMLElement>(restore || ".insp-close") ?? inspector.querySelector<HTMLElement>(".insp-close");
+  // When the control is gone (a read changed the section), focus stays in its section.
+  const section = active!.closest(".insp-repos") ? ".insp-repos-summary" : active!.closest(".insp-params") ? ".insp-params-summary" : ".insp-close";
+  const target =
+    inspector.querySelector<HTMLElement>(restore || section) ??
+    inspector.querySelector<HTMLElement>(section) ??
+    inspector.querySelector<HTMLElement>(".insp-close");
   target?.focus({ preventScroll: true });
   // Re-rendering mid-typing (a poll, a param re-read) must not move the caret.
   if (caret && target && document.activeElement === target && textCaret(target)) {
@@ -1552,27 +1584,118 @@ function branchFieldHtml(n: ChainNode): string {
 
 // ---- parameters and consumed pipelines -------------------------------------------------------
 
-const infoKey = (n: ChainNode): string => `${pipelineKey(n.org, n.project, n.definitionId)}/${normalizeBranch(n.branch)}`;
+/**
+ * The branch the block's YAML is read on ("" for the default branch): the typed one, or the
+ * followed PR's source branch. Null while that PR isn't known yet (still reading, or not the task's).
+ */
+function readBranch(n: ChainNode): string | null {
+  if (!n.branchFrom) return normalizeBranch(n.branch);
+  const owner = ownerOf(doc.id);
+  const want = prValue(n.branchFrom);
+  const pr = owner ? ownerPrs.get(owner.taskId)?.prs.find((p) => prValue(p) === want) : undefined;
+  return pr ? normalizeBranch(pr.sourceRef) : null;
+}
 
-/** Reads what the block's pipeline takes on its branch, once per pipeline and branch (or on Reload). */
-async function requestInfo(n: ChainNode, refresh = false): Promise<void> {
+// A followed PR that isn't known gets its own key, so the default branch's read never stands in for it.
+const infoKey = (n: ChainNode): string =>
+  `${pipelineKey(n.org, n.project, n.definitionId)}/${readBranch(n) ?? `pr:${n.branchFrom ? prValue(n.branchFrom) : ""}`}`;
+
+/** Whether a followed PR's branch is still being read, so reading the YAML now would read the wrong branch. */
+function prPending(n: ChainNode): boolean {
+  const owner = n.branchFrom ? ownerOf(doc.id) : null;
+  if (!owner) return false;
+  const entry = ownerPrs.get(owner.taskId);
+  if (!entry) requestOwnerPrs(owner.taskId);
+  return !entry || (entry.status === "loading" && readBranch(n) === null);
+}
+
+/**
+ * Reads what the block's pipeline takes on its branch, once per pipeline and branch (or on Reload).
+ * Its repository branches go along, so a YAML that only compiles with them is read with them.
+ * A later read of the same key wins: an earlier one that finishes after it is dropped. With
+ * `keep`, what was read before stays on screen until the new read lands.
+ */
+async function requestInfo(n: ChainNode, refresh = false, keep = false): Promise<void> {
   const key = infoKey(n);
   const current = infoCache.get(key);
-  if (current?.status === "loading" || (current && !refresh)) return;
-  infoCache.set(key, { status: "loading" });
+  if (current && !refresh) return;
+  const sig = readSig(n);
+  const sent = sig ? { ...n.repoBranches } : undefined;
+  const mine = ++infoSeq;
+  infoReads.set(key, { seq: mine, sig });
+  if (!keep || current?.status !== "ready") infoCache.set(key, { status: "loading" });
   const q = new URLSearchParams({ org: n.org, project: n.project, id: String(n.definitionId) });
-  const branch = normalizeBranch(n.branch);
+  const branch = readBranch(n);
   if (branch) q.set("branch", branch);
   if (refresh) q.set("refresh", "1");
+  // Parameters only matter to a read that compiles the YAML, so they go only with repository branches.
+  if (sent) {
+    q.set("repos", JSON.stringify(sent));
+    if (n.params && Object.keys(n.params).length) q.set("params", JSON.stringify(n.params));
+  }
   let entry: InfoEntry;
   try {
-    entry = { status: "ready", info: await getJSON(`/api/pipeline-definition-info?${q}`) };
+    entry = { status: "ready", info: await getJSON(`/api/pipeline-definition-info?${q}`), sent, sig };
   } catch (e) {
     entry = { status: "error", error: errorText(e) };
   }
+  if (infoReads.get(key)?.seq !== mine) return;
+  infoReads.delete(key);
   infoCache.set(key, entry);
   const selected = selection?.kind === "node" ? nodeById(selection.id) : undefined;
   if (selected && infoKey(selected) === key) renderInspector();
+}
+
+/** A YAML read that found nothing because it doesn't compile on its own (it may need repository branches). */
+const yamlUnread = (info: DefinitionInfo): boolean =>
+  info.yaml &&
+  !info.previewed &&
+  !info.rejected &&
+  info.errors.length > 0 &&
+  !info.parameters.length &&
+  !(info.repositories ?? []).length &&
+  !info.resources.length;
+
+/**
+ * Whether the block's read depended on what it sent, and that changed since. The server compiles
+ * the YAML with the block's repository branches (and parameters) only when it doesn't compile
+ * without them, so a read without errors says the same whatever they are.
+ */
+function readOutdated(n: ChainNode): boolean {
+  const entry = infoCache.get(infoKey(n));
+  if (entry?.status !== "ready" || !entry.info.yaml) return false;
+  const bound = entry.info.previewed || !!entry.info.rejected || entry.info.errors.length > 0;
+  return bound && entry.sig !== readSig(n);
+}
+
+/** Reads again, in place, when what a read depended on changed. True when a read is under way for it. */
+function syncRead(n: ChainNode): boolean {
+  const key = infoKey(n);
+  const flight = infoReads.get(key);
+  if (!readOutdated(n)) {
+    // Changed back to what's on screen: a read for the change in between no longer matters.
+    if (flight && flight.sig !== readSig(n) && infoCache.get(key)?.status === "ready") infoReads.delete(key);
+    return false;
+  }
+  if (!flight || flight.sig !== readSig(n)) void requestInfo(n, true, true);
+  return true;
+}
+
+/** Shows a read `change` started in place: re-rendering there would pull focus back from where it's going. */
+function settleRead(id: string): void {
+  const n = nodeById(id);
+  if (!n || prPending(n) || !syncRead(n)) return;
+  for (const body of inspector.querySelectorAll<HTMLElement>(".insp-params-body")) {
+    if (!body.querySelector(".insp-reread")) body.insertAdjacentHTML("afterbegin", rereadHtml(n));
+  }
+}
+
+/** A read in flight behind what's on screen. */
+function rereadHtml(n: ChainNode): string {
+  const key = infoKey(n);
+  return infoCache.get(key)?.status === "ready" && infoReads.has(key)
+    ? `<p class="insp-muted insp-params-loading insp-reread"><span class="spinner" aria-hidden="true"></span>Reading it again with these branches…</p>`
+    : "";
 }
 
 function paramDef(n: ChainNode, name: string): RunParameter | undefined {
@@ -1586,6 +1709,7 @@ function paramCount(n: ChainNode): { text: string; tone: string } {
   const set = n.params ? Object.keys(n.params).length : 0;
   if (entry?.status !== "ready") return { text: set ? `${set} set` : "", tone: "" };
   if (!entry.info.yaml) return set ? { text: `${set} to fix`, tone: "bad" } : { text: "None", tone: "" };
+  if (entry.info.previewed || entry.info.rejected) return { text: set ? `${set} set` : "", tone: "" };
   const sum = paramSummary(entry.info.parameters, n.params);
   const bad = sum.invalid + sum.stale.length;
   if (bad) return { text: `${bad} to fix`, tone: "bad" };
@@ -1609,6 +1733,30 @@ function paramsHtml(n: ChainNode): string {
         ? `<p class="insp-run-note">${set === 1 ? "A parameter is" : `${set} parameters are`} still set, so it fails to queue.</p>
            <button type="button" class="btn sm insp-params-btn" data-params-clear="all">${icon("trash")}Clear parameters</button>`
         : ""}`;
+  } else if (entry.info.previewed || entry.info.rejected) {
+    // Compiled with its repository branches (or refused even with them): Azure DevOps doesn't list parameters then.
+    const info = entry.info;
+    const set = Object.entries(n.params ?? {});
+    const why = info.rejected
+      ? `<p class="insp-warn">${icon("warning")}<span>${esc(info.rejected)}</span></p>`
+      : "";
+    const note = info.rejected ? "Its parameters can't be listed until it compiles." : "Read with its repository branches, so its parameters can't be listed.";
+    const setHtml = set.length
+      ? `<div class="insp-stale">
+          <p class="insp-hint">${set.length === 1 ? "This value is" : "These values are"} sent when it queues.</p>
+          <ul>${set
+            .map(
+              ([name, value]) => `<li><code class="param-name">${esc(name)}</code><span class="insp-stale-value">${esc(shortValue(value))}</span><button type="button" class="icon-btn sm"
+                data-param-remove="${esc(name)}" title="Remove" aria-label="Remove the value for ${esc(name)}">${icon("dismiss")}</button></li>`
+            )
+            .join("")}</ul>
+        </div>`
+      : "";
+    body = `${why}<p class="insp-muted">${esc(note)}</p>${setHtml}
+      <div class="insp-params-foot">
+        <span class="insp-hint">From the YAML on ${esc(branchLabel(readBranch(n) || info.defaultBranch))}.</span>
+        <button type="button" class="btn sm insp-params-btn" data-params-reload="reload" title="Read the YAML again">${icon("sync")}Reload</button>
+      </div>`;
   } else {
     const info = entry.info;
     const stale = paramSummary(info.parameters, n.params).stale;
@@ -1629,13 +1777,13 @@ function paramsHtml(n: ChainNode): string {
       : "";
     body = `${warnings}${list}${staleHtml}
       <div class="insp-params-foot">
-        <span class="insp-hint">From the YAML on ${esc(branchLabel(n.branch || info.defaultBranch))}.${info.parameters.length ? " Only changed values are sent; the rest use their defaults." : ""}</span>
+        <span class="insp-hint">From the YAML on ${esc(branchLabel(readBranch(n) || info.defaultBranch))}.${info.parameters.length ? " Only changed values are sent; the rest use their defaults." : ""}</span>
         <button type="button" class="btn sm insp-params-btn" data-params-reload="reload" title="Read the YAML again">${icon("sync")}Reload</button>
       </div>`;
   }
   return `<details class="insp-section insp-params"${paramsOpen ? " open" : ""}>
       <summary class="insp-params-summary"><span class="insp-label">Parameters</span><span class="insp-params-count${count.tone ? ` tone-${count.tone}` : ""}">${esc(count.text)}</span>${icon("chevron")}</summary>
-      <div class="insp-params-body">${body}</div>
+      <div class="insp-params-body">${rereadHtml(n)}${body}</div>
     </details>`;
 }
 
@@ -1718,14 +1866,19 @@ function repoCount(n: ChainNode): { text: string; tone: string } {
   const set = Object.keys(n.repoBranches ?? {}).length;
   if (entry?.status !== "ready") return { text: set ? `${set} set` : "", tone: "" };
   if (!entry.info.yaml) return set ? { text: `${set} to fix`, tone: "bad" } : { text: "None", tone: "" };
+  if (entry.info.rejected) return { text: "Doesn't compile", tone: "bad" };
+  if (yamlUnread(entry.info)) return { text: set ? `${set} set` : "", tone: "" };
   const sum = repoSummary(entry.info.repositories ?? [], n.repoBranches);
   if (sum.stale.length) return { text: `${sum.stale.length} to fix`, tone: "bad" };
   if (sum.changed) return { text: `${sum.changed} of ${sum.total} changed`, tone: "accent" };
   return { text: sum.total ? String(sum.total) : "None", tone: "" };
 }
 
-const repoHint = (value: string, yamlRef: string): string =>
-  value.trim() ? `Instead of ${yamlRef}, the ref in the YAML.` : `Uses ${yamlRef}, the ref in the YAML.`;
+/** Opens the repository branches dialog: the one way to set a branch for an alias the inspector can't list. */
+function reposDialogButton(n: ChainNode): string {
+  const set = Object.keys(n.repoBranches ?? {}).length;
+  return `<button type="button" class="btn sm insp-params-btn" data-repos-dialog="open" aria-haspopup="dialog">${icon("edit")}${set ? "Edit repository branches…" : "Set by alias…"}</button>`;
+}
 
 /** The YAML's `resources.repositories` (templates and other repos it checks out), each with a branch to use instead. */
 function reposHtml(n: ChainNode): string {
@@ -1744,11 +1897,43 @@ function reposHtml(n: ChainNode): string {
         ? `<p class="insp-run-note">${set === 1 ? "A repository branch is" : `${set} repository branches are`} still set, so it fails to queue.</p>
            <button type="button" class="btn sm insp-params-btn" data-repos-clear="all">${icon("trash")}Clear repository branches</button>`
         : ""}`;
+  } else if (entry.info.rejected || yamlUnread(entry.info)) {
+    // Nothing to list: the YAML doesn't compile, maybe because it needs another repository's branch.
+    const info = entry.info;
+    const warnings = (info.rejected ? [info.rejected] : info.errors)
+      .map((msg) => `<p class="insp-warn">${icon("warning")}<span>${esc(msg)}</span></p>`)
+      .join("");
+    const branches = Object.entries(n.repoBranches ?? {});
+    const setHtml = branches.length
+      ? `<div class="insp-stale">
+          <p class="insp-hint">${info.rejected ? "It was read with these branches." : "Set for this block."}</p>
+          <ul>${branches
+            .map(
+              ([alias, branch]) => `<li><code class="param-name">${esc(alias)}</code><span class="insp-stale-value">${esc(branchLabel(branch))}</span><button type="button" class="icon-btn sm"
+                data-repo-remove="${esc(alias)}" title="Remove" aria-label="Remove the branch for ${esc(alias)}">${icon("dismiss")}</button></li>`
+            )
+            .join("")}</ul>
+        </div>`
+      : "";
+    body = `${warnings}
+      <p class="insp-muted">Its repositories can't be listed until it compiles. If it needs another repository's branch to compile, set it by alias.</p>
+      ${setHtml}
+      <div class="insp-params-foot">
+        ${reposDialogButton(n)}
+        <button type="button" class="btn sm insp-params-btn" data-repos-reload="reload" title="Read the YAML again">${icon("sync")}Reload</button>
+      </div>`;
   } else {
-    const repos = entry.info.repositories ?? [];
+    const info = entry.info;
+    const repos = info.repositories ?? [];
     const stale = repoSummary(repos, n.repoBranches).stale;
+    // A preview lists the refs it compiled with, so for the aliases it overrode the YAML's own ref isn't known.
+    const sent = new Set(Object.keys(entry.sent ?? {}).map((a) => a.toLowerCase()));
+    const refUnknown = (alias: string): boolean => !!info.previewed && sent.has(alias.toLowerCase());
+    const previewNote = info.previewed
+      ? `<p class="insp-note">${icon("branch")}<span>Its YAML doesn't compile without these branches, so it was read with them.</span></p>`
+      : "";
     const list = repos.length
-      ? `<div class="repo-list">${repos.map((r, i) => repoFieldHtml(r, repoBranchFor(n.repoBranches, r.alias), i)).join("")}</div>`
+      ? `<div class="repo-fields">${repos.map((r, i) => repoFieldHtml(r, repoBranchFor(n.repoBranches, r.alias), i, refUnknown(r.alias))).join("")}</div>`
       : `<p class="insp-muted">Its YAML uses no other repositories. Its own repository builds the branch above.</p>`;
     const staleHtml = stale.length
       ? `<div class="insp-stale">
@@ -1761,38 +1946,41 @@ function reposHtml(n: ChainNode): string {
             .join("")}</ul>
         </div>`
       : "";
-    body = `${list}${staleHtml}
+    body = `${previewNote}${list}${staleHtml}
       <div class="insp-params-foot">
-        <span class="insp-hint">From the YAML on ${esc(branchLabel(n.branch || entry.info.defaultBranch))}.${repos.length ? " Leave a branch empty to use the ref the YAML names." : ""}</span>
+        <span class="insp-hint">From the YAML on ${esc(branchLabel(readBranch(n) || info.defaultBranch))}.${repos.length ? " Leave a branch empty to use the ref the YAML names." : ""}</span>
         <button type="button" class="btn sm insp-params-btn" data-repos-reload="reload" title="Read the YAML again">${icon("sync")}Reload</button>
-      </div>`;
+      </div>
+      ${reposDialogButton(n)}`;
   }
   return `<details class="insp-section insp-repos"${reposOpen ? " open" : ""}>
       <summary class="insp-repos-summary"><span class="insp-label">Repositories</span><span class="insp-repos-count${count.tone ? ` tone-${count.tone}` : ""}">${esc(count.text)}</span>${icon("chevron")}</summary>
-      <div class="insp-params-body">${body}</div>
+      <div class="insp-params-body">${rereadHtml(n)}${body}</div>
     </details>`;
 }
 
-function repoFieldHtml(r: RepositoryResource, value: string, i: number): string {
+function repoFieldHtml(r: RepositoryResource, value: string, i: number, refUnknown = false): string {
   const id = `insp-repo-${i}`;
-  const yamlRef = r.ref ? branchLabel(r.ref) : "its default branch";
+  // Read with an override, the listed ref is the override, not the YAML's.
+  const yamlRef = refUnknown ? "" : r.ref ? branchLabel(r.ref) : "its default branch";
+  const placeholder = refUnknown ? "The YAML's ref" : r.ref ? branchLabel(r.ref) : "Default branch";
   const where = [r.name.toLowerCase() !== r.alias.toLowerCase() ? r.name : "", r.project || "", r.type && r.type.toLowerCase() !== "tfsgit" ? r.type : ""]
     .filter(Boolean)
     .join(" · ");
-  return `<div class="repo${value.trim() ? " is-changed" : ""}">
-      <div class="repo-head"><label class="repo-alias" for="${id}">${esc(r.alias)}</label>${where ? `<span class="repo-where" title="${esc(where)}">${esc(where)}</span>` : ""}</div>
+  return `<div class="repo-field${value.trim() ? " is-changed" : ""}">
+      <div class="repo-field-head"><label class="repo-alias" for="${id}">${esc(r.alias)}</label>${where ? `<span class="repo-where" title="${esc(where)}">${esc(where)}</span>` : ""}</div>
       <span class="insp-input">${icon("branch")}<input id="${id}" class="repo-branch" data-repo="${esc(r.alias)}" data-yaml-ref="${esc(yamlRef)}" value="${esc(value)}"
-        placeholder="${esc(r.ref ? branchLabel(r.ref) : "Default branch")}" spellcheck="false" autocomplete="off" aria-describedby="${id}-hint"></span>
+        placeholder="${esc(placeholder)}" spellcheck="false" autocomplete="off" aria-describedby="${id}-hint"></span>
       <span class="insp-hint" id="${id}-hint">${esc(repoHint(value, yamlRef))}</span>
     </div>`;
 }
 
 /** Updates one repository row (and the count) in place, so typing never re-renders the field. */
 function syncRepoRow(n: ChainNode, input: HTMLInputElement): void {
-  const row = input.closest<HTMLElement>(".repo");
+  const row = input.closest<HTMLElement>(".repo-field");
   row?.classList.toggle("is-changed", !!input.value.trim());
   const hint = row?.querySelector<HTMLElement>(".insp-hint");
-  if (hint) hint.textContent = repoHint(input.value, input.dataset.yamlRef || "the YAML's ref");
+  if (hint) hint.textContent = repoHint(input.value, input.dataset.yamlRef || "");
   const count = inspector.querySelector<HTMLElement>(".insp-repos-count");
   if (count) {
     const c = repoCount(n);
@@ -2003,6 +2191,25 @@ function onParamsClick(btn: HTMLButtonElement, id: string): void {
     void requestInfo(n, true);
     renderInspector();
     reposSummary();
+  } else if (btn.dataset.reposDialog !== undefined) {
+    const n = nodeById(id);
+    if (!n) return;
+    openRepoBranchesDialog({
+      block: n,
+      branch: readBranch(n),
+      onSave: async (repos, was) => {
+        const node = nodeById(id);
+        if (!node) throw new Error("This block was removed.");
+        if (repoSignature(node.repoBranches) !== was) throw new Error("The repository branches changed while this was open. Close it and open it again.");
+        editNode(id, (x) => (x.repoBranches = repos ? { ...repos } : undefined), false);
+        announce(repos ? "Saved the repository branches" : "Cleared the repository branches");
+        // The dialog refocuses the button that opened it, which the re-render replaced.
+        requestAnimationFrame(() => {
+          if (selection?.kind !== "node" || selection.id !== id) return;
+          (inspector.querySelector<HTMLElement>("[data-repos-dialog]") ?? inspector.querySelector<HTMLElement>(".insp-repos-summary"))?.focus({ preventScroll: true });
+        });
+      },
+    });
   }
 }
 
@@ -2056,14 +2263,20 @@ function onInspectorChange(e: Event): void {
     renderInspector();
     return;
   }
-  // Text fields commit on `input`; only selects and switches commit here.
+  // Text fields commit on `input`; only selects and switches commit here. A finished edit may need a new read.
+  if (t.dataset.repo !== undefined) {
+    settleRead(selection.id);
+    return;
+  }
   const name = t.dataset.param;
+  if (name === undefined) return;
   const isSwitch = t instanceof HTMLInputElement && t.type === "checkbox";
-  if (name === undefined || !(t instanceof HTMLSelectElement || isSwitch)) return;
-  const n = nodeById(selection.id);
-  const def = n && paramDef(n, name);
-  if (!def) return;
-  editNode(selection.id, paramValue(def, isSwitch ? String((t as HTMLInputElement).checked) : (t as HTMLSelectElement).value), false);
+  if (t instanceof HTMLSelectElement || isSwitch) {
+    const n = nodeById(selection.id);
+    const def = n && paramDef(n, name);
+    if (def) editNode(selection.id, paramValue(def, isSwitch ? String((t as HTMLInputElement).checked) : (t as HTMLSelectElement).value), false);
+  }
+  settleRead(selection.id);
 }
 
 function onInspectorInput(e: Event): void {
@@ -2130,7 +2343,6 @@ function onGlobalKey(e: KeyboardEvent): void {
 
 const nodeById = (id: string): ChainNode | undefined => doc.graph.nodes.find((n) => n.id === id);
 const nodeName = (id: string): string => nodeById(id)?.name || id;
-const branchLabel = (branch: string): string => branch.trim().replace(/^refs\/heads\//, "") || "Default branch";
 const chainTitle = (): string => doc.name.trim() || "Untitled chain";
 const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 

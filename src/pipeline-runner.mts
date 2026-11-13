@@ -9,9 +9,11 @@ import {
     getDefinitionInfo,
     getPullRequestById,
     getRunParameters,
+    previewPipeline,
     queueBuild,
     runPipeline,
     type DefinitionInfo,
+    type PipelinePreview,
     type RunParametersInfo,
 } from "./ado.mjs";
 import { emitPipelineEvent } from "./pipeline-events.mjs";
@@ -21,6 +23,7 @@ import {
     applyCommand,
     applyGraphEdit,
     checkParams,
+    finalYamlResources,
     hasUpstreamBuild,
     normalizeBranch,
     prKey,
@@ -53,7 +56,7 @@ import {
 import { ensureDb } from "./store.mjs";
 import type { WorkItem } from "./service-files.mjs";
 
-export interface PipelineAdo {
+export interface PipelineAdo extends RunInfoAdo {
     queueBuild(org: string, project: string, definitionId: number, sourceBranch?: string): Promise<BuildInfo>;
     runPipeline(
         org: string,
@@ -67,13 +70,6 @@ export interface PipelineAdo {
     getBuild(org: string, project: string, buildId: number): Promise<BuildInfo>;
     cancelBuild(org: string, project: string, buildId: number): Promise<unknown>;
     getDefinition(org: string, project: string, definitionId: number): Promise<DefinitionInfo>;
-    getRunParameters(
-        org: string,
-        project: string,
-        projectId: string,
-        definitionId: number,
-        branch: string,
-    ): Promise<RunParametersInfo>;
     /** The current source branch of a pull request, as refs/heads/…, for blocks that follow one. */
     prSourceBranch(org: string, prId: number): Promise<string>;
 }
@@ -95,7 +91,16 @@ interface PipelineRunnerOptions {
 }
 
 const DEFAULTS: PipelineRunnerOptions = {
-    ado: { queueBuild, runPipeline, getBuild, cancelBuild, getDefinition: getDefinitionInfo, getRunParameters, prSourceBranch },
+    ado: {
+        queueBuild,
+        runPipeline,
+        getBuild,
+        cancelBuild,
+        getDefinition: getDefinitionInfo,
+        getRunParameters,
+        previewPipeline,
+        prSourceBranch,
+    },
     pollMs: 10_000,
     maxPollFailures: 30,
 };
@@ -123,6 +128,143 @@ export function describeAdoError(error: unknown): string {
         }
     }
     return `Azure DevOps ${status}: ${body}`.slice(0, 500);
+}
+
+/** The Azure DevOps reads behind readRunInfo and checkRepoBranches, swappable for tests. */
+export interface RunInfoAdo {
+    getRunParameters(
+        org: string,
+        project: string,
+        projectId: string,
+        definitionId: number,
+        branch: string,
+    ): Promise<RunParametersInfo>;
+    previewPipeline(
+        org: string,
+        project: string,
+        definitionId: number,
+        branch: string,
+        params: Record<string, string> | undefined,
+        repos?: Record<string, string>,
+    ): Promise<PipelinePreview>;
+}
+
+export interface RunInfo extends RunParametersInfo {
+    /**
+     * Compiled through the Preview API with the block's repository branches: its pipeline and
+     * repository resources are known, its parameter definitions aren't, and repositories carry no id.
+     */
+    previewed?: true;
+    /** Why Azure DevOps won't compile the pipeline with the block's repository branches and parameters. */
+    rejected?: string;
+}
+
+/**
+ * Compile the pipeline with these overrides through the Preview API. Azure DevOps ignores a
+ * repository branch whose alias is spelled differently from the YAML's, so when a first compile
+ * shows the YAML's spelling differs, it compiles again under that spelling. A pipeline that
+ * doesn't compile comes back as `rejected`; other failures throw.
+ */
+export async function previewRunInfo(
+    ado: Pick<RunInfoAdo, "previewPipeline">,
+    org: string,
+    project: string,
+    definitionId: number,
+    branch: string,
+    params: Record<string, string> | undefined,
+    repos: Record<string, string> | undefined,
+): Promise<RunInfo> {
+    const compile = async (sent: Record<string, string> | undefined): Promise<RunInfo> => {
+        const preview = await ado.previewPipeline(org, project, definitionId, branch, params, sent);
+        if ("rejected" in preview) return { parameters: [], resources: [], repositories: [], errors: [], rejected: preview.rejected };
+        const found = finalYamlResources(preview.finalYaml);
+        return { parameters: [], resources: found.pipelines, repositories: found.repositories, errors: [], previewed: true };
+    };
+    const first = await compile(repos);
+    if (first.rejected || !repos) return first;
+    const resolved = resolveRepoBranches(repos, first.repositories);
+    if (resolved.error || !resolved.refs) return first;
+    return Object.keys(resolved.refs).some((alias) => !Object.hasOwn(repos, alias)) ? compile(resolved.refs) : first;
+}
+
+/**
+ * What a run of the pipeline on `branch` takes and consumes. The portal's reader can't be given
+ * repository branches, so a pipeline whose YAML only expands with the block's (a template that
+ * exists only on the overriding branch) reads as broken there; for a block with repository
+ * branches, that case is compiled again through the Preview API with them.
+ */
+export async function readRunInfo(
+    ado: RunInfoAdo,
+    org: string,
+    project: string,
+    projectId: string,
+    definitionId: number,
+    branch: string,
+    overrides: { params?: Record<string, string>; repos?: Record<string, string> } = {},
+): Promise<RunInfo> {
+    const plain = await ado.getRunParameters(org, project, projectId, definitionId, branch);
+    const repos = overrides.repos && Object.keys(overrides.repos).length ? overrides.repos : undefined;
+    if (!plain.errors.length || !repos) return plain;
+    const params = overrides.params && Object.keys(overrides.params).length ? overrides.params : undefined;
+    const compiled = await previewRunInfo(ado, org, project, definitionId, branch, params, repos);
+    return compiled.rejected ? { ...plain, rejected: compiled.rejected } : compiled;
+}
+
+export interface RepoBranchCheck {
+    /** Why the branches can't be used: the pipeline doesn't compile with them, an alias it lacks, a missing branch. */
+    error: string | null;
+    /** What couldn't be checked. */
+    warnings: string[];
+    /** The branches under the YAML's alias spelling, as refs, when there's no error. */
+    refs?: Record<string, string>;
+}
+
+/**
+ * Whether a block's repository branches work on `branch`: the pipeline compiles with them (and
+ * its parameters), each alias is still a repository resource, and each Azure Repos branch exists.
+ * The compile alone doesn't prove the last: Azure DevOps only reads the repositories it takes
+ * templates from. Lookups that fail are warnings, not errors.
+ */
+export async function checkRepoBranches(
+    ado: Pick<RunInfoAdo, "previewPipeline"> & {
+        branchExists(org: string, project: string, repoIdOrName: string, branch: string): Promise<boolean>;
+    },
+    org: string,
+    project: string,
+    definitionId: number,
+    branch: string,
+    params: Record<string, string> | undefined,
+    repoBranches: Record<string, string>,
+): Promise<RepoBranchCheck> {
+    const warnings: string[] = [];
+    let info: RunInfo;
+    try {
+        info = await previewRunInfo(ado, org, project, definitionId, branch, params, repoBranches);
+    } catch (e) {
+        return { error: null, warnings: [`Couldn't compile the pipeline to check its repository branches: ${describeAdoError(e)}`] };
+    }
+    if (info.rejected) return { error: `Azure DevOps can't compile the pipeline with these branches: ${info.rejected}`, warnings };
+    const resolved = resolveRepoBranches(repoBranches, info.repositories);
+    if (resolved.error) {
+        const known = info.repositories.map((r) => r.alias).join(", ");
+        return { error: `${resolved.error.replace(/ Remove .*$/, "")} Its repository resources: ${known || "none"}.`, warnings };
+    }
+    for (const [alias, ref] of Object.entries(resolved.refs ?? {})) {
+        const repo = info.repositories.find((r) => r.alias === alias)!;
+        const short = ref.replace(/^refs\/heads\//, "");
+        if (repo.type.toLowerCase() !== "tfsgit" || !ref.startsWith("refs/heads/")) {
+            warnings.push(`Couldn't check that ${short} exists in ${repo.name} (${alias}).`);
+            continue;
+        }
+        try {
+            if (!(await ado.branchExists(org, repo.project || project, repo.id || repo.name, short))) {
+                return { error: `Branch ${short} doesn't exist in ${repo.name} (repository resource ${alias}).`, warnings };
+            }
+        } catch (e) {
+            warnings.push(`Couldn't check that branch ${short} exists in ${repo.name}: ${describeAdoError(e)}`);
+        }
+    }
+    return { error: null, warnings, ...(resolved.refs ? { refs: resolved.refs } : {}) };
 }
 
 interface QueuePlan {
@@ -159,8 +301,19 @@ async function planQueue(
                   : null;
             return { pins: [], error };
         }
-        const info = await ado.getRunParameters(n.org, n.project, definition.projectId, n.definitionId, branch || definition.defaultBranch);
-        const paramError = checkParams(params, info.parameters);
+        const info = await readRunInfo(ado, n.org, n.project, definition.projectId, n.definitionId, branch || definition.defaultBranch, {
+            params,
+            repos: repoBranches,
+        });
+        if (info.rejected) {
+            const on = (branch || definition.defaultBranch).replace(/^refs\/heads\//, "");
+            return {
+                pins: [],
+                error: `Azure DevOps can't compile "${n.name}" on ${on || "its default branch"} with its repository branches${params ? " and parameters" : ""}: ${info.rejected}`,
+            };
+        }
+        // A previewed read compiled with the parameters, so Azure DevOps already accepted them.
+        const paramError = info.previewed ? null : checkParams(params, info.parameters);
         if (paramError) return { pins: [], error: info.errors.length ? `${paramError} (${info.errors[0]})` : paramError };
         const repos = resolveRepoBranches(repoBranches, info.repositories ?? []);
         if (repos.error) return { pins: [], error: repos.error };

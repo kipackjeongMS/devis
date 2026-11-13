@@ -27,9 +27,8 @@ const {
     triggerNode,
     updateRun,
 } = await import("../pipeline-store.mjs");
-const { startPipelineRunner, stopPipelineRunner, tickPipelineRunner, wakePipelineRunner } = await import(
-    "../pipeline-runner.mjs"
-);
+const { checkRepoBranches, previewRunInfo, readRunInfo, startPipelineRunner, stopPipelineRunner, tickPipelineRunner, wakePipelineRunner } =
+    await import("../pipeline-runner.mjs");
 const { closeDb, ensureDb } = await import("../store.mjs");
 
 const node = (id, definitionId, extra = {}) => ({
@@ -47,7 +46,7 @@ const node = (id, definitionId, extra = {}) => ({
 
 // ---- fake ADO -------------------------------------------------------------------
 const builds = new Map();
-const calls = { queue: [], cancel: [], run: [], definition: [], parameters: [] };
+const calls = { queue: [], cancel: [], run: [], definition: [], parameters: [], preview: [] };
 const failQueue = new Set();
 const failGet = new Set();
 const failDefinition = new Set();
@@ -55,6 +54,8 @@ const instantSuccess = new Set();
 // definitionId -> { yaml, projectId, defaultBranch } / { parameters, resources, errors }
 const definitions = new Map();
 const runParameters = new Map();
+// definitionId -> (repos) => { finalYaml } | { rejected }: the Preview API's compile
+const previews = new Map();
 let nextBuildId = 100;
 let queueCheck = null;
 let definitionCheck = null;
@@ -94,6 +95,12 @@ const fakeAdo = {
     async getRunParameters(_org, _project, projectId, definitionId, branch) {
         calls.parameters.push({ projectId, definitionId, branch });
         return runParameters.get(definitionId) ?? { parameters: [], resources: [], errors: [] };
+    },
+    async previewPipeline(_org, _project, definitionId, branch, params, repos) {
+        calls.preview.push({ definitionId, branch, ...(params ? { params } : {}), ...(repos ? { repos } : {}) });
+        const compile = previews.get(definitionId);
+        if (!compile) throw new Error("ADO POST 500: no preview");
+        return compile(repos ?? {});
     },
     async getBuild(_org, _project, buildId) {
         if (failGet.has(buildId)) throw new Error("ADO GET 500: service down");
@@ -644,6 +651,169 @@ assert.equal((await getRun(run.runId)).status, "failed");
 const repoBuilds = await appBuilds(repoChain.id);
 assert.equal(repoBuilds.length, 1);
 assert.equal(repoBuilds[0].repos, "templates=refs/heads/users/me/fix");
+
+// ---- 11c. a YAML that only compiles with its repository branches is read through the Preview API ---
+assert.deepEqual(calls.preview, [], "a YAML the portal reads is never compiled again");
+// The Preview API's finalYaml: the YAML's own refs, whatever branches the preview was sent.
+const finalYamlOf = (repos, pipelines = []) =>
+    [
+        "resources:",
+        "  repositories:",
+        "  - repository: self",
+        "    type: git",
+        "    ref: refs/heads/dev",
+        ...repos.flatMap((r) => [`  - repository: ${r.alias}`, `    type: ${r.type ?? "git"}`, `    name: ${r.name}`, "    ref: refs/heads/main"]),
+        ...(pipelines.length ? ["  pipelines:", ...pipelines.flatMap((p) => [`  - pipeline: ${p.alias}`, `    source: ${p.source}`])] : []),
+        "steps:",
+        "- script: echo hi",
+    ].join("\n");
+const governed = { alias: "Templates", name: "OneBranch.Pipelines/GovernedTemplates" };
+const governedRepo = { alias: "Templates", name: "GovernedTemplates", type: "TfsGit", project: "OneBranch.Pipelines", ref: "refs/heads/main" };
+const missingTemplate = "Could not find template build.yml@Templates";
+// 160 reads fine. 161 only compiles with a Templates branch: the template exists only there, and
+// Azure DevOps ignores an override whose alias is spelled differently. 162 compiles either way.
+runParameters.set(160, { parameters: [], resources: [], repositories: [governedRepo], errors: [] });
+runParameters.set(161, { parameters: [], resources: [], errors: [missingTemplate] });
+previews.set(161, (repos) =>
+    repos.Templates ? { finalYaml: finalYamlOf([governed], [{ alias: "build", source: "My Build" }]) } : { rejected: missingTemplate },
+);
+previews.set(162, () => ({ finalYaml: finalYamlOf([governed, { alias: "gh", type: "github", name: "org/tools" }]) }));
+
+let read = await readRunInfo(fakeAdo, "org", "proj", "pid", 160, "refs/heads/dev", { repos: { templates: "fix" } });
+assert.deepEqual(read, runParameters.get(160), "a read without errors is used as is");
+read = await readRunInfo(fakeAdo, "org", "proj", "pid", 161, "refs/heads/dev", { params: { A: "1" }, repos: {} });
+assert.deepEqual(read, runParameters.get(161), "without repository branches, there's nothing to compile with");
+assert.deepEqual(calls.preview, []);
+
+read = await readRunInfo(fakeAdo, "org", "proj", "pid", 161, "refs/heads/dev", { params: { A: "1" }, repos: { Templates: "refs/heads/users/me/fix" } });
+assert.deepEqual(read, {
+    parameters: [],
+    resources: [{ alias: "build", name: "My Build" }],
+    repositories: [governedRepo],
+    errors: [],
+    previewed: true,
+});
+assert.deepEqual(
+    calls.preview,
+    [{ definitionId: 161, branch: "refs/heads/dev", params: { A: "1" }, repos: { Templates: "refs/heads/users/me/fix" } }],
+    "compiled once, with the parameters and branches",
+);
+calls.preview.length = 0;
+read = await readRunInfo(fakeAdo, "org", "proj", "pid", 161, "refs/heads/dev", { repos: { templates: "refs/heads/users/me/fix" } });
+assert.deepEqual(read, { ...runParameters.get(161), rejected: missingTemplate }, "a rejected compile keeps the read and says why");
+assert.equal(calls.preview.length, 1, "nothing to learn the YAML's spelling from, so no second compile");
+
+// A first compile that shows the YAML spells an alias differently compiles again under its spelling.
+calls.preview.length = 0;
+read = await previewRunInfo(fakeAdo, "org", "proj", 162, "refs/heads/dev", undefined, { templates: "users/me/fix" });
+assert.deepEqual(
+    calls.preview.map((c) => c.repos),
+    [{ templates: "users/me/fix" }, { Templates: "refs/heads/users/me/fix" }],
+);
+assert.equal(read.previewed, true);
+assert.deepEqual(read.repositories.map((r) => r.alias), ["Templates", "gh"]);
+calls.preview.length = 0;
+await previewRunInfo(fakeAdo, "org", "proj", 162, "refs/heads/dev", undefined, { Templates: "users/me/fix" });
+await previewRunInfo(fakeAdo, "org", "proj", 162, "refs/heads/dev", undefined, undefined);
+await previewRunInfo(fakeAdo, "org", "proj", 162, "refs/heads/dev", undefined, { other: "x" });
+assert.equal(calls.preview.length, 3, "the same spelling, no branches, or an unknown alias: one compile each");
+
+// Saving a block's branches checks them: the compile, each alias, and each Azure Repos branch.
+const branchCalls = [];
+const existingBranches = new Set(["GovernedTemplates:users/me/fix"]);
+let branchLookupFails = false;
+const checker = {
+    previewPipeline: fakeAdo.previewPipeline,
+    async branchExists(_org, project, repo, branch) {
+        branchCalls.push({ project, repo, branch });
+        if (branchLookupFails) throw new Error("ADO GET 503: busy");
+        return existingBranches.has(`${repo}:${branch}`);
+    },
+};
+const check = (definitionId, repoBranches, params) => checkRepoBranches(checker, "org", "proj", definitionId, "refs/heads/dev", params, repoBranches);
+assert.deepEqual(await check(162, { templates: "users/me/fix" }), {
+    error: null,
+    warnings: [],
+    refs: { Templates: "refs/heads/users/me/fix" },
+});
+assert.deepEqual(
+    branchCalls,
+    [{ project: "OneBranch.Pipelines", repo: "GovernedTemplates", branch: "users/me/fix" }],
+    "in the repository's own project, by name: a compiled YAML has no repository ids",
+);
+assert.deepEqual(await check(162, { Templates: "nope" }), {
+    error: "Branch nope doesn't exist in GovernedTemplates (repository resource Templates).",
+    warnings: [],
+});
+assert.deepEqual(await check(162, { gh: "feature", Templates: "refs/tags/v1" }), {
+    error: null,
+    warnings: ["Couldn't check that feature exists in org/tools (gh).", "Couldn't check that refs/tags/v1 exists in GovernedTemplates (Templates)."],
+    refs: { gh: "refs/heads/feature", Templates: "refs/tags/v1" },
+});
+assert.deepEqual(await check(162, { other: "x" }), {
+    error: `Repository "other" is no longer a resource of this pipeline. Its repository resources: Templates, gh.`,
+    warnings: [],
+});
+assert.deepEqual(await check(161, { templates: "users/me/fix" }), {
+    error: `Azure DevOps can't compile the pipeline with these branches: ${missingTemplate}`,
+    warnings: [],
+});
+branchLookupFails = true;
+const unchecked = await check(162, { Templates: "users/me/fix" });
+branchLookupFails = false;
+assert.equal(unchecked.error, null, "a failed lookup doesn't block saving");
+assert.deepEqual(unchecked.refs, { Templates: "refs/heads/users/me/fix" });
+assert.match(unchecked.warnings[0], /^Couldn't check that branch users\/me\/fix exists in GovernedTemplates: .*busy/);
+const uncompiled = await check(164, { Templates: "users/me/fix" });
+assert.equal(uncompiled.error, null, "neither does a Preview API that fails");
+assert.match(uncompiled.warnings[0], /^Couldn't compile the pipeline to check its repository branches: .*no preview/);
+
+// In a run, such a block is queued with what the compile found, or fails saying why it won't compile.
+calls.queue.length = 0;
+calls.run.length = 0;
+calls.preview.length = 0;
+for (const id of [161, 162]) definitions.set(id, { yaml: true, projectId: "pid", defaultBranch: "refs/heads/main" });
+runParameters.set(162, { parameters: [], resources: [], errors: ["Unexpected value 'x'"] });
+const compiledChain = await saveChain({
+    name: "Compiled",
+    graph: {
+        nodes: [
+            // A's not a parameter the portal read lists: the compile accepted it, so it isn't checked again.
+            node("needs", 161, { branch: "dev", params: { A: "1" }, repoBranches: { Templates: "users/me/fix" } }),
+            node("spelled", 162, { repoBranches: { templates: "users/me/fix" } }),
+            node("ignored", 161, { name: "Ignored", branch: "dev", repoBranches: { templates: "users/me/fix" } }),
+            node("withParams", 161, { name: "With params", params: { A: "1" }, repoBranches: { templates: "users/me/fix" } }),
+        ],
+        edges: [],
+    },
+});
+run = await startChainRun(compiledChain.id);
+await tickPipelineRunner();
+const byDefinition = (id) => calls.run.filter((c) => c.definitionId === id);
+assert.deepEqual(byDefinition(161), [
+    { definitionId: 161, branch: "refs/heads/dev", pins: [], params: { A: "1" }, repos: { Templates: "refs/heads/users/me/fix" } },
+]);
+assert.deepEqual(
+    byDefinition(162),
+    [{ definitionId: 162, branch: "", pins: [], params: undefined, repos: { Templates: "refs/heads/users/me/fix" } }],
+    "under the YAML's spelling, which Azure DevOps needs",
+);
+run = await getRun(run.runId);
+assert.equal(run.states.needs.status, "queued");
+assert.equal(run.states.spelled.status, "queued");
+assert.equal(
+    run.states.ignored.error,
+    `Azure DevOps can't compile "Ignored" on dev with its repository branches: ${missingTemplate}`,
+);
+assert.equal(
+    run.states.withParams.error,
+    `Azure DevOps can't compile "With params" on main with its repository branches and parameters: ${missingTemplate}`,
+);
+assert.deepEqual(queuedDefinitions(), []);
+setBuild(161, "completed", "succeeded");
+setBuild(162, "completed", "succeeded");
+await tickPipelineRunner();
+assert.equal((await getRun(run.runId)).status, "failed");
 
 // ---- 12. every block keeps its own last result, however busy the chain gets --------------------
 // ra ─┐

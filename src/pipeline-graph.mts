@@ -190,7 +190,8 @@ export const MAX_NODE_PARAMS = 200;
 const MAX_PARAM_NAME = 256;
 const MAX_PARAM_VALUE = 10_000;
 
-function paramOverrides(value: unknown): Record<string, string> | undefined {
+/** A block's parameter overrides, checked; throws on bad input. */
+export function paramOverrides(value: unknown): Record<string, string> | undefined {
     if (value === undefined || value === null) return undefined;
     if (typeof value !== "object" || Array.isArray(value)) throw new Error("Pipeline parameters must be name/value pairs");
     const entries = Object.entries(value);
@@ -207,8 +208,8 @@ function paramOverrides(value: unknown): Record<string, string> | undefined {
 export const MAX_REPO_BRANCHES = 20;
 const REPO_ALIAS = /^[A-Za-z0-9_.-]{1,100}$/;
 
-/** A block's repository branches: alias to branch; an empty branch means the YAML's ref and is dropped. */
-function repoBranchOverrides(value: unknown): Record<string, string> | undefined {
+/** A block's repository branches: alias to branch; an empty branch means the YAML's ref and is dropped. Throws on bad input. */
+export function repoBranchOverrides(value: unknown): Record<string, string> | undefined {
     if (value === undefined || value === null) return undefined;
     if (typeof value !== "object" || Array.isArray(value)) throw new Error("Repository branches must be alias/branch pairs");
     const entries = Object.entries(value);
@@ -801,7 +802,107 @@ export function mapRepositoryResources(raw: unknown): RepositoryResource[] {
     return out;
 }
 
-/** Why these overrides can't be sent to the pipeline, or null. */
+/** One YAML scalar as text: quotes removed ('' and \" escapes undone), an unquoted value's trailing comment dropped. */
+function yamlScalar(raw: string): string {
+    const v = raw.trim();
+    if (v.startsWith("'")) {
+        let out = "";
+        for (let i = 1; i < v.length; i++) {
+            if (v[i] !== "'") out += v[i];
+            else if (v[i + 1] === "'") {
+                out += "'";
+                i++;
+            } else return out;
+        }
+        return out;
+    }
+    if (v.startsWith('"')) {
+        let end = 1;
+        while (end < v.length && v[end] !== '"') end += v[end] === "\\" ? 2 : 1;
+        try {
+            return JSON.parse(v.slice(0, end + 1)) as string;
+        } catch {
+            return v.slice(1, end);
+        }
+    }
+    return v.replace(/\s+#.*$/, "");
+}
+
+const REPO_TYPES: Record<string, string> = { git: "TfsGit", github: "GitHub", githubenterprise: "GitHubEnterprise", bitbucket: "Bitbucket" };
+
+/**
+ * `resources.repositories` and `resources.pipelines` of a compiled pipeline (the Preview API's
+ * finalYaml, which Azure DevOps writes in one canonical layout). Repositories carry no id there,
+ * and `ref` is the YAML's own, not a branch sent with the preview. The pipeline's own (`self`) is
+ * left out, as in mapRepositoryResources.
+ */
+export function finalYamlResources(yaml: string): { repositories: RepositoryResource[]; pipelines: PipelineResource[] } {
+    const repositories: RepositoryResource[] = [];
+    const pipelines: PipelineResource[] = [];
+    const lines = yaml.split(/\r?\n/);
+    const start = lines.findIndex((l) => /^resources:\s*$/.test(l));
+    if (start < 0) return { repositories, pipelines };
+    const seenRepos = new Set<string>();
+    const seenPipelines = new Set<string>();
+    let section = "";
+    let sectionIndent = -1;
+    let itemIndent = -1;
+    let item: Record<string, string> | null = null;
+    const flush = (): void => {
+        const it = item;
+        item = null;
+        if (!it) return;
+        if (section === "repositories") {
+            const alias = (it.repository || "").trim();
+            if (!alias || alias.toLowerCase() === "self" || seenRepos.has(alias.toLowerCase())) return;
+            seenRepos.add(alias.toLowerCase());
+            const rawType = (it.type || "git").trim();
+            const type = REPO_TYPES[rawType.toLowerCase()] ?? rawType;
+            let name = (it.name || alias).trim();
+            let project = "";
+            const slash = name.indexOf("/");
+            if (type === "TfsGit" && slash > 0) {
+                project = name.slice(0, slash).trim();
+                name = name.slice(slash + 1).trim();
+            }
+            repositories.push({ alias, name: name || alias, type, ...(project ? { project } : {}), ref: normalizeBranch(it.ref) });
+        } else if (section === "pipelines") {
+            const alias = (it.pipeline || "").trim();
+            const name = (it.source || "").trim();
+            if (!alias || !name || seenPipelines.has(alias.toLowerCase())) return;
+            seenPipelines.add(alias.toLowerCase());
+            const project = (it.project || "").trim();
+            pipelines.push({ alias, name, ...(project ? { project } : {}) });
+        }
+    };
+    for (let i = start + 1; i < lines.length; i++) {
+        const line = lines[i];
+        const body = line.trimStart();
+        if (!body || body.startsWith("#")) continue;
+        const indent = line.length - body.length;
+        if (indent === 0) break; // the next top-level key
+        const key = /^([A-Za-z_][\w-]*):(?:\s+(.*))?$/.exec(body);
+        if (key && (sectionIndent < 0 || indent <= sectionIndent)) {
+            flush();
+            section = key[1];
+            sectionIndent = indent;
+            itemIndent = -1;
+            continue;
+        }
+        if (section !== "repositories" && section !== "pipelines") continue;
+        const dash = /^-\s+([A-Za-z_][\w-]*):(?:\s+(.*))?$/.exec(body);
+        if (dash && indent >= sectionIndent && (itemIndent < 0 || indent === itemIndent)) {
+            flush();
+            itemIndent = indent;
+            item = { [dash[1]]: yamlScalar(dash[2] ?? "") };
+            continue;
+        }
+        if (key && item && indent === itemIndent + 2) item[key[1]] = yamlScalar(key[2] ?? "");
+    }
+    flush();
+    return { repositories, pipelines };
+}
+
 export function checkParams(params: Record<string, string> | undefined, defs: RunParameter[]): string | null {
     const byName = new Map(defs.map((d) => [d.name, d]));
     for (const [name, value] of Object.entries(params ?? {})) {

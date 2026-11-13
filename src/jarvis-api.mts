@@ -94,6 +94,7 @@ import {
     runValidation,
     saveAsReusable,
     setAutoPropose,
+    setBlockRepoBranches,
     setValidationOptions,
     stopValidation,
     validationView,
@@ -380,6 +381,8 @@ export async function handleJarvisApi(req: IncomingMessage, res: ServerResponse,
                 case "options":
                     await setValidationOptions(id, { notifyWorker: b?.notifyWorker, rerunOnCommit: b?.rerunOnCommit });
                     return sendJson(res, 200, { ok: true });
+                case "repos":
+                    return sendJson(res, 200, await setBlockRepoBranches(id, b?.nodeId, b?.repoBranches, b?.was));
                 case "ack":
                     if (typeof b?.runId !== "string") throw new JarvisError("Say which run you saw.", 400);
                     await acknowledgeRun(id, b.runId);

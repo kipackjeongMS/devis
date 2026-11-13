@@ -7,8 +7,9 @@
 // event and a status line each, Needs you when one fails, and the task's worker hears what
 // failed when the user allows it.
 
-import { getBuildFailures } from "./ado.mjs";
+import { branchExists, getBuildFailures, previewPipeline } from "./ado.mjs";
 import {
+    PipelineStoreError,
     blockResults,
     chainsOwnedBy,
     deleteChain,
@@ -25,8 +26,17 @@ import {
     type RunRow,
 } from "./pipeline-store.mjs";
 import { onPipelineEvent, type PipelineEvent } from "./pipeline-events.mjs";
-import { validateGraph, type ChainGraph, type ChainNode, type NodeStates, type PrRef } from "./pipeline-graph.mjs";
-import { wakePipelineRunner } from "./pipeline-runner.mjs";
+import {
+    normalizeBranch,
+    repoBranchOverrides,
+    repoSignature,
+    validateGraph,
+    type ChainGraph,
+    type ChainNode,
+    type NodeStates,
+    type PrRef,
+} from "./pipeline-graph.mjs";
+import { checkRepoBranches, wakePipelineRunner } from "./pipeline-runner.mjs";
 import { readConfig } from "./config.mjs";
 import {
     JarvisError,
@@ -51,12 +61,17 @@ import { FORMER_LEAD_NAME, LEAD_NAME } from "./brand.mjs";
 /** Azure DevOps reads and the task's workers, swappable for tests. */
 export interface ValidationRuntime {
     buildFailures: typeof getBuildFailures;
+    /** Compiles a pipeline with a block's overrides, to check repository branches before they're saved. */
+    previewPipeline: typeof previewPipeline;
+    branchExists: typeof branchExists;
     /** Send a worker a message as a new turn; throws when it can't take one now. */
     messageWorker(sessionId: string, text: string): Promise<unknown>;
     workerBusy(sessionId: string): Promise<boolean>;
 }
 const ADO_RUNTIME: ValidationRuntime = {
     buildFailures: getBuildFailures,
+    previewPipeline,
+    branchExists,
     messageWorker: async (sessionId, text) => (await import("./jarvis-workers.mjs")).messageWorker(sessionId, text),
     workerBusy: async (sessionId) => (await import("./jarvis-workers.mjs")).workerLiveState(sessionId).busy,
 };
@@ -528,6 +543,77 @@ export async function setValidationOptions(taskIdValue: unknown, options: { noti
             if (commits) r.commits = commits;
         }
     });
+}
+
+/**
+ * Set one block's repository branches from the task's card. `was` is the block's branches as
+ * the user opened them (repoSignature): a block changed since is refused, and so is a chain
+ * saved elsewhere while the check ran. Before anything is saved, the pipeline is compiled with
+ * the new branches on the branch the block builds, and each Azure Repos branch is looked up;
+ * what couldn't be checked comes back as warnings. Clearing every branch needs no check.
+ */
+export async function setBlockRepoBranches(
+    taskIdValue: unknown,
+    nodeId: unknown,
+    value: unknown,
+    was?: unknown,
+): Promise<{ chain: ChainRow; warnings: string[] }> {
+    const task = await requireTask(taskIdValue);
+    if (task.status === "done") throw new JarvisError("The task is done. Reopen it to change its validation.", 409);
+    const chain = await taskChain(task.id);
+    if (!chain) throw new JarvisError("This task has no validation chain.", 404);
+    const node = chain.graph.nodes.find((n) => n.id === nodeId);
+    if (!node) throw new JarvisError("That block isn't in the task's chain anymore.", 404);
+    if (typeof was === "string" && was !== repoSignature(node.repoBranches)) {
+        throw new JarvisError("The block's repository branches changed since you opened them. Open them again.", 409);
+    }
+    let repos: Record<string, string> | undefined;
+    try {
+        repos = repoBranchOverrides(value);
+    } catch (e) {
+        throw new JarvisError((e as Error).message, 400);
+    }
+    const warnings: string[] = [];
+    if (repos) {
+        const branch = await blockBranch(task.id, node);
+        if (branch === null) {
+            warnings.push(`The branch of PR ${node.branchFrom!.prId} isn't known yet, so these weren't checked. The run checks them.`);
+        } else {
+            const check = await checkRepoBranches(vrt, node.org, node.project, node.definitionId, branch, node.params, repos);
+            if (check.error) throw new JarvisError(check.error, 400);
+            warnings.push(...check.warnings);
+            // Keep the branches as typed, under the YAML's alias spelling: Azure DevOps reads aliases case-sensitively.
+            const spelling = new Map(Object.keys(check.refs ?? {}).map((alias) => [alias.toLowerCase(), alias]));
+            repos = Object.fromEntries(Object.entries(repos).map(([alias, b]) => [spelling.get(alias.toLowerCase()) ?? alias, b]));
+        }
+    }
+    const { repoBranches: _replaced, ...rest } = node;
+    const edited: ChainNode = repos ? { ...rest, repoBranches: repos } : rest;
+    const cfg = await readConfig();
+    let saved: ChainRow;
+    try {
+        const graph = validateGraph({ ...chain.graph, nodes: chain.graph.nodes.map((n) => (n.id === node.id ? edited : n)) }, cfg.organizations);
+        saved = await saveChain({ id: chain.id, name: chain.name, graph, expectedUpdatedAt: chain.updatedAt });
+    } catch (e) {
+        throw new JarvisError((e as Error).message, e instanceof PipelineStoreError ? e.status : 400);
+    }
+    // A save during a run queued a "graph" command; apply it now, not on the next poll.
+    wakePipelineRunner();
+    const count = Object.keys(repos ?? {}).length;
+    await recordEvent(
+        "task.validation",
+        `${count ? `${count === 1 ? "A repository branch" : `${count} repository branches`} set` : "Repository branches cleared"} on ${node.name} for ${describeTask(task)}`,
+        { taskId: task.id, ref: { chainId: chain.id } },
+    );
+    return { chain: saved, warnings };
+}
+
+/** The branch a block builds: its PR's source branch when it follows one (null when that isn't known), else its own ("" for the default). */
+async function blockBranch(taskId: string, node: ChainNode): Promise<string | null> {
+    if (!node.branchFrom) return normalizeBranch(node.branch);
+    const want = `${node.branchFrom.org.toLowerCase()}/${node.branchFrom.prId}`;
+    const pr = (await listTaskPrs(taskId, { includeHidden: true })).find((p) => `${p.org.toLowerCase()}/${p.prId}` === want);
+    return pr?.snapshot?.sourceRef ? normalizeBranch(pr.snapshot.sourceRef) : null;
 }
 
 /** The user has seen this failed run: the task leaves Needs you. Only the latest run, and only once it failed. */

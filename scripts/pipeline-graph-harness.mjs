@@ -11,6 +11,7 @@ import {
     blockResultsFromRuns,
     checkParams,
     descendants,
+    finalYamlResources,
     hasCycle,
     hasUpstreamBuild,
     initialNodeStates,
@@ -600,6 +601,58 @@ assert.match(resolveRepoBranches({ gone: "x" }, yamlRepos).error, /Repository "g
 assert.equal(repoSignature({ Templates: "fix", a: "refs/tags/v1" }), "a=refs/tags/v1\ntemplates=refs/heads/fix");
 assert.equal(repoSignature({ templates: "refs/heads/fix" }), repoSignature({ TEMPLATES: "fix" }), "aliases and refs normalize");
 assert.equal(repoSignature(undefined), "");
+
+// The Preview API's finalYaml, in the layout Azure DevOps writes it.
+const finalYaml = [
+    "parameters:",
+    "- name: resources",
+    "  type: object",
+    "  default:",
+    "    repositories:",
+    "    - repository: notThis",
+    "resources:",
+    "  repositories:",
+    "  - repository: self",
+    "    type: git",
+    "    ref: refs/heads/dev",
+    "  - repository: Templates",
+    "    type: git",
+    "    name: OneBranch.Pipelines/GovernedTemplates",
+    "    ref: 'refs/heads/users/me/it''s'",
+    "    trigger:",
+    "      branches:",
+    "        include:",
+    "        - main",
+    "  - repository: gh",
+    "    type: github",
+    '    name: "org/tools"',
+    "    endpoint: gh-conn # a comment",
+    "  - repository: templates",
+    "    name: dupe",
+    "  - repository: plain",
+    "  pipelines:",
+    "  - pipeline: build",
+    "    source: My Build",
+    "    project: Other",
+    "  - pipeline: nosource",
+    "variables:",
+    "- name: x",
+    "  value: y",
+].join("\n");
+assert.deepEqual(finalYamlResources(finalYaml), {
+    repositories: [
+        { alias: "Templates", name: "GovernedTemplates", type: "TfsGit", project: "OneBranch.Pipelines", ref: "refs/heads/users/me/it's" },
+        { alias: "gh", name: "org/tools", type: "GitHub", ref: "" },
+        { alias: "plain", name: "plain", type: "TfsGit", ref: "" },
+    ],
+    pipelines: [{ alias: "build", name: "My Build", project: "Other" }],
+});
+assert.deepEqual(finalYamlResources("steps:\n- script: echo hi\n"), { repositories: [], pipelines: [] });
+assert.deepEqual(
+    finalYamlResources("resources:\r\n  repositories:\r\n    - repository: deep\r\n      ref: main\r\n"),
+    { repositories: [{ alias: "deep", name: "deep", type: "TfsGit", ref: "refs/heads/main" }], pipelines: [] },
+    "items indented under their key, and CRLF",
+);
 
 const withRepos = validateGraph({ nodes: [node("a", 1, { repoBranches: { templates: " users/me/fix ", empty: "  " } })], edges: [] });
 assert.deepEqual(withRepos.nodes[0].repoBranches, { templates: "users/me/fix" }, "trimmed; an empty branch means the YAML's ref");

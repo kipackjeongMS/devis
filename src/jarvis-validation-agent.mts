@@ -17,6 +17,7 @@ import {
     getPrBuildPolicies,
     getRunParameters,
     listBuildDefinitions,
+    previewPipeline,
     type DefinitionInfo,
     type PipelineDefinition,
     type PrBuildPolicy,
@@ -33,7 +34,7 @@ import {
     type PipelineResource,
     type PrRef,
 } from "./pipeline-graph.mjs";
-import { describeAdoError } from "./pipeline-runner.mjs";
+import { describeAdoError, readRunInfo, type RunInfoAdo } from "./pipeline-runner.mjs";
 import { ensureDb } from "./store.mjs";
 import { readConfig } from "./config.mjs";
 import { JarvisError, asJarvisId, getTask, getWorker, listTaskPrs, type JarvisTask, type TaskPr } from "./jarvis-store.mjs";
@@ -57,7 +58,9 @@ export interface DiscoveryRuntime {
     listDefinitions(org: string, project: string): Promise<PipelineDefinition[]>;
     definitionInfo(org: string, project: string, definitionId: number): Promise<DefinitionInfo>;
     runParameters(org: string, project: string, projectId: string, definitionId: number, branch: string): Promise<RunParametersInfo>;
+    previewPipeline: RunInfoAdo["previewPipeline"];
     prBuildPolicies(org: string, projectId: string, prId: number): Promise<PrBuildPolicy[]>;
+    /** `repoId` may be the repository's name, for repositories only known by name. */
     branchExists(org: string, project: string, repoId: string, branch: string): Promise<boolean>;
 }
 
@@ -65,6 +68,7 @@ const ADO: DiscoveryRuntime = {
     listDefinitions: listBuildDefinitions,
     definitionInfo: getDefinitionInfo,
     runParameters: getRunParameters,
+    previewPipeline,
     prBuildPolicies: getPrBuildPolicies,
     branchExists,
 };
@@ -493,11 +497,24 @@ export async function checkProposal(task: JarvisTask, input: ProposalInput, by: 
         let resources: PipelineResource[] = [];
         if (info?.yaml) {
             try {
-                const yaml = await runtime.runParameters(org, info.projectName, info.projectId, ref.definitionId, effective);
+                const yaml = await readRunInfo(
+                    { getRunParameters: runtime.runParameters, previewPipeline: runtime.previewPipeline },
+                    org,
+                    info.projectName,
+                    info.projectId,
+                    ref.definitionId,
+                    effective,
+                    { params, repos: repoBranches },
+                );
                 resources = yaml.resources;
-                const problem = checkParams(params, yaml.parameters);
+                const on = effective.replace(/^refs\/heads\//, "");
+                if (yaml.rejected) {
+                    errors.push(`${name}: Azure DevOps can't compile it on ${on} with these repository branches${params ? " and parameters" : ""}: ${yaml.rejected}`);
+                }
+                // A previewed read compiled with the parameters, so Azure DevOps already accepted them.
+                const problem = yaml.previewed ? null : checkParams(params, yaml.parameters);
                 if (problem) errors.push(`${name}: ${problem}`);
-                if (repoBranches) {
+                if (repoBranches && !yaml.rejected) {
                     const repos = yaml.repositories ?? [];
                     const resolved = resolveRepoBranches(repoBranches, repos);
                     if (resolved.error) {
@@ -507,13 +524,14 @@ export async function checkProposal(task: JarvisTask, input: ProposalInput, by: 
                         for (const [alias, refName] of Object.entries(resolved.refs ?? {})) {
                             const repo = repos.find((r) => r.alias === alias)!;
                             const short = refName.replace(/^refs\/heads\//, "");
-                            if (repo.type.toLowerCase() !== "tfsgit" || !repo.id || !refName.startsWith("refs/heads/")) {
+                            if (repo.type.toLowerCase() !== "tfsgit" || !refName.startsWith("refs/heads/")) {
                                 branchesUnchecked++;
                                 warnings.push(`Couldn't check that ${short} exists in ${repo.name} (${alias}).`);
                                 continue;
                             }
                             try {
-                                if (!(await runtime.branchExists(org, repo.project || info.projectName, repo.id, short))) {
+                                // A previewed read knows repositories by name only; branchExists takes either.
+                                if (!(await runtime.branchExists(org, repo.project || info.projectName, repo.id || repo.name, short))) {
                                     errors.push(`${name}: branch ${short} doesn't exist in ${repo.name} (repository resource ${alias}).`);
                                 } else branchesChecked++;
                             } catch (e) {
@@ -523,7 +541,7 @@ export async function checkProposal(task: JarvisTask, input: ProposalInput, by: 
                         }
                     }
                 }
-                if (yaml.errors.length) warnings.push(`${name}'s YAML on ${effective.replace(/^refs\/heads\//, "")}: ${yaml.errors[0]}`);
+                if (yaml.errors.length && !yaml.rejected) warnings.push(`${name}'s YAML on ${on}: ${yaml.errors[0]}`);
             } catch (e) {
                 warnings.push(`Couldn't read ${name}'s YAML: ${describeAdoError(e)}`);
             }

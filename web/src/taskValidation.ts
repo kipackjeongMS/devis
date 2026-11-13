@@ -1,6 +1,9 @@
 // The task sheet's Validation tab: the task's own pipeline chain, its runs, and a
 // worker's proposal to review. The chain is edited in the Pipelines tab; here the
-// user sees why each pipeline is there, runs it, and decides on proposals.
+// user sees why each pipeline is there, runs it, and decides on proposals. Each
+// block's repository branches (templates and checkouts from other repos) can also be
+// set here, in the shared dialog (repoBranchesDialog.ts), which the server checks
+// compile with the YAML before saving.
 
 import { getJSON, postJSON } from "./api.js";
 import { esc } from "./util.js";
@@ -8,7 +11,8 @@ import { icon, type IconName } from "./icons.js";
 import { patchHtml } from "./patch.js";
 import { toast } from "./toast.js";
 import { openActionDialog } from "./prActions.js";
-import { statusLabel, statusTone } from "./pipelineModel.js";
+import { branchLabel, openRepoBranchesDialog } from "./repoBranchesDialog.js";
+import { normalizeBranch, statusLabel, statusTone } from "./pipelineModel.js";
 import {
   agoPhrase,
   chainStages,
@@ -41,6 +45,15 @@ export interface ValidationPanel {
 }
 
 const svg = (name: IconName): string => icon(name);
+
+/** A block's repository branches, on one line under it. */
+function repoLineHtml(repos: Record<string, string> | undefined): string {
+  const set = Object.entries(repos ?? {}).filter(([, b]) => b.trim());
+  if (!set.length) return "";
+  return `<p class="tv-block-params" title="Repository branches">${set
+    .map(([alias, b]) => `<code>${esc(alias)}</code> on <code>${esc(branchLabel(b))}</code>`)
+    .join(" · ")}</p>`;
+}
 
 const EVIDENCE_LABEL: Record<ValidationEvidence["kind"], string> = {
   prCheck: "PR check",
@@ -196,13 +209,7 @@ export function createValidationPanel(host: ValidationHost): ValidationPanel {
                 .join(" · ")}</p>`
             : ""
         }
-        ${
-          b.repoBranches
-            ? `<p class="tv-block-params">${Object.entries(b.repoBranches)
-                .map(([alias, br]) => `<code>${esc(alias)}</code> on <code>${esc(br)}</code>`)
-                .join(" · ")}</p>`
-            : ""
-        }
+        ${repoLineHtml(b.repoBranches)}
       </li>`;
     return `
       <section class="tv-card tv-proposal" data-key="proposal" aria-label="Proposed validation">
@@ -270,6 +277,12 @@ export function createValidationPanel(host: ValidationHost): ValidationPanel {
           ${st?.buildNumber ? `<p class="tv-block-meta">${st.url ? `<a href="${esc(st.url)}" target="_blank" rel="noopener">Build ${esc(st.buildNumber)}</a>` : `Build ${esc(st.buildNumber)}`}</p>` : ""}
           ${st?.error ? `<p class="tv-block-err">${esc(st.error)}</p>` : ""}
           ${why ? `<p class="tv-block-why">${esc(why.reason)}</p>${evidenceHtml(why.evidence)}` : ""}
+          ${repoLineHtml(n.repoBranches)}
+          <div class="tv-block-actions">
+            <button type="button" class="btn sm ghost" data-vact="repos" data-node="${esc(n.id)}" aria-label="Repository branches of ${esc(n.name)}"${
+              v.taskStatus === "done" ? ` disabled title="The task is done"` : ""
+            }>${svg("branch")}<span>Repository branches</span></button>
+          </div>
         </li>`;
     };
     const failedUnseen = run?.status === "failed" && v.ackedRunId !== run.runId;
@@ -476,6 +489,20 @@ export function createValidationPanel(host: ValidationHost): ValidationPanel {
           await after("Validation accepted and started");
         });
       }
+      case "repos": {
+        const block = v.chain?.graph.nodes.find((n) => n.id === node.dataset.node);
+        if (!block) return;
+        return openRepoBranchesDialog({
+          block,
+          branch: readBranch(block),
+          onSave: async (repos, was) => {
+            const res: { warnings?: string[] } = await post("repos", { nodeId: block.id, repoBranches: repos ?? null, was });
+            if (res.warnings?.length) toast(`Saved. ${res.warnings.join(" ")}`, "warn");
+            else toast(repos ? "Repository branches saved" : "Repository branches cleared", "ok");
+            void after();
+          },
+        });
+      }
       case "dismiss":
         dismissing = true;
         paintedSig = "";
@@ -483,6 +510,14 @@ export function createValidationPanel(host: ValidationHost): ValidationPanel {
       case "dismiss-cancel":
         return cancelDismiss();
     }
+  }
+
+  /** The branch a block's YAML is read from: its PR's when it follows one (null when that isn't known here), else its own ("" for the default). */
+  function readBranch(n: ValidationNode): string | null {
+    if (!n.branchFrom) return normalizeBranch(n.branch);
+    const { org, prId } = n.branchFrom;
+    const pr = view?.prs.find((p) => p.org.toLowerCase() === org.toLowerCase() && p.prId === prId);
+    return pr?.sourceRef ? normalizeBranch(pr.sourceRef) : null;
   }
 
   function onSubmit(e: SubmitEvent): void {

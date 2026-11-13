@@ -18,6 +18,7 @@ const v = await import("../jarvis-validation.mjs");
 const agent = await import("../jarvis-validation-agent.mjs");
 const pipes = await import("../pipeline-store.mjs");
 const runner = await import("../pipeline-runner.mjs");
+const { repoSignature } = await import("../pipeline-graph.mjs");
 const today = await import("../jarvis-today.mjs");
 const workers = await import("../jarvis-workers.mjs");
 const { closeDb } = await import("../store.mjs");
@@ -46,11 +47,35 @@ const until = async (check, what, ms = 4000) => {
     }
 };
 
-// ---- fake workers ------------------------------------------------------------------------
+// ---- fake workers, and the checks behind a block's repository branches ---------------------------
 const told = [];
 const busy = new Set();
 let onMessage = null;
+// Every YAML takes templates from GovernedTemplates (alias `templates`). A branch named "broken"
+// doesn't compile; looking up "flaky" fails; only release/1 and flaky exist.
+const previewCalls = [];
+const repoLookups = [];
+const templatesYaml = [
+    "resources:",
+    "  repositories:",
+    "  - repository: templates",
+    "    type: git",
+    "    name: OneBranch.Pipelines/GovernedTemplates",
+    "    ref: refs/heads/main",
+    "steps:",
+    "- script: echo hi",
+].join("\n");
 v.setValidationRuntime({
+    previewPipeline: async (org, project, definitionId, branch, params, repos) => {
+        previewCalls.push({ definitionId, branch, params, repos });
+        if (Object.values(repos ?? {}).includes("broken")) return { rejected: "Could not find template build.yml@templates" };
+        return { finalYaml: templatesYaml };
+    },
+    branchExists: async (org, project, repo, branch) => {
+        repoLookups.push([project, repo, branch]);
+        if (branch === "flaky") throw new Error('ADO GET 503: {"message":"unavailable"}');
+        return branch === "release/1";
+    },
     buildFailures: async (org, project, buildId) => [
         { name: "Run smoke tests", type: "Task", errors: [`boom in build ${buildId}`], logUrl: `https://log/${buildId}` },
     ],
@@ -424,11 +449,102 @@ await assert.rejects(pipes.startChainRun(chain.id), /The task is done/, "the Pip
 await assert.rejects(pipes.triggerNode(chain.id, "v2"), /The task is done/, "…and running one block");
 assert.equal((await v.validationView(task.id)).taskStatus, "done");
 await assert.rejects(agent.propose(task.id, { summary: "s", blocks: [{ pipeline: ref(11), reason: "r" }] }, "W1", null), /The task is done/);
+await assert.rejects(
+    v.setBlockRepoBranches(task.id, "v2", { templates: "release/1" }),
+    (e) => e.status === 409 && /^The task is done\. Reopen it to change its validation\.$/.test(e.message),
+    "…and its blocks' repository branches",
+);
 await store.updateTask(task.id, { status: "open" });
 assert.equal(await pipes.getChain(mine.id).then((c) => !!c), true);
 await pipes.startChainRun(mine.id).then((r) => pipes.requestRunCancel(r.runId));
 await tick();
 await until(async () => (await pipes.latestRun(mine.id)).status !== "running", "the user's own chain stopping");
+
+// ---- 6b. a block's repository branches, set from the task: compiled and looked up before they're saved ------
+{
+    const v2Of = (c) => c.graph.nodes.find((n) => n.id === "v2");
+    const rejectsWith = (promise, status, pattern, message) =>
+        assert.rejects(promise, (e) => e.status === status && pattern.test(e.message), message);
+    const lastEvent = async () => (await store.listEvents({ taskId: task.id, limit: 1 }))[0].text;
+    previewCalls.length = 0;
+    repoLookups.length = 0;
+
+    let set = await v.setBlockRepoBranches(task.id, "v2", { TEMPLATES: "release/1" }, "");
+    assert.deepEqual(set.warnings, []);
+    assert.deepEqual(v2Of(set.chain).repoBranches, { templates: "release/1" }, "kept as typed, under the YAML's alias spelling");
+    assert.deepEqual(v2Of(await pipes.getChain(chain.id)).repoBranches, { templates: "release/1" }, "saved");
+    assert.deepEqual(v2Of(set.chain).params, { env: "test" }, "the rest of the block is kept");
+    assert.deepEqual(
+        previewCalls.map((c) => [c.definitionId, c.branch, c.params, c.repos]),
+        [
+            [12, "", { env: "test" }, { TEMPLATES: "release/1" }],
+            [12, "", { env: "test" }, { templates: "refs/heads/release/1" }],
+        ],
+        "compiled on the block's branch with its parameters, then again under the YAML's spelling",
+    );
+    assert.deepEqual(repoLookups, [["OneBranch.Pipelines", "GovernedTemplates", "release/1"]], "looked up in the repository's own project");
+    assert.equal(await lastEvent(), "A repository branch set on Deploy-Test for Ship the cache");
+
+    // What the user opened must still be what's there; a chain saved elsewhere meanwhile is refused too.
+    const opened = repoSignature(v2Of(set.chain).repoBranches);
+    await rejectsWith(v.setBlockRepoBranches(task.id, "v2", { templates: "flaky" }, ""), 409, /changed since you opened them/, "a stale edit");
+    await rejectsWith(v.setBlockRepoBranches(task.id, "gone", { templates: "release/1" }), 404, /isn't in the task's chain anymore/);
+
+    // Nothing is saved when a branch can't be used.
+    previewCalls.length = 0;
+    repoLookups.length = 0;
+    await rejectsWith(v.setBlockRepoBranches(task.id, "v2", { self: "release/1" }, opened), 400, /own repository builds the block's Branch/);
+    await rejectsWith(v.setBlockRepoBranches(task.id, "v2", ["release/1"], opened), 400, /must be alias\/branch pairs/);
+    assert.equal(previewCalls.length, 0, "bad input isn't sent to Azure DevOps");
+    await rejectsWith(
+        v.setBlockRepoBranches(task.id, "v2", { templates: "users/me/gone" }, opened),
+        400,
+        /^Branch users\/me\/gone doesn't exist in GovernedTemplates \(repository resource templates\)\.$/,
+    );
+    await rejectsWith(
+        v.setBlockRepoBranches(task.id, "v2", { templates: "broken" }, opened),
+        400,
+        /^Azure DevOps can't compile the pipeline with these branches: Could not find template build\.yml@templates$/,
+    );
+    await rejectsWith(
+        v.setBlockRepoBranches(task.id, "v2", { gone: "release/1" }, opened),
+        400,
+        /^Repository "gone" is no longer a resource of this pipeline\. Its repository resources: templates\.$/,
+    );
+    assert.deepEqual(repoLookups.map((l) => l[2]), ["users/me/gone"], "a branch is only looked up once the pipeline compiles with it");
+    assert.deepEqual(v2Of(await pipes.getChain(chain.id)).repoBranches, { templates: "release/1" }, "nothing was saved");
+
+    // A lookup that fails is a warning: the branches are saved, and the run checks them.
+    set = await v.setBlockRepoBranches(task.id, "v2", { templates: "flaky" }, opened);
+    assert.equal(set.warnings.length, 1);
+    assert.match(set.warnings[0], /^Couldn't check that branch flaky exists in GovernedTemplates: /);
+    assert.deepEqual(v2Of(set.chain).repoBranches, { templates: "flaky" });
+
+    // A block that follows a PR is compiled on the PR's branch; while that isn't known, nothing is checked.
+    previewCalls.length = 0;
+    set = await v.setBlockRepoBranches(task.id, "v1", { templates: "release/1" }, "");
+    assert.deepEqual(set.warnings, []);
+    assert.deepEqual(previewCalls.map((c) => [c.definitionId, c.branch]), [[11, "refs/heads/kjeong/feature"]]);
+    await store.updateTaskPr(task.id, "msazure", 7, { snapshot: snapshot(7, { sourceRef: "" }) });
+    previewCalls.length = 0;
+    set = await v.setBlockRepoBranches(task.id, "v1", { templates: "users/me/gone" }, repoSignature({ templates: "release/1" }));
+    assert.deepEqual(set.warnings, ["The branch of PR 7 isn't known yet, so these weren't checked. The run checks them."]);
+    assert.equal(previewCalls.length, 0);
+    assert.deepEqual(set.chain.graph.nodes.find((n) => n.id === "v1").repoBranches, { templates: "users/me/gone" });
+    await store.updateTaskPr(task.id, "msazure", 7, { snapshot: snapshot(7) });
+
+    // Clearing needs no check.
+    set = await v.setBlockRepoBranches(task.id, "v1", null);
+    assert.equal(set.chain.graph.nodes.find((n) => n.id === "v1").repoBranches, undefined);
+    set = await v.setBlockRepoBranches(task.id, "v2", { templates: "  " }, repoSignature({ templates: "flaky" }));
+    assert.equal(v2Of(set.chain).repoBranches, undefined, "a blank branch clears it");
+    assert.equal(previewCalls.length, 0);
+    assert.equal(await lastEvent(), "Repository branches cleared on Deploy-Test for Ship the cache");
+
+    const { task: chainless } = await store.createTask({ title: "No chain" });
+    await rejectsWith(v.setBlockRepoBranches(chainless.id, "v1", { templates: "release/1" }), 404, /^This task has no validation chain\.$/);
+    await store.deleteTask(chainless.id);
+}
 
 // A block that follows a PR the app can't read errors with why, instead of building some other branch.
 const lost = await pipes.saveChain({

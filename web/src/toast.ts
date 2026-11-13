@@ -13,7 +13,7 @@ export interface ToastAction {
 export function toast(msg: string, kind?: string, action?: ToastAction): void {
   const t = $("#toast") as HTMLElement;
   const hide = () => (t.hidden = true);
-  const ms = action ? 6000 : kind === "err" ? 5000 : 2600;
+  const ms = action ? 6000 : kind === "err" || kind === "warn" ? 5000 : 2600;
   t.replaceChildren(document.createTextNode(msg));
   if (action) {
     const button = document.createElement("button");
