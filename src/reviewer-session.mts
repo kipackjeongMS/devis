@@ -17,6 +17,7 @@ import {
     withCopilotClient,
 } from "./copilot-runtime.mjs";
 import { ADD_REVIEW_FINDINGS_SCHEMA, addReviewFindings } from "./review-publish.mjs";
+import { sharedMcpServers } from "./shared-playwright.mjs";
 import { chatMessagesFromEvents, type ChatMessage, type EventLike } from "./chat-transcript.mjs";
 import type { WorkItem } from "./service-files.mjs";
 
@@ -98,7 +99,7 @@ function acquire(sessionId: string, scope: ReviewerScope): Promise<CopilotSessio
         const session = withCopilotClient((client) =>
             client.resumeSession(sessionId, {
                 ...options,
-                mcpServers: scope.org && scope.project ? options.mcpServers : {},
+                mcpServers: scope.org && scope.project ? options.mcpServers : sharedMcpServers(),
                 skipCustomInstructions: true,
                 streaming: true,
                 tools: [addReviewFindingsTool()],

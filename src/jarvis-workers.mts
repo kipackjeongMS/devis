@@ -19,6 +19,7 @@ import {
     type Tool,
 } from "@github/copilot-sdk";
 import { CLIENT_NAME, replyText, resumeCommand, sendAndSettle, TurnStoppedError, WEB_BRIEF, withCopilotClient } from "./copilot-runtime.mjs";
+import { sharedMcpServers } from "./shared-playwright.mjs";
 import { effortProblem, carriedEffort, getModelCatalog, sessionModelState, switchSessionModel, type ModelChoice, type ModelState } from "./models.mjs";
 import { MessageQueue, sendMode, steer, type QueuedMessage } from "./chat-queue.mjs";
 import { imageAttachments, requestImages, type ChatImage } from "./chat-images.mjs";
@@ -971,6 +972,7 @@ function sessionConfig(
         ...(model && model !== "auto" && effort ? { reasoningEffort: effort as ResumeSessionConfig["reasoningEffort"] } : {}),
         streaming: true,
         skillDirectories: skills,
+        mcpServers: sharedMcpServers(),
         tools: tools.map(readOnlyWhileAuditing),
         systemMessage: { mode: "append", content: workerBrief(task, worker, worktrees) },
         onPermissionRequest: (request, invocation) => onPermission(invocation.sessionId, request),

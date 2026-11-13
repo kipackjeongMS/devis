@@ -6,6 +6,7 @@
 import { mkdirSync } from "node:fs";
 import { defineTool, type CopilotSession, type PermissionRequest, type ResumeSessionConfig, type Tool } from "@github/copilot-sdk";
 import { CLIENT_NAME, sendAndSettle, TurnStoppedError, WEB_BRIEF, withCopilotClient } from "./copilot-runtime.mjs";
+import { sharedMcpServers } from "./shared-playwright.mjs";
 import type { WorkItem } from "./service-files.mjs";
 import { runNotesAction } from "./jarvis-notes.mjs";
 import { readConfig } from "./config.mjs";
@@ -353,6 +354,7 @@ function leadConfig(model: string, effort: string): ResumeSessionConfig {
         ...(model && effort ? { reasoningEffort: effort as ResumeSessionConfig["reasoningEffort"] } : {}),
         streaming: true,
         skipCustomInstructions: true,
+        mcpServers: sharedMcpServers(),
         tools: leadTools(),
         systemMessage: { mode: "append", content: LEAD_BRIEF },
         onPermissionRequest: leadPermission,
