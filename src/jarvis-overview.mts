@@ -13,6 +13,7 @@
 import { createHash } from "node:crypto";
 import type { CopilotSession } from "@github/copilot-sdk";
 import { CLIENT_NAME, replyText, sendAndSettle, sessionWorkingDirectory, withCopilotClient } from "./copilot-runtime.mjs";
+import { sharedMcpServers } from "./shared-playwright.mjs";
 import { getAvailableModels } from "./models.mjs";
 import {
     clip,
@@ -327,7 +328,7 @@ const sdkRuntime: OverviewRuntime = {
                 workingDirectory: sessionWorkingDirectory(),
                 model,
                 skipCustomInstructions: true,
-                mcpServers: {},
+                mcpServers: sharedMcpServers(),
                 // The data comes in the prompt and only text goes out. Like every session, it has
                 // the user's MCP servers on and may call them; built-in tools (shell, files) stay off.
                 excludedTools: ["builtin:*", "custom:*"],

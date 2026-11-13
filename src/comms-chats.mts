@@ -4,6 +4,7 @@
 // every field of its answer, and keeps the links; the model never makes one.
 
 import { CLIENT_NAME, replyText, sendAndSettle, sessionWorkingDirectory, withCopilotClient } from "./copilot-runtime.mjs";
+import { sharedMcpServers } from "./shared-playwright.mjs";
 import { getAvailableModels } from "./models.mjs";
 import { PREFERRED_MODELS } from "./jarvis-overview.mjs";
 import { jsonInText } from "./mcp-stdio.mjs";
@@ -187,7 +188,7 @@ export function summarizeWithCopilot(prompt: string, brief: string = CHAT_BRIEF)
             workingDirectory: sessionWorkingDirectory(),
             model: await pickModel(),
             skipCustomInstructions: true,
-            mcpServers: {},
+            mcpServers: sharedMcpServers(),
             // Other people's words go in: nothing they say can reach a tool.
             excludedTools: ["builtin:*", "custom:*", "mcp:*"],
             onPermissionRequest: () => ({ kind: "reject", feedback: "This session has no tools." }),

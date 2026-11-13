@@ -6388,8 +6388,38 @@ button.tm-pr-title:hover { color: var(--accent-text); text-decoration: underline
 .ide-panel .ide-option { flex: none; width: 44px; height: 44px; border-radius: var(--r-control); }
 .ide-option img { display: block; width: 24px; height: 24px; object-fit: contain; }
 .ide-option:disabled { opacity: .45; }
+/* The conversation and the jump button that floats over its foot. */
+.chat-view { position: relative; display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; }
 .chat-log { flex: 1 1 auto; min-height: 0; padding: 16px 18px 8px; overflow-y: auto; }
 .chat-log:focus-visible { outline-offset: -2px; }
+/* Back to the latest message: shown only while the conversation is scrolled up from its foot. */
+.chat-jump {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--edge);
+  border-radius: 50%;
+  background-color: var(--glass-float);
+  box-shadow: var(--shadow-flyout);
+  color: var(--text-2);
+  opacity: 0;
+  visibility: hidden;
+  transform: translate(-50%, 6px);
+  transition: opacity var(--t-normal) var(--ease), transform var(--t-normal) var(--ease), border-color var(--t-fast) var(--ease), color var(--t-fast) var(--ease), visibility 0s linear var(--t-normal);
+}
+.chat-jump.is-shown { opacity: 1; visibility: visible; transform: translate(-50%, 0); transition-delay: 0s; }
+.chat-jump:hover { border-color: var(--edge-top); background-image: linear-gradient(var(--fill-hover), var(--fill-hover)); color: var(--text-1); }
+.chat-jump:active { background-image: linear-gradient(var(--fill-press), var(--fill-press)); }
+.chat-jump:focus-visible { border-radius: 50%; }
+.chat-jump svg.ic { width: 16px; height: 16px; }
+/* Something new arrived below while you read further up. */
+.chat-jump.has-new { border-color: var(--accent); color: var(--accent-text); }
 .chat-msg { max-width: 880px; margin: 0 0 14px; color: var(--text-1); font-size: var(--fs-label); line-height: 21px; }
 .chat-msg.user {
   width: fit-content;
@@ -6402,7 +6432,9 @@ button.tm-pr-title:hover { color: var(--accent-text); text-decoration: underline
 }
 .chat-msg.user p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .chat-msg.user.sending { opacity: .6; }
-/* The log's two parts (chatPane.ts): the conversation, and the live tail after it. Layout sees only their children. */
+/* The log's content (chatPane.ts): one box, so a resize observer sees the conversation grow, holding
+   its two parts, the conversation and the live tail after it. Layout sees only the parts' children. */
+.chat-flow { display: flow-root; }
 .chat-hist,
 .chat-tail { display: contents; }
 /* Sent into the running turn: the reply takes it in at its next step. */
@@ -6759,6 +6791,8 @@ body.layout-stacked { --pane-pad: 16px; }
   .chain-node.selected { outline: 2px solid Highlight; }
   .chain-node.is-out { opacity: 1; border-style: dotted; }
   .chain-block-action { border-color: ButtonText; }
+  .chat-jump { border-color: ButtonText; }
+  .chat-jump.has-new { border-color: Highlight; color: Highlight; }
   .search-kbd { border-color: GrayText; }
   .chain-block-action[aria-disabled="true"] { border-color: GrayText; color: GrayText; }
   .run-confirm-notes { border: 1px solid CanvasText; }

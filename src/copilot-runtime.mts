@@ -6,6 +6,10 @@
 // session can be reopened with `agency copilot --resume <id>`). Without Agency
 // it runs the Copilot runtime that ships inside Devis (the SDK's platform package),
 // and only when that's missing too, the `copilot` CLI on PATH; either way it says so.
+//
+// To keep the machine responsive, the runtime and every MCP server under it run at
+// below-normal CPU priority (runtime-priority.mts), and sessions share one
+// Playwright MCP server over HTTP instead of each starting its own (shared-playwright.mts).
 
 import {
     CopilotClient,
@@ -21,8 +25,13 @@ import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
+import { keepTreeLow } from "./runtime-priority.mjs";
+import { sharedMcpServers, sharedPlaywrightReady, startSharedPlaywright, stopSharedPlaywright } from "./shared-playwright.mjs";
 
 const execFileAsync = promisify(execFile);
+
+/** How long a starting runtime waits on for the shared Playwright server, so the first sessions get it too. */
+const PLAYWRIGHT_GRACE_MS = 5_000;
 
 export const CLIENT_NAME = "ado-pr-ops";
 
@@ -144,8 +153,11 @@ export function getCopilotClient(): Promise<CopilotClient> {
                 // Agency gives the runtime access to the folder it starts in: start it in the empty one.
                 workingDirectory: sessionWorkingDirectory(),
             });
+            startSharedPlaywright(sessionWorkingDirectory());
             await client.start();
             console.log(`[copilot] runtime started through ${RUNTIME_LABEL[runtime.via]} (${runtime.command})`);
+            keepTreeLow(runtimeProcessId(client), "copilot runtime");
+            await sharedPlaywrightReady(PLAYWRIGHT_GRACE_MS);
             return client;
         })().catch((error) => {
             clientPromise = null;
@@ -184,7 +196,13 @@ export async function warmCopilot(): Promise<void> {
     await getCopilotClient();
 }
 
+/** The runtime's own process (Agency's, through Agency): the SDK keeps it in a private field. */
+function runtimeProcessId(client: CopilotClient): number | undefined {
+    return (client as unknown as { cliProcess?: { pid?: number } | null }).cliProcess?.pid;
+}
+
 export async function stopCopilotClient(): Promise<void> {
+    stopSharedPlaywright();
     const pending = clientPromise;
     clientPromise = null;
     if (!pending) return;
@@ -252,7 +270,7 @@ export function prSessionOptions(org: string, project: string) {
     return {
         clientName: CLIENT_NAME,
         workingDirectory: sessionWorkingDirectory(),
-        mcpServers: reviewMcpServers(org, project),
+        mcpServers: { ...sharedMcpServers(), ...reviewMcpServers(org, project) },
         onPermissionRequest: reviewPermissionHandler,
     };
 }
@@ -452,6 +470,7 @@ export function runOneShot(prompt: string, options: OneShotOptions = {}): Promis
             workingDirectory: sessionWorkingDirectory(),
             model: model && model !== "auto" ? model : undefined,
             skipCustomInstructions: true,
+            mcpServers: sharedMcpServers(),
             onPermissionRequest: reviewPermissionHandler,
         });
         try {

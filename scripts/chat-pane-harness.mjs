@@ -161,9 +161,14 @@ assert.equal(c.revealKept("Hello", 5, ""), 0);
 
 // ---- the pane ----
 const pane = c.chatPaneHtml({ id: "tm", inputLabel: "Message the worker", commands: true });
-for (const part of ["chat-head", "chat-log", "chat-requests", "chat-tools", "chat-compose", "chat-popup", "chat-input", "chat-sr", "chat-bar", "chat-hint", "chat-send"]) {
+for (const part of ["chat-head", "chat-view", "chat-log", "chat-jump", "chat-requests", "chat-tools", "chat-compose", "chat-popup", "chat-input", "chat-sr", "chat-bar", "chat-hint", "chat-send"]) {
     assert.match(pane, new RegExp(`class="[^"]*\\b${part}\\b`), `pane has ${part}`);
 }
+assert.match(
+    pane,
+    /<div class="chat-view">\s*<div class="chat-log"[^>]*><\/div>\s*<button type="button" class="chat-jump" title="Jump to the latest message" aria-label="Jump to the latest message">[\s\S]*?<\/button>\s*<\/div>\s*<div class="chat-requests"/,
+    "the jump button floats over the log's foot, after it in tab order and before the request cards"
+);
 assert.match(pane, /<div class="chat-head" hidden>/, "a pane without head content hides it");
 assert.match(pane, /<div class="chat-tools" hidden><\/div>\s*<form class="chat-compose">/, "the model picker's row sits right over the composer, hidden until filled");
 assert.match(pane, /aria-controls="tm-popup"/);

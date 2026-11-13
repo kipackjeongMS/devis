@@ -41,13 +41,20 @@ export interface ChatPaneOptions {
   headHtml?: string;
 }
 
+/** The jump button's name, and its name when something new arrived below. */
+const JUMP_LABEL = "Jump to the latest message";
+const JUMP_NEW_LABEL = "New messages below. Jump to the latest message";
+
 export function chatPaneHtml(o: ChatPaneOptions): string {
   const popup = `${o.id}-popup`;
   const wired = o.commands ? ` aria-autocomplete="list" aria-controls="${esc(popup)}"` : "";
   return `
     <div class="chat"${o.label ? ` role="group" aria-label="${esc(o.label)}"` : ""}>
       <div class="chat-head"${o.headHtml ? "" : " hidden"}>${o.headHtml || ""}</div>
-      <div class="chat-log" role="log" aria-live="polite" tabindex="0"></div>
+      <div class="chat-view">
+        <div class="chat-log" role="log" aria-live="polite" tabindex="0"></div>
+        <button type="button" class="chat-jump" title="${JUMP_LABEL}" aria-label="${JUMP_LABEL}">${icon("down")}</button>
+      </div>
       <div class="chat-requests" hidden></div>
       <div class="chat-tools" hidden></div>
       <form class="chat-compose">
@@ -71,7 +78,10 @@ export function chatPaneHtml(o: ChatPaneOptions): string {
 export interface ChatPane {
   root: HTMLElement;
   head: HTMLElement;
+  /** The log and the jump-to-latest button that floats over it. */
+  view: HTMLElement;
   log: HTMLElement;
+  jump: HTMLButtonElement;
   requests: HTMLElement;
   /** The row over the composer: the model and effort picker. Hidden until the host fills it. */
   tools: HTMLElement;
@@ -98,7 +108,9 @@ export function chatPaneRefs(scope: ParentNode): ChatPane {
   return {
     root,
     head: q(".chat-head"),
+    view: q(".chat-view"),
     log: q(".chat-log"),
+    jump: q(".chat-jump"),
     requests: q(".chat-requests"),
     tools: q(".chat-tools"),
     form: q(".chat-compose"),
@@ -206,6 +218,8 @@ export interface QueuedLine {
 }
 
 export interface ChatLogSpec {
+  /** Which conversation this is. When it changes, the log opens the new one at its latest message. */
+  session?: string;
   /** The conversation, in order. */
   items: LogItem[];
   /** Show a "loading" line: the transcript is being read and there is none yet. */
@@ -380,6 +394,8 @@ export function revealKept(previous: string, shown: number, next: string): numbe
 
 /** What one log has on screen: its two parts, and how far the streaming reply is revealed. */
 interface LogPaint {
+  /** Holds the two parts, so one box measures how tall the conversation is. */
+  flow: HTMLElement;
   history: HTMLElement;
   tail: HTMLElement;
   historyKey: string;
@@ -400,11 +416,13 @@ const reduceMotion = (): boolean => typeof matchMedia === "function" && matchMed
 /** The log's two parts, made on first paint (and again if anything replaced them). */
 function logPaint(log: HTMLElement): LogPaint {
   const known = paints.get(log);
-  if (known && known.history.parentNode === log && known.tail.parentNode === log) return known;
-  log.innerHTML = `<div class="chat-hist"></div><div class="chat-tail"></div>`;
+  if (known && known.flow.parentNode === log && known.history.parentNode === known.flow && known.tail.parentNode === known.flow) return known;
+  log.innerHTML = `<div class="chat-flow"><div class="chat-hist"></div><div class="chat-tail"></div></div>`;
+  const flow = log.firstElementChild as HTMLElement;
   const p: LogPaint = {
-    history: log.firstElementChild as HTMLElement,
-    tail: log.lastElementChild as HTMLElement,
+    flow,
+    history: flow.firstElementChild as HTMLElement,
+    tail: flow.lastElementChild as HTMLElement,
     historyKey: "",
     tailHtml: "",
     spec: null,
@@ -420,6 +438,158 @@ function logPaint(log: HTMLElement): LogPaint {
 
 const nearBottom = (log: HTMLElement): boolean => log.scrollHeight - log.scrollTop - log.clientHeight < STICKY_PX;
 
+const toBottom = (log: HTMLElement): void => {
+  log.scrollTop = log.scrollHeight;
+};
+
+// ---- following the conversation --------------------------------------------------------
+//
+// A log opens at its latest message and stays there as the conversation grows, until the
+// user scrolls up to read. It opens at the latest again whenever it's shown or put back on the
+// page (a hidden or detached log has no height to scroll, and loses its place), when it shows
+// another session, and when the user sends. Content that grows after it's painted (an image
+// loading, a diagram drawing, a section opening) keeps it pinned too: a ResizeObserver on the
+// log and its content re-pins on every size change.
+//
+// Only the user scrolling up unpins it, and reaching the bottom pins it again. The log's own
+// jumps to the bottom only ever scroll down, so they can't unpin it, however the scroll events
+// and the content's growth interleave. While unpinned, a button over the log jumps back down,
+// and marks when something new arrived below.
+
+/** Where one log is in its conversation. */
+interface Follow {
+  /** New content keeps the log at the bottom. */
+  pinned: boolean;
+  /** Something arrived below while the user was reading further up. */
+  unseen: boolean;
+  /** The log's height when last measured: 0 while it's hidden. */
+  height: number;
+  /** Where the log was last scrolled to, to tell scrolling up from the rest. */
+  top: number;
+  session: string | undefined;
+  /** The content being watched for size changes. */
+  flow: HTMLElement | null;
+  jump: HTMLButtonElement | null;
+  observer: ResizeObserver | null;
+}
+
+const follows = new WeakMap<HTMLElement, Follow>();
+
+/** The log's follow state, made on first paint. It watches `flow`, the log's current content. */
+function follow(log: HTMLElement, flow: HTMLElement): Follow {
+  let f = follows.get(log);
+  if (!f) {
+    const made: Follow = { pinned: true, unseen: false, height: 0, top: log.scrollTop, session: undefined, flow: null, jump: null, observer: null };
+    log.addEventListener("scroll", () => onScroll(log, made), { passive: true });
+    follows.set(log, made);
+    f = made;
+  }
+  if (!f.jump) {
+    const jump = log.parentElement?.querySelector<HTMLButtonElement>(":scope > .chat-jump") ?? null;
+    if (jump) wireJump(log, f, jump);
+  }
+  // A log painted before it's on the page is measured once it's there, so it opens at the latest too.
+  if (typeof ResizeObserver === "function") {
+    let observer = f.observer;
+    if (!observer) {
+      const state = f;
+      // Hidden or taken off the page, the log measures 0; shown or put back, its real height.
+      observer = f.observer = new ResizeObserver(() => onResize(log, state));
+      observer.observe(log);
+    }
+    if (f.flow !== flow) {
+      if (f.flow) observer.unobserve(f.flow);
+      observer.observe(flow);
+      f.flow = flow;
+    }
+  }
+  return f;
+}
+
+function onScroll(log: HTMLElement, f: Follow): void {
+  if (!log.clientHeight) return;
+  const top = log.scrollTop;
+  const up = top < f.top;
+  f.top = top;
+  if (nearBottom(log)) {
+    f.pinned = true;
+    f.unseen = false;
+  } else if (up) {
+    f.pinned = false;
+  }
+  showJump(log, f);
+}
+
+function onResize(log: HTMLElement, f: Follow): void {
+  // Hidden or off the page: nothing to scroll until it's back.
+  const height = log.isConnected ? log.clientHeight : 0;
+  if (!height) {
+    f.height = 0;
+    return;
+  }
+  // Shown (again): it opens at the latest, wherever it was left.
+  if (!f.height) {
+    f.pinned = true;
+    f.unseen = false;
+  }
+  f.height = height;
+  if (f.pinned) stick(log, f);
+  else f.top = log.scrollTop;
+  showJump(log, f);
+}
+
+/**
+ * Jump to the latest, and remember it as where the log is: a scroll up that lands in the
+ * same frame then reads as up from here, rather than from wherever the log was before.
+ */
+function stick(log: HTMLElement, f: Follow): void {
+  toBottom(log);
+  f.top = log.scrollTop;
+}
+
+/** The jump button shows while the log is scrolled up from the latest, marked when there's more below. */
+function showJump(log: HTMLElement, f: Follow): void {
+  const jump = f.jump;
+  if (!jump) return;
+  const shown = !f.pinned && log.clientHeight > 0 && !nearBottom(log);
+  const fresh = shown && f.unseen;
+  // Hiding a focused button would drop focus to the page: the log takes it, as the button's target.
+  if (!shown && document.activeElement === jump) log.focus({ preventScroll: true });
+  jump.classList.toggle("is-shown", shown);
+  jump.classList.toggle("has-new", fresh);
+  const label = fresh ? JUMP_NEW_LABEL : JUMP_LABEL;
+  if (jump.getAttribute("aria-label") !== label) {
+    jump.setAttribute("aria-label", label);
+    jump.title = label;
+  }
+}
+
+function wireJump(log: HTMLElement, f: Follow, jump: HTMLButtonElement): void {
+  f.jump = jump;
+  // A click leaves focus where it was (such as the message box); Enter or Space moves it to the log.
+  jump.addEventListener("mousedown", (e) => e.preventDefault());
+  jump.addEventListener("click", () => {
+    f.pinned = true;
+    f.unseen = false;
+    log.scrollTo({ top: log.scrollHeight, behavior: reduceMotion() ? "auto" : "smooth" });
+    showJump(log, f);
+  });
+  // The button floats over the log but outside it: the wheel over it scrolls the log as it would.
+  jump.addEventListener(
+    "wheel",
+    (e) => {
+      if (e.ctrlKey) return;
+      e.preventDefault();
+      const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? log.clientHeight : 1;
+      log.scrollBy({ top: e.deltaY * unit, left: e.deltaX * unit });
+    },
+    { passive: false }
+  );
+}
+
+/** The last message, and how many there are: it changes when one arrives or grows. */
+const tipSig = (items: LogItem[]): string => (items.length ? `${items.length}|${itemSig(items[items.length - 1])}` : "");
+
 function paintTail(p: LogPaint): void {
   const html = chatLogParts(p.spec!, p.target.slice(0, p.shown)).tail;
   if (html === p.tailHtml) return;
@@ -433,27 +603,41 @@ function revealFrame(log: HTMLElement, p: LogPaint, now: number): void {
   // A long gap (a hidden window) shows the rest at once rather than racing through it.
   const dt = now - p.last > 250 ? REVEAL_CATCHUP_MS : now - p.last;
   p.last = now;
-  const stick = nearBottom(log);
+  const f = follows.get(log);
+  const pinned = f ? f.pinned : nearBottom(log);
   p.shown = revealStep(p.shown, p.target.length, dt);
   paintTail(p);
-  if (stick) log.scrollTop = log.scrollHeight;
+  if (pinned) {
+    if (f) stick(log, f);
+    else toBottom(log);
+  }
   if (p.shown < p.target.length) p.frame = requestAnimationFrame((t) => revealFrame(log, p, t));
 }
 
 /**
  * Patch the log to `spec`. The conversation repaints only when it changed, the live tail as
- * it moves, and a streaming reply flows in (see revealStep). The log stays pinned to the
- * bottom if it was there, and goes there when the user sends a message.
+ * it moves, and a streaming reply flows in (see revealStep). The log opens a session at its
+ * latest message, stays pinned to the bottom while it's there, and goes there when the user
+ * sends a message (see "following the conversation").
  */
 export function paintChatLog(log: HTMLElement, spec: ChatLogSpec): void {
   const p = logPaint(log);
-  const stick = nearBottom(log);
+  const f = follow(log, p.flow);
+  if (spec.session !== f.session) {
+    f.session = spec.session;
+    f.pinned = true;
+    f.unseen = false;
+  }
+  const before = p.spec;
   const key = historySig(spec);
   if (key !== p.historyKey) {
     p.historyKey = key;
     patchHtml(p.history, chatLogParts(spec).history);
   }
   const target = spec.busy ? spec.partial || "" : "";
+  // Something arrived below: a message, more of the reply, or the turn's outcome.
+  const arrived =
+    (!!before && (tipSig(spec.items) !== tipSig(before.items) || (!!spec.trailer && spec.trailer !== before.trailer))) || target.length > p.target.length;
   p.shown = reduceMotion() ? target.length : revealKept(p.target, p.shown, target);
   p.target = target;
   p.spec = spec;
@@ -462,7 +646,14 @@ export function paintChatLog(log: HTMLElement, spec: ChatLogSpec): void {
   const sending = sendingSig(spec);
   const sent = !!sending && sending !== p.sending;
   p.sending = sending;
-  if (stick || sent) log.scrollTop = log.scrollHeight;
+  if (sent) {
+    f.pinned = true;
+    f.unseen = false;
+  } else if (!f.pinned && arrived) {
+    f.unseen = true;
+  }
+  if (f.pinned) stick(log, f);
+  showJump(log, f);
   if (p.shown < target.length && !p.frame) {
     p.last = performance.now();
     p.frame = requestAnimationFrame((t) => revealFrame(log, p, t));
