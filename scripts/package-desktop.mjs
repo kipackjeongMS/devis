@@ -13,7 +13,8 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
 
 // The commit this build comes from, so the service can report it (Devis' updater checks a ship went live by it),
-// and the source folder it was built from, the default for Settings' self-change source.
+// and the source folder it was built from, the default for Settings' self-change source. DEVIS_RELEASE=1 (set by
+// the release workflow) marks a GitHub release: only those install newer releases on their own.
 const git = (args) => {
     try {
         return execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
@@ -21,12 +22,15 @@ const git = (args) => {
         return "";
     }
 };
+const release = process.env.DEVIS_RELEASE === "1";
 await writeFile(
     new URL("../build-info.json", import.meta.url),
     JSON.stringify({
         commit: git(["rev-parse", "HEAD"]) || null,
         dirty: !!git(["status", "--porcelain", "--untracked-files=no"]),
-        source: root.replace(/[\\/]+$/, ""),
+        version: pkg.version,
+        release,
+        source: release ? null : root.replace(/[\\/]+$/, ""),
         builtAt: new Date().toISOString(),
     }) + "\n",
 );
@@ -35,7 +39,8 @@ const ignore = [
     /^\/src($|\/)/,
     /^\/web\/src($|\/)/,
     /^\/web\/design-system\.html$/,
-    /^\/scripts($|\/)/,
+    // Only the updater goes in, which a release update runs.
+    /^\/scripts\/(?!devis-updater\.ps1$)/,
     /^\/out($|\/)/,
     /^\/build($|\/)/,
     /^\/data($|\/)/,

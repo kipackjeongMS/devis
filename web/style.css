@@ -5287,6 +5287,48 @@ a.todo-src { text-decoration: none; }
 .setup-bar.indeterminate i { width: 40% !important; animation: node-progress 1.4s var(--ease) infinite; }
 .stale-banner .setup-act-status { flex: 1 0 100%; padding-left: 26px; }
 
+/* Settings' Updates card: what runs, where releases come from, the channel, what's out, and the installs. */
+.settings-card-control.up-control { flex-direction: column; flex-wrap: nowrap; align-items: stretch; justify-content: flex-start; gap: 10px; }
+.up-body { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.up-body .teams-line { margin: 0; }
+.up-kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: center; gap: 8px 16px; margin: 0; font-size: var(--fs-label); }
+.up-kv dt { color: var(--text-3); }
+.up-kv dd { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; margin: 0; color: var(--text-1); overflow-wrap: anywhere; }
+.up-kv a { color: var(--accent-text); }
+.up-muted { color: var(--text-3); }
+.up-checked .btn { margin-left: auto; }
+.up-seg { display: inline-flex; flex: none; flex-wrap: wrap; gap: 2px; padding: 2px; border: 1px solid var(--stroke-control); border-radius: var(--r-control); background: var(--well); }
+.up-seg button {
+  min-height: 24px;
+  padding: 2px 10px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-readout);
+  white-space: nowrap;
+  transition: background var(--t-fast) linear, color var(--t-fast) linear;
+}
+.up-seg button:hover:not(:disabled):not([aria-checked="true"]) { background: var(--fill-hover); color: var(--text-1); }
+.up-seg button[aria-checked="true"] { background: var(--accent-tint-2); color: var(--accent-text); }
+.up-seg button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.up-problem { display: flex; flex-direction: column; gap: 6px; }
+.up-problem code { font-size: inherit; }
+.up-avail { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); border-radius: var(--r-control); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.up-avail-h { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: var(--fs-label); }
+.up-avail-h > svg.ic { flex: none; width: 14px; height: 14px; color: var(--accent-text); }
+.up-avail-h > span:not(.up-sp) { min-width: 0; }
+.up-avail-h b { font-family: var(--mono); font-weight: 600; }
+.up-name { color: var(--text-2); }
+.up-sp { flex: 1 1 auto; }
+.up-avail-h .btn svg.ic { width: 12px; height: 12px; margin-left: 4px; }
+.up-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.jv-devis.tone-warn { --tone: var(--caution); }
+/* Up to three buttons: wrap under the line rather than squeeze it to nothing. */
+.jv-update { flex-wrap: wrap; row-gap: 4px; padding-top: 4px; padding-bottom: 4px; }
+.jv-update .jv-devis-t { flex: 1 1 220px; }
+.jv-update .btn, .jv-update a.btn { flex: none; }
+
 /* A note with a fix in it (Teams and meetings waiting on Agency). */
 .today-note.has-act { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
 .today-note.has-act > span { flex: 1 1 280px; min-width: 0; }

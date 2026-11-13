@@ -103,6 +103,40 @@ export function devisBannerText(b: DevisBanner): string {
   return `Ship ${b.n} ${what}: ${b.note || b.title}`;
 }
 
+/** A release worth a banner on Today (updates.mts updateBanner). */
+export interface UpdateBanner {
+  state: "ready" | "paused" | "installing" | "live" | "rolled-back" | "failed";
+  version: string;
+  /** The release's title, when it says more than its tag. */
+  name: string | null;
+  url: string;
+  note: string | null;
+  mode: "idle" | "now" | null;
+  install: "idle" | "ask";
+  pause: { reason: "source" | "ships"; ships: number } | null;
+}
+
+/** The banner's line for a release. */
+export function updateBannerText(b: UpdateBanner): string {
+  const v = `Devis ${b.version}`;
+  switch (b.state) {
+    case "installing":
+      return b.mode === "now" ? `Installing ${v}. Devis restarts in a moment.` : `${v} installs once the workers are done, then Devis restarts.`;
+    case "ready":
+      return `${v} is ready${b.name ? `: ${b.name}` : "."}`;
+    case "paused":
+      return b.pause?.reason === "ships"
+        ? `${v} is out. Your ${b.pause.ships === 1 ? "ship pauses" : `${b.pause.ships} ships pause`} updates.`
+        : `${v} is out. This Devis is built from your source, so it doesn't install releases.`;
+    case "live":
+      return `Devis is on ${b.version}.`;
+    case "rolled-back":
+      return `${v} rolled back: ${b.note || "the new build didn't come up."}`;
+    default:
+      return `${v} didn't install: ${b.note || "Setup didn't finish."}`;
+  }
+}
+
 /** One repository a worker works in: a worktree on its own branch. */
 export interface WorkerWorktree {
   org: string;
@@ -797,6 +831,8 @@ export interface TodayData {
   comms?: { asks: CommsAsk[]; failed?: boolean; meetings?: MeetingsDigest; chats?: ChatsDigest; mail?: ChatsDigest; needs?: CommsNeed[]; needsFailed?: boolean };
   /** A Devis ship deploying, just live, or not live: the Workspace banner. */
   devis?: DevisBanner | null;
+  /** A release ready, installing, just live, failed, or paused by your source: the other banner. */
+  update?: UpdateBanner | null;
 }
 
 /** A chat or email thread someone waits on the user in: its latest day that says so (comms.mts commsNeeds). */

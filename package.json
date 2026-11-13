@@ -13,6 +13,7 @@
     "start": "npm run build && electron .",
     "package": "npm run build && node scripts/package-desktop.mjs",
     "installer": "npm run package && electron-builder --win nsis --prepackaged out/Devis-win32-x64",
+    "checks": "node scripts/run-checks.mjs --baseline master",
     "deploy": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/deploy-desktop.ps1"
   },
   "build": {

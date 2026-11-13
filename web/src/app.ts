@@ -22,6 +22,7 @@ import { showJarvis, hideJarvis, reloadJarvis, resumeNoteDraft, openTaskById } f
 import { preferWorker } from "./jarvisTask.js";
 import { jarvisSettings } from "./settingsJarvis.js";
 import { setupCard } from "./settingsSetup.js";
+import { updatesCard } from "./settingsUpdates.js";
 import { azureProblem, initSetupActions } from "./setupActions.js";
 import { needsFirstRun, showFirstRun } from "./firstRun.js";
 import { icon } from "./icons.js";
@@ -279,6 +280,10 @@ function renderSettings(): void {
   setup.appendChild(el(`<h2 id="settingsSetupGroup">Setup</h2>`));
   setup.appendChild(setupCard(settingsCard));
   wrap.appendChild(setup);
+  const updatesGroup = el(`<section class="settings-group" aria-labelledby="settingsUpdatesGroup"></section>`);
+  updatesGroup.appendChild(el(`<h2 id="settingsUpdatesGroup">Updates</h2>`));
+  updatesGroup.appendChild(updatesCard(settingsCard));
+  wrap.appendChild(updatesGroup);
   const scopes = el(`<section class="settings-group" aria-labelledby="settingsScopes"></section>`);
   scopes.appendChild(el(`<h2 id="settingsScopes">Organizations &amp; projects</h2>`));
   scopes.appendChild(

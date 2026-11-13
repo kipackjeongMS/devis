@@ -98,6 +98,8 @@ import {
   todayFingerprint,
   devisBannerText,
   type DevisBanner,
+  updateBannerText,
+  type UpdateBanner,
   todayHasTasks,
   todaySummary,
   validationChip,
@@ -268,6 +270,7 @@ let railBadge: HTMLElement;
 /** The needs line over Devis on a narrow window. */
 let needsBanner: HTMLElement;
 let devisBannerEl: HTMLElement;
+let updateBannerEl: HTMLElement;
 /** "Today so far", pinned over Devis's thread so it stays in view while the chat scrolls. */
 let overviewEl: HTMLElement;
 /** Devis's line under the hello: what it watches. */
@@ -499,6 +502,7 @@ function mount(): void {
       </div>
       <button type="button" class="jv-banner" data-act="rail-open" hidden></button>
       <div class="jv-devis" role="status" hidden></div>
+      <div class="jv-devis jv-update" role="status" hidden></div>
       ${chatPaneHtml({
         id: "lead",
         inputLabel: "Message Devis",
@@ -554,7 +558,8 @@ function mount(): void {
   railButton = q(".jv-railbtn");
   railBadge = q(".jv-badge");
   needsBanner = q(".jv-banner");
-  devisBannerEl = q(".jv-devis");
+  devisBannerEl = q(".jv-devis:not(.jv-update)");
+  updateBannerEl = q(".jv-update");
   const body = (sec: RailSection): HTMLElement => q(`#rs-b-${sec}`);
   const count = (sec: RailSection): HTMLElement => q(`[data-rs="${sec}"] .rs-n`);
   needsBody = body("needs");
@@ -1629,6 +1634,7 @@ function renderDay(force: boolean): void {
     noteMerged,
     noteConflict?.version,
     data?.devis ? [data.devis.n, data.devis.state, data.devis.title, data.devis.note] : null,
+    data?.update ? [data.update.state, data.update.version, data.update.note, data.update.install, data.update.pause?.ships] : null,
     Math.floor(now / 60_000),
   ]);
   if (!force && sig === daySig) return;
@@ -1650,6 +1656,7 @@ function renderDay(force: boolean): void {
     needsBanner.innerHTML = banner ? `${svg("warning")}<span>${esc(banner)}</span><span class="jv-banner-go">Show</span>` : "";
   }
   paintDevisBanner(data?.devis || null);
+  paintUpdateBanner(data?.update || null);
 
   if (!data) {
     needsBody.innerHTML = loadingHtml("Today");
@@ -1684,6 +1691,38 @@ function paintDevisBanner(b: DevisBanner | null): void {
       ? ""
       : `<button type="button" class="icon-btn" data-act="devis-dismiss" data-n="${b.n}" title="Dismiss" aria-label="Dismiss">${svg("dismiss")}</button>`;
   devisBannerEl.innerHTML = `${svg(icon)}<span class="jv-devis-t" title="${esc(text)}">${esc(text)}</span>${details}${dismiss}`;
+}
+
+/** A release of Devis: ready, installing, just live, failed, or paused because this build is from your source. */
+function paintUpdateBanner(b: UpdateBanner | null): void {
+  const text = b ? updateBannerText(b) : "";
+  const key = b ? `${b.state}|${b.version}|${text}` : "";
+  updateBannerEl.hidden = !b;
+  if (updateBannerEl.dataset.key === key) return;
+  updateBannerEl.dataset.key = key;
+  if (!b) {
+    updateBannerEl.innerHTML = "";
+    return;
+  }
+  const tone = b.state === "installing" ? "accent" : b.state === "live" || b.state === "ready" ? "ok" : b.state === "paused" ? "warn" : "bad";
+  updateBannerEl.className = `jv-devis jv-update tone-${tone}`;
+  const lead = b.state === "installing" ? "sync" : b.state === "live" ? "check" : b.state === "ready" || b.state === "paused" ? "download" : "warning";
+  const v = esc(b.version);
+  const whatsNew = b.state === "ready" || b.state === "paused" || b.state === "live" ? `<a class="btn sm ghost" href="${esc(b.url)}" target="_blank" rel="noopener">What's new</a>` : "";
+  let actions = "";
+  if (b.state === "ready") {
+    actions = `<button type="button" class="btn sm" data-act="update-install" data-mode="now" data-version="${v}">Restart now</button>
+      <button type="button" class="btn sm accent" data-act="update-install" data-mode="idle" data-version="${v}">When workers are done</button>`;
+  } else if (b.state === "paused") {
+    actions = `<button type="button" class="btn sm" data-act="update-bring" data-version="${v}">Bring it into your source</button>`;
+  } else if (b.state !== "live") {
+    actions = `<button type="button" class="btn sm ghost" data-act="devis-settings">Details</button>`;
+  }
+  const dismiss =
+    b.state === "installing"
+      ? ""
+      : `<button type="button" class="icon-btn" data-act="update-dismiss" data-version="${v}" title="Dismiss" aria-label="Dismiss">${svg("dismiss")}</button>`;
+  updateBannerEl.innerHTML = `${svg(lead)}<span class="jv-devis-t" title="${esc(text)}">${esc(text)}</span>${whatsNew}${actions}${dismiss}`;
 }
 
 // ---- Today: to-dos ------------------------------------------------------------------
@@ -2608,6 +2647,23 @@ function onClick(e: MouseEvent): void {
       return void scanChatsNow(node);
     case "devis-dismiss":
       return void act(node, () => postJSON("/api/jarvis/devis/dismiss", { n: Number(node.dataset.n) }));
+    case "update-dismiss":
+      return void act(node, () => postJSON("/api/jarvis/updates/dismiss", { version: node.dataset.version }));
+    case "update-install":
+      return void act(node, async () => {
+        await postJSON("/api/jarvis/updates/install", { mode: node.dataset.mode === "now" ? "now" : "idle" });
+        toast(node.dataset.mode === "now" ? `Installing Devis ${node.dataset.version}. Devis restarts in a moment.` : `Devis ${node.dataset.version} installs once the workers are done.`, "ok");
+      });
+    case "update-bring":
+      return void act(node, async () => {
+        const res: { workerError?: string | null } = await postJSON("/api/jarvis/updates/bring-in", { version: node.dataset.version });
+        toast(
+          res.workerError
+            ? `Added a task to bring Devis ${node.dataset.version} into your source, but its worker didn't start: ${res.workerError}`
+            : `A worker is bringing Devis ${node.dataset.version} into your source. It ships like any change, after you click Ship.`,
+          res.workerError ? "err" : "ok"
+        );
+      });
     case "chat-day":
       toggleChatDay(node.dataset.day || "", node.dataset.today === "1");
       return renderComms(true);

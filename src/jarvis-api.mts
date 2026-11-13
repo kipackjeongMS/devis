@@ -108,6 +108,7 @@ import {
 } from "./jarvis-pr-comments.mjs";
 import { acceptPrBuilds, auditPrBuildsNow, dismissPrBuilds, prBuildsView } from "./jarvis-pr-builds.mjs";
 import { devisBanner, devisOverview, dismissShip, markUndo, saveDevisSettings, undoTask } from "./devis-self.mjs";
+import { checkForUpdates, dismissUpdate, installUpdate, releaseTask, saveUpdateSettings, updateBanner, updatesStatus } from "./updates.mjs";
 
 function since(value: string | null): string {
     const t = Date.parse(value || "");
@@ -197,6 +198,7 @@ export async function handleJarvisApi(req: IncomingMessage, res: ServerResponse,
                 note: { version: note.version, updatedAt: note.updatedAt, updatedBy: note.updatedBy },
                 comms: { asks: comms || [], ...(comms ? {} : { failed: true }), ...(meetings ? { meetings } : {}), ...(chats ? { chats } : {}), ...(mail ? { mail } : {}), needs: needs || [], ...(needs ? {} : { needsFailed: true }) },
                 devis: devisBanner(),
+                update: await updateBanner().catch(() => null),
             });
         }
 
@@ -493,6 +495,31 @@ export async function handleJarvisApi(req: IncomingMessage, res: ServerResponse,
             const b = await readBody(req);
             dismissShip(Number(b?.n));
             return sendJson(res, 200, await devisOverview());
+        }
+
+        // ---- updates from GitHub releases (updates.mts) ----
+        if (p === "/api/jarvis/updates" && get) {
+            return sendJson(res, 200, await updatesStatus());
+        }
+        if (p === "/api/jarvis/updates/check" && post) {
+            return sendJson(res, 200, await checkForUpdates());
+        }
+        if (p === "/api/jarvis/updates/settings" && post) {
+            const b = await readBody(req);
+            return sendJson(res, 200, await saveUpdateSettings({ channel: b?.channel, install: b?.install }));
+        }
+        if (p === "/api/jarvis/updates/install" && post) {
+            const b = await readBody(req);
+            return sendJson(res, 200, await installUpdate({ mode: b?.mode, force: b?.force }));
+        }
+        if (p === "/api/jarvis/updates/dismiss" && post) {
+            const b = await readBody(req);
+            return sendJson(res, 200, await dismissUpdate(b?.version));
+        }
+        if (p === "/api/jarvis/updates/bring-in" && post) {
+            const b = await readBody(req);
+            const { task, worker, workerError } = await startDevisTask(releaseTask(b?.version));
+            return sendJson(res, 200, { task, worker, workerError, updates: await updatesStatus() });
         }
 
         // ---- workers ----

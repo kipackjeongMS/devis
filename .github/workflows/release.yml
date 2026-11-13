@@ -1,0 +1,78 @@
+# Releases on GitHub. A merge to master publishes a pre-release (the Preview channel), versioned
+# <package.json version>-preview.<run>. A v* tag publishes a full release (Stable); the tag has to
+# match package.json's version. Each release has Devis-Setup-<version>.exe, install.ps1 and
+# latest.json (the Setup's size and SHA-512), which install.ps1 and Devis' updater check.
+# Releases aren't signed yet.
+name: Release
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Version
+        id: version
+        shell: pwsh
+        run: |
+          $base = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if ('${{ github.ref_type }}' -eq 'tag') {
+            $tag = '${{ github.ref_name }}'
+            if ($tag -ne "v$base") { throw "The tag $tag doesn't match package.json's version $base. Bump package.json, then tag that commit." }
+            $version = $base
+            $channel = 'stable'
+          } else {
+            $version = "$base-preview.${{ github.run_number }}"
+            $tag = "v$version"
+            $channel = 'preview'
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "channel=$channel" >> $env:GITHUB_OUTPUT
+          Write-Host "Devis $version ($channel), tag $tag"
+      - run: npm ci
+      # Only this run's package.json: nothing is committed back.
+      - run: npm version "${{ steps.version.outputs.version }}" --no-git-tag-version --allow-same-version
+      - run: npm run build
+      - name: Harnesses
+        run: node scripts/run-checks.mjs --baseline "${{ github.event.before }}"
+      - name: Package
+        env:
+          DEVIS_RELEASE: "1"
+        run: npm run installer
+      - run: node scripts/release-manifest.mjs --channel ${{ steps.version.outputs.channel }}
+      - name: Publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          $tag = '${{ steps.version.outputs.tag }}'
+          $files = @("out/installer/Devis-Setup-$version.exe", 'out/installer/latest.json', 'scripts/install.ps1')
+          $publish = @('release', 'create', $tag) + $files + @('--title', "Devis $version", '--generate-notes')
+          if ('${{ steps.version.outputs.channel }}' -eq 'preview') {
+            $publish += @('--prerelease', '--target', '${{ github.sha }}')
+          } else {
+            $publish += @('--latest')
+          }
+          gh @publish
+          if ($LASTEXITCODE -ne 0) { throw "gh release create exited $LASTEXITCODE" }

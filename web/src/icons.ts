@@ -68,6 +68,7 @@ const PATHS = {
   send: '<path d="M2.5 7.75 13.5 2.5 9.5 13.5 7.5 8.5z"/><path d="M7.5 8.5 13.5 2.5"/>',
   files: '<path d="M5.75 1.75h4.5l2.5 2.5v7.5h-7z"/><path d="M3.25 4.25v10h6.5"/>',
   lines: '<path d="M2.5 4h11M2.5 8h11M2.5 12h7"/>',
+  download: '<path d="M8 2.5v7.5M5 7l3 3 3-3M3 12.75h10"/>',
 } as const;
 
 export type IconName = keyof typeof PATHS;

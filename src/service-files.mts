@@ -19,6 +19,8 @@ export interface ServiceInfo {
     startedAt: string;
     /** The git commit the installed build was packaged from (build-info.json), when known. */
     commit?: string | null;
+    /** The app's version (package.json); an update from a release checks it went live by this. */
+    version?: string | null;
 }
 
 export interface WorkItem {
@@ -83,6 +85,26 @@ export function buildCommit(appDir: string): string | null {
         return typeof info.commit === "string" && /^[0-9a-f]{7,40}$/i.test(info.commit) ? info.commit : null;
     } catch {
         return null;
+    }
+}
+
+/** The app's version (its package.json), which a release's health check waits for. */
+export function buildVersion(appDir: string): string | null {
+    try {
+        const pkg = JSON.parse(readFileSync(join(appDir, "package.json"), "utf8").replace(/^\uFEFF/, "")) as { version?: unknown };
+        return typeof pkg.version === "string" && pkg.version.trim() ? pkg.version.trim() : null;
+    } catch {
+        return null;
+    }
+}
+
+/** Whether the build in appDir is a GitHub release (built by Actions), not one built from a source folder. */
+export function buildIsRelease(appDir: string): boolean {
+    try {
+        const info = JSON.parse(readFileSync(join(appDir, "build-info.json"), "utf8").replace(/^\uFEFF/, "")) as { release?: unknown };
+        return info.release === true;
+    } catch {
+        return false;
     }
 }
 

@@ -7,7 +7,7 @@
 // (scripts/devis-updater.ps1, taken from the commit before the ship) that
 // redeploys, checks the new build answers within two minutes, and puts the
 // previous install back when it doesn't. Settings turns all of this on and
-// names the source folder. Nothing is pushed anywhere: the source has no remote.
+// names the source folder. Nothing is pushed anywhere: ships only change the source folder.
 //
 // This module holds the settings, git steps, checks, and the ships record. The
 // worker tool that asks for the card lives in jarvis-workers.mts, which calls
@@ -28,8 +28,12 @@ export const MAIN = "master";
 export const SENSITIVE_FILES: readonly string[] = [
     "scripts/deploy-desktop.ps1",
     "scripts/devis-updater.ps1",
+    "scripts/install.ps1",
     "scripts/package-desktop.mjs",
+    "scripts/release-manifest.mjs",
+    "scripts/run-checks.mjs",
     "src/devis-self.mts",
+    "src/updates.mts",
     "src/main.mts",
     "src/setup-actions.mts",
     "src/setup-state.mts",
@@ -43,6 +47,8 @@ export const SENSITIVE_FILES: readonly string[] = [
     "package-lock.json",
     "build/installer.nsh",
     "build/stop-devis.ps1",
+    ".github/workflows/checks.yml",
+    ".github/workflows/release.yml",
 ];
 
 const BUILD_MS = 10 * 60_000;
@@ -74,7 +80,7 @@ export interface DevisRuntime {
     node(): string;
 }
 
-function runProcess(file: string, args: string[], opts: { cwd: string; timeoutMs: number; env?: NodeJS.ProcessEnv }): Promise<RunResult> {
+export function runProcess(file: string, args: string[], opts: { cwd: string; timeoutMs: number; env?: NodeJS.ProcessEnv }): Promise<RunResult> {
     return new Promise((done) => {
         execFile(
             file,
@@ -93,8 +99,8 @@ function runProcess(file: string, args: string[], opts: { cwd: string; timeoutMs
     });
 }
 
-/** Start a hidden process through WMI, so it isn't in the app's job and survives the service stopping. */
-async function launchDetached(commandLine: string): Promise<number> {
+/** Start a hidden process through WMI, so it isn't in the app's job and survives the service stopping. Release updates use it too. */
+export async function launchDetached(commandLine: string): Promise<number> {
     const script = [
         "$ErrorActionPreference = 'Stop'",
         "$startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }",

@@ -14,7 +14,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { format } from "node:util";
 import { DatabaseSync } from "node:sqlite";
-import { buildCommit, buildId, openLock, readServiceInfo, readServicePort, serviceFiles, serviceStatus, writeServicePort, type ServiceInfo, type ServiceStatus } from "./service-files.mjs";
+import { buildCommit, buildId, buildVersion, openLock, readServiceInfo, readServicePort, serviceFiles, serviceStatus, writeServicePort, type ServiceInfo, type ServiceStatus } from "./service-files.mjs";
 import { ServiceLifecycle } from "./service-lifecycle.mjs";
 import { DATA_FOLDER } from "./brand.mjs";
 
@@ -203,6 +203,7 @@ async function main(): Promise<void> {
     const { startCommsRunner, stopCommsRunner } = await import("./comms.mjs");
     const { startMaintenance, stopMaintenance } = await import("./maintenance.mjs");
     const { watchShips } = await import("./devis-self.mjs");
+    const { startUpdates, stopUpdates, updatesActivity } = await import("./updates.mjs");
     const { stopCopilotClient, warmCopilot } = await import("./copilot-runtime.mjs");
     const { setupActivity } = await import("./setup-actions.mjs");
     const { closeDb } = await import("./store.mjs");
@@ -214,6 +215,7 @@ async function main(): Promise<void> {
         keepAlive: () => readSetupState().startAtSignIn,
     });
     lifecycle.register("setup", setupActivity);
+    lifecycle.register("updates", updatesActivity);
     lifecycle.register("workers", workerActivity);
     lifecycle.register("lead", leadActivity);
     lifecycle.register("reviews", reviewRunnerActivity);
@@ -221,7 +223,7 @@ async function main(): Promise<void> {
     lifecycle.register("pipelines", pipelineActivity);
     lifecycle.register("api", apiActivity);
 
-    const info: ServiceInfo = { pid: process.pid, url: "", buildId: buildId(appDir), appDir, startedAt: new Date().toISOString(), commit: buildCommit(appDir) };
+    const info: ServiceInfo = { pid: process.pid, url: "", buildId: buildId(appDir), appDir, startedAt: new Date().toISOString(), commit: buildCommit(appDir), version: buildVersion(appDir) };
     const status = async (): Promise<ServiceStatus> => ({
         ...info,
         attached: lifecycle.attached,
@@ -283,6 +285,7 @@ async function main(): Promise<void> {
                 stopPrCommentsRunner();
                 stopPrBuildsRunner();
                 stopShipWatch();
+                stopUpdates();
                 await Promise.all([closeAllReviewerSessions(), closeAllWorkers(), closeLead()]);
                 await stopCopilotClient();
                 await closing;
@@ -310,6 +313,8 @@ async function main(): Promise<void> {
         notGoneLive: (ship, message) =>
             void messageWorker(ship.sessionId, message, undefined, "queue").catch((error: Error) => console.warn(`[devis] ship ${ship.n}: ${error.message}`)),
     });
+    // Releases from GitHub: settle an install that just ran, then look for a newer one now and then.
+    startUpdates();
     writeInfo(info);
     state = "running";
     lifecycle.start();

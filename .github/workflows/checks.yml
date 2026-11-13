@@ -1,0 +1,32 @@
+# Checks on every pull request: both TypeScript builds, then every scripts/*-harness.mjs.
+# A harness that also fails on the pull request's base doesn't block (scripts/run-checks.mjs).
+name: Checks
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The base commit has to be here for the baseline run.
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Harnesses
+        run: node scripts/run-checks.mjs --baseline "${{ github.event.pull_request.base.sha }}"

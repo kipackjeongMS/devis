@@ -1,39 +1,55 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Deploy one ship of a change Devis made to itself, check the new build came up,
-  and roll back to the previous build when it didn't.
+  Deploy one ship of a change Devis made to itself, or install a GitHub release of
+  Devis; check the new build came up, and roll back to the previous build when it didn't.
 
 .DESCRIPTION
-  Devis starts this detached (through WMI, so it outlives the service it replaces)
-  right after it fast-forwards master in its source folder to a change the user
-  shipped. Devis runs the copy from the commit before the ship, which is known to work.
+  Devis starts this detached (through WMI, so it outlives the service it replaces).
 
-  1. Wait a few seconds, so the worker's turn that shipped can end.
+  A ship (-Ship): right after Devis fast-forwards master in its source folder to a
+  change the user shipped. Devis runs the copy from the commit before the ship, which
+  is known to work.
+
+  A release (-Release): once Devis has downloaded a release's Setup and checked its
+  SHA-512. Devis runs the copy shipped with the build that's running.
+
+  1. Wait a few seconds, so the turn or request that started it can end.
   2. Copy the install folder to Devis.prev: the build to roll back to.
-  3. npm install in the source folder, when the ship changed package.json or package-lock.json.
-  4. Run scripts\deploy-desktop.ps1 from the source folder in a child PowerShell:
-     -Force for "ship now", else it waits for the work in flight first.
-  5. Check the new service answers with the shipped commit.
-  6. When it doesn't:
-     - if the deploy stopped before replacing anything and the old build still
-       runs, leave it running ("failed");
+  3. A ship: npm install in the source folder, when the ship changed package.json or
+     package-lock.json. Then run scripts\deploy-desktop.ps1 from the source folder in a
+     child PowerShell: -Force for "ship now", else it waits for the work in flight first.
+     A release: for "now", stop Devis at once; else wait for the work in flight. Then run
+     Setup with /S, which waits up to 10 more minutes and exits 2 when Devis is still busy;
+     wait and run it again until -WaitMinutes is up. Then start the new Devis.
+  4. Check the new service answers with the shipped commit, or the release's version.
+  5. When it doesn't:
+     - if nothing was replaced and the old build still runs, leave it running ("failed");
      - otherwise stop what runs, copy Devis.prev back and start it ("rolled-back").
-     Either way, put master back to -Before when it's still at -Commit and clean,
-     and write the result before the old build starts, so its service reads it.
-  7. Write ship-N.result.json, which the service reads to settle the ship.
+     For a ship, either way, put master back to -Before when it's still at -Commit and
+     clean, and write the result before the old build starts, so its service reads it.
+  6. Write <name>.result.json, which the service reads to settle the ship or the update.
 
 .PARAMETER Source
-  Devis' source folder, on master at -Commit.
+  A ship: Devis' source folder, on master at -Commit.
 
 .PARAMETER Ship
-  The ship's number, N.
+  A ship: its number, N.
 
 .PARAMETER Commit
-  Master after the ship: the commit the new build must report.
+  A ship: master after the ship, the commit the new build must report.
 
 .PARAMETER Before
-  Master before the ship, which a failed ship resets to.
+  A ship: master before the ship, which a failed ship resets to.
+
+.PARAMETER NpmInstall
+  A ship: run npm install in the source folder first.
+
+.PARAMETER Release
+  A release: its version, which the new build must report.
+
+.PARAMETER Installer
+  A release: the downloaded, checked Devis-Setup-<version>.exe.
 
 .PARAMETER Mode
   idle (deploy once the service has no work in flight) or now (stop it at once).
@@ -47,26 +63,38 @@
 .PARAMETER HealthSeconds
   How long the new service has to come up. Defaults to 120.
 
-.PARAMETER NpmInstall
-  Run npm install in the source folder first.
+.PARAMETER WaitMinutes
+  How long to wait for the work in flight. Defaults to 60.
+
+.PARAMETER InstallDir
+  The install folder. Defaults to %LOCALAPPDATA%\Programs\Devis.
+
+.PARAMETER ServiceInfo
+  The running service's service.json. Defaults to %APPDATA%\ADO PR Ops\service.json.
 
 .OUTPUTS
-  StateDir\ship-N.log: the updater's steps.
-  StateDir\ship-N.deploy.out.log and ship-N.deploy.err.log: the deploy's output.
-  StateDir\ship-N.result.json: {state: live|rolled-back|failed, commit, note, logTail}.
-  Exit code 0 when the ship is live, 1 otherwise.
+  StateDir\<name>.log: the updater's steps, where <name> is ship-N or release-<version>.
+  StateDir\<name>.deploy.out.log and <name>.deploy.err.log: the deploy's or Setup's output.
+  StateDir\<name>.result.json: {state: live|rolled-back|failed, commit, version, note, retry, logTail}.
+  retry is true when a release didn't install only because Devis stayed busy.
+  Exit code 0 when the new build is live, 1 otherwise.
 #>
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = 'Ship')]
 param(
-    [Parameter(Mandatory)][string]$Source,
-    [Parameter(Mandatory)][int]$Ship,
-    [Parameter(Mandatory)][string]$Commit,
-    [Parameter(Mandatory)][string]$Before,
+    [Parameter(Mandatory, ParameterSetName = 'Ship')][string]$Source,
+    [Parameter(Mandatory, ParameterSetName = 'Ship')][int]$Ship,
+    [Parameter(Mandatory, ParameterSetName = 'Ship')][string]$Commit,
+    [Parameter(Mandatory, ParameterSetName = 'Ship')][string]$Before,
+    [Parameter(ParameterSetName = 'Ship')][switch]$NpmInstall,
+    [Parameter(Mandatory, ParameterSetName = 'Release')][string]$Release,
+    [Parameter(Mandatory, ParameterSetName = 'Release')][string]$Installer,
     [ValidateSet('idle', 'now')][string]$Mode = 'idle',
     [Parameter(Mandatory)][string]$StateDir,
     [int]$DelaySeconds = 8,
     [int]$HealthSeconds = 120,
-    [switch]$NpmInstall
+    [int]$WaitMinutes = 60,
+    [string]$InstallDir = (Join-Path $env:LOCALAPPDATA 'Programs\Devis'),
+    [string]$ServiceInfo = (Join-Path $env:APPDATA 'ADO PR Ops\service.json')
 )
 
 Set-StrictMode -Version Latest
@@ -74,17 +102,18 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
 
-$InstallDir = Join-Path $env:LOCALAPPDATA 'Programs\Devis'
-$PrevDir = Join-Path $env:LOCALAPPDATA 'Programs\Devis.prev'
+$IsRelease = $PSCmdlet.ParameterSetName -eq 'Release'
+$PrevDir = Join-Path (Split-Path -Parent $InstallDir) ((Split-Path -Leaf $InstallDir) + '.prev')
 $ExeName = 'devis.exe'
-$ServiceInfoPath = Join-Path $env:APPDATA 'ADO PR Ops\service.json'
+$ServiceInfoPath = $ServiceInfo
 $Main = 'master'
+$Name = if ($IsRelease) { "release-$Release" } else { "ship-$Ship" }
 
 New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
-$LogPath = Join-Path $StateDir "ship-$Ship.log"
-$DeployOut = Join-Path $StateDir "ship-$Ship.deploy.out.log"
-$DeployErr = Join-Path $StateDir "ship-$Ship.deploy.err.log"
-$ResultPath = Join-Path $StateDir "ship-$Ship.result.json"
+$LogPath = Join-Path $StateDir "$Name.log"
+$DeployOut = Join-Path $StateDir "$Name.deploy.out.log"
+$DeployErr = Join-Path $StateDir "$Name.deploy.err.log"
+$ResultPath = Join-Path $StateDir "$Name.result.json"
 
 function Write-Log([string]$Text) {
     Add-Content -LiteralPath $LogPath -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $Text" -Encoding UTF8
@@ -100,9 +129,9 @@ function Read-Tail([string]$Path, [int]$Lines) {
     } catch { return @() }
 }
 
-function Write-Result([string]$State, [string]$Note) {
+function Write-Result([string]$State, [string]$Note, [switch]$Retry) {
     $tail = @(Read-Tail $DeployOut 30) + @(Read-Tail $DeployErr 20) + @(Read-Tail $LogPath 15)
-    $json = [pscustomobject]@{ state = $State; commit = $Commit; note = $Note; logTail = ($tail -join "`n") } | ConvertTo-Json
+    $json = [pscustomobject]@{ state = $State; commit = $Commit; version = $Release; note = $Note; retry = [bool]$Retry; logTail = ($tail -join "`n") } | ConvertTo-Json
     $tmp = "$ResultPath.tmp"
     Set-Content -LiteralPath $tmp -Value $json -Encoding UTF8
     Move-Item -LiteralPath $tmp -Destination $ResultPath -Force
@@ -135,12 +164,25 @@ function Get-StatusCommit($Status) {
     return $null
 }
 
+function Get-StatusVersion($Status) {
+    if (-not $Status) { return $null }
+    $prop = $Status.PSObject.Properties['version']
+    if ($prop) { return [string]$prop.Value }
+    return $null
+}
+
+function Test-IsNew($Status) {
+    # Whether a service status is the new build: the shipped commit, or the release's version.
+    if ($IsRelease) { return (Get-StatusVersion $Status) -eq $Release }
+    return (Get-StatusCommit $Status) -eq $Commit
+}
+
 function Wait-NewService {
-    # True once a running service reports the shipped commit.
+    # True once a running service reports the new build.
     $deadline = (Get-Date).AddSeconds($HealthSeconds)
     while ((Get-Date) -lt $deadline) {
         $status = Get-ServiceStatus
-        if ($status -and $status.state -eq 'running' -and (Get-StatusCommit $status) -eq $Commit) { return $true }
+        if ($status -and $status.state -eq 'running' -and (Test-IsNew $status)) { return $true }
         Start-Sleep -Seconds 3
     }
     return $false
@@ -157,8 +199,8 @@ function Start-Hidden([string]$File, [string]$Arguments, [string]$WorkDir, [stri
 
 function Invoke-Npm([string]$What) {
     Write-Log "npm install ($What)..."
-    $out = Join-Path $StateDir "ship-$Ship.npm.out.log"
-    $err = Join-Path $StateDir "ship-$Ship.npm.err.log"
+    $out = Join-Path $StateDir "$Name.npm.out.log"
+    $err = Join-Path $StateDir "$Name.npm.err.log"
     $code = Start-Hidden 'cmd.exe' '/d /c npm install --no-audit --no-fund' $Source $out $err
     Write-Log "npm install exited $code."
     if ($code -ne 0) { foreach ($line in @(Read-Tail $err 15)) { Write-Log "npm: $line" } }
@@ -186,7 +228,8 @@ function Stop-Running {
 }
 
 function Reset-Master {
-    # Put master back where it was, when it's still on the ship and nothing else is in the way.
+    # Put master back where it was, when it's still on the ship and nothing else is in the way. A release has no master.
+    if ($IsRelease) { return }
     $head = Invoke-Git @('rev-parse', 'HEAD')
     $branch = Invoke-Git @('symbolic-ref', '--short', '-q', 'HEAD')
     $dirty = Invoke-Git @('status', '--porcelain', '--untracked-files=no')
@@ -223,7 +266,39 @@ function Restore-Previous([string]$Why) {
     Start-Process -FilePath (Join-Path $InstallDir $ExeName) | Out-Null
 }
 
-Write-Log "Ship $Ship of $Commit (before: $Before), mode $Mode, from $Source."
+function Wait-Idle([datetime]$Deadline) {
+    # Until the running service has no work in flight, or the deadline. Setup checks again itself.
+    $told = $false
+    while ((Get-Date) -lt $Deadline) {
+        $status = Get-ServiceStatus
+        if (-not $status) { return }
+        $work = if ($status.PSObject.Properties['work']) { @($status.work) } else { @() }
+        if ($work.Count -eq 0) { return }
+        if (-not $told) {
+            Write-Log "Waiting for the work in flight: $((@($work | ForEach-Object { $_.label }) | Select-Object -First 5) -join '; ')"
+            $told = $true
+        }
+        Start-Sleep -Seconds 15
+    }
+}
+
+function Install-Release {
+    # Run Setup silently; its exit code: 0 installed, 2 Devis was still busy and nothing was replaced.
+    $deadline = (Get-Date).AddMinutes($WaitMinutes)
+    $round = 0
+    while ($true) {
+        $round++
+        if ($Mode -eq 'now') { Stop-Running } else { Wait-Idle $deadline }
+        Write-Log "Running Setup /S (round $round)..."
+        $code = Start-Hidden $Installer '/S' (Split-Path -Parent $Installer) $DeployOut $DeployErr
+        Write-Log "Setup exited $code."
+        if ($code -ne 2 -or $Mode -eq 'now' -or (Get-Date) -ge $deadline) { return $code }
+        Write-Log 'Devis was still busy, so Setup left it as it was. Waiting again.'
+    }
+}
+
+if ($IsRelease) { Write-Log "Release $Release from $Installer, mode $Mode, into $InstallDir." }
+else { Write-Log "Ship $Ship of $Commit (before: $Before), mode $Mode, from $Source." }
 $deploying = $false
 try {
     Start-Sleep -Seconds $DelaySeconds
@@ -240,18 +315,31 @@ try {
         Write-Log "There's no installed build to keep."
     }
 
-    if ($NpmInstall -and -not (Invoke-Npm 'the ship changed the dependencies')) {
-        Reset-Master
-        Write-Result 'failed' 'npm install failed, so nothing was deployed.'
-        exit 1
-    }
+    if ($IsRelease) {
+        if (-not (Test-Path -LiteralPath $Installer)) {
+            Write-Result 'failed' "Setup isn't at $Installer any more, so nothing was installed."
+            exit 1
+        }
+        $deploying = $true
+        $code = Install-Release
+        if ($code -eq 0) {
+            Write-Log 'Starting the new build...'
+            Start-Process -FilePath (Join-Path $InstallDir $ExeName) | Out-Null
+        }
+    } else {
+        if ($NpmInstall -and -not (Invoke-Npm 'the ship changed the dependencies')) {
+            Reset-Master
+            Write-Result 'failed' 'npm install failed, so nothing was deployed.'
+            exit 1
+        }
 
-    $deploy = Join-Path $Source 'scripts\deploy-desktop.ps1'
-    $wait = if ($Mode -eq 'now') { '-Force' } else { '-WaitMinutes 60' }
-    Write-Log "Deploying ($wait)..."
-    $deploying = $true
-    $code = Start-Hidden 'powershell.exe' "-NoProfile -ExecutionPolicy Bypass -File `"$deploy`" $wait" $Source $DeployOut $DeployErr
-    Write-Log "The deploy exited $code."
+        $deploy = Join-Path $Source 'scripts\deploy-desktop.ps1'
+        $wait = if ($Mode -eq 'now') { '-Force' } else { "-WaitMinutes $WaitMinutes" }
+        Write-Log "Deploying ($wait)..."
+        $deploying = $true
+        $code = Start-Hidden 'powershell.exe' "-NoProfile -ExecutionPolicy Bypass -File `"$deploy`" $wait" $Source $DeployOut $DeployErr
+        Write-Log "The deploy exited $code."
+    }
 
     if ($code -eq 0 -and (Wait-NewService)) {
         Write-Result 'live' ''
@@ -259,13 +347,20 @@ try {
     }
 
     $old = Get-ServiceStatus
-    if ($code -ne 0 -and $old -and (Get-StatusCommit $old) -ne $Commit) {
+    if ($code -ne 0 -and $old -and -not (Test-IsNew $old)) {
         # It stopped before anything was replaced: the running build stays.
         Reset-Master
-        Write-Result 'failed' 'The deploy stopped before replacing anything, so the running build stayed.'
+        if ($IsRelease -and $code -eq 2) {
+            Write-Result 'failed' "Devis was still busy after $WaitMinutes minutes, so Setup didn't replace anything. It tries again at the next check." -Retry
+        } elseif ($IsRelease) {
+            Write-Result 'failed' "Setup stopped (exit $code) before replacing anything, so the running build stayed."
+        } else {
+            Write-Result 'failed' 'The deploy stopped before replacing anything, so the running build stayed.'
+        }
         exit 1
     }
-    $why = if ($code -ne 0) { "The deploy failed (exit $code) partway." } else { "The new build didn't come up within $HealthSeconds seconds." }
+    $what = if ($IsRelease) { 'Setup' } else { 'The deploy' }
+    $why = if ($code -ne 0) { "$what failed (exit $code) partway." } else { "The new build didn't come up within $HealthSeconds seconds." }
     Restore-Previous $why
     exit 1
 } catch {
