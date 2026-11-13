@@ -26,6 +26,7 @@ import {
     type Worktree,
 } from "./jarvis-store.mjs";
 import { recapState, startWorker, workerLiveState, type RecapState, type WorkerLiveState } from "./jarvis-workers.mjs";
+import { linkTodosToTask, listTodos, planTodoStart, type Todo } from "./jarvis-notes.mjs";
 import { validationSummaries, type ValidationSummary } from "./jarvis-validation.mjs";
 import { prCommentSummaries, type PrCommentSummary } from "./jarvis-pr-comments.mjs";
 import { prBuildSummaries, type PrBuildSummary } from "./jarvis-pr-builds.mjs";
@@ -306,12 +307,12 @@ export interface CreatedTask {
  * task gets its own folder (named after its title) under `folderRoot`, or
  * Settings' task folder, and a worker starts at once to set it up: it proposes
  * the repositories, gets worktrees of the ones the user confirms, settles the
- * goal with the user, and starts.
+ * goal with the user, and starts. With `skipWorker`, no worker starts: the caller starts its own.
  */
 export async function createTaskFromInput(
     input: TaskInput,
     organizations: string[],
-    options: { taskRoot?: string; requireFolder?: boolean } = {},
+    options: { taskRoot?: string; requireFolder?: boolean; skipWorker?: boolean } = {},
 ): Promise<CreatedTask> {
     const ref = typeof input.workItem === "string" && input.workItem.trim() ? parseWorkItemRef(input.workItem) : null;
     if (typeof input.workItem === "string" && input.workItem.trim() && !ref) {
@@ -340,13 +341,82 @@ export async function createTaskFromInput(
             folderRoot,
         });
     }
-    if (!result.created || !result.task.folder) return { ...result, worker: null, workerError: null };
+    if (!result.created || !result.task.folder || options.skipWorker) return { ...result, worker: null, workerError: null };
     try {
         const worker = await startWorker({ taskId: result.task.id });
         return { ...result, worker, workerError: null };
     } catch (error) {
         return { ...result, worker: null, workerError: (error as Error).message };
     }
+}
+
+export interface TodoStartInput {
+    /** The to-do ids for each worker, one array per worker. */
+    groups?: unknown;
+    title?: unknown;
+    /** The user's notes for the task; the to-dos are added under them. */
+    description?: unknown;
+    folderRoot?: unknown;
+    model?: unknown;
+    effort?: unknown;
+    /** What every worker is told, besides its own to-dos. */
+    instructions?: unknown;
+}
+
+export interface TodoStart {
+    task: JarvisTask;
+    workers: JarvisWorker[];
+    /** Why a worker didn't start, one line each. */
+    workerErrors: string[];
+    todos: Todo[];
+}
+
+/** A worker's first message on a task started from to-dos: its own share, and that the others have the rest. */
+export function todoWorkerPrompt(groupOutline: string, workers: number, instructions: string): string {
+    const lines = [
+        workers > 1
+            ? `This task was started from to-dos on the user's list and split between ${workers} workers. Your part is these to-dos, with their subtasks indented under them:`
+            : "This task was started from these to-dos on the user's list, with their subtasks indented under them:",
+        groupOutline,
+    ];
+    if (workers > 1) {
+        lines.push("The other workers have the rest of the to-dos in the task's description. Keep to your part, and note in the task's shared note where your work meets theirs.");
+    }
+    if (instructions) lines.push(instructions);
+    return lines.join("\n\n");
+}
+
+/**
+ * Start a task from to-dos: make the task, with the to-dos in its description, start a worker
+ * for each group and link the to-dos to the task. The task stays when a worker can't start.
+ */
+export async function startTaskFromTodos(input: TodoStartInput, organizations: string[], options: { taskRoot?: string } = {}): Promise<TodoStart> {
+    const plan = await planTodoStart(input.groups);
+    const typed = typeof input.title === "string" ? input.title.trim() : "";
+    const title = typed || (plan.todos.length === 1 ? plan.todos[0].text : "");
+    if (!title) throw new JarvisError("Give the task a title.");
+    const notes = typeof input.description === "string" ? input.description.trim() : "";
+    const description = `${notes ? `${notes}\n\n` : ""}Started from these to-dos:\n${plan.outline}`;
+    const instructions = typeof input.instructions === "string" ? input.instructions.trim() : "";
+    const model = typeof input.model === "string" ? input.model : null;
+    const effort = typeof input.effort === "string" ? input.effort : null;
+    const { task } = await createTaskFromInput({ title, description, folderRoot: input.folderRoot }, organizations, {
+        taskRoot: options.taskRoot,
+        requireFolder: true,
+        skipWorker: true,
+    });
+    await linkTodosToTask(plan.groups.flat(), task.id);
+    const workers: JarvisWorker[] = [];
+    const workerErrors: string[] = [];
+    // One at a time: each worker's name comes from the folders already in the task's folder.
+    for (const outline of plan.groupOutlines) {
+        try {
+            workers.push(await startWorker({ taskId: task.id, prompt: todoWorkerPrompt(outline, plan.groups.length, instructions), model, effort }));
+        } catch (error) {
+            workerErrors.push((error as Error).message);
+        }
+    }
+    return { task, workers, workerErrors, todos: await listTodos() };
 }
 
 /** Re-read every open work item task from ADO. Returns per-org errors. */

@@ -287,13 +287,15 @@ export function leadTools(): Tool<any>[] {
                 return "Stopped.";
             },
         ),
-        tool<{ action: string; text?: string; id?: number }>(
+        tool<{ action: string; text?: string; id?: number; parent_id?: number; due?: string }>(
             "devis_notes",
-            `The user's own notes in the Workspace, kept across days: a to-do list and a quick note. action read: the open to-dos with their ids, recently done ones, and the quick note. add_todo: add \`text\` as a to-do. complete_todo: check off to-do \`id\`. append_note: add \`text\` to the end of the quick note, dated and signed ${LEAD_NAME}. Change them only when the user asks.`,
+            `The user's own notes in the Workspace, kept across days: a to-do list, where a to-do can have subtasks to any depth, a priority and a due date, and a quick note. action read: the open to-dos with their ids, subtasks indented under them, and recently done ones, and the quick note. add_todo: add \`text\` as a to-do, or as a subtask of \`parent_id\`, with an optional \`due\` date. complete_todo: check off to-do \`id\` and its subtasks. set_due: set to-do \`id\`'s \`due\` date, or clear it with an empty one. append_note: add \`text\` to the end of the quick note, dated and signed ${LEAD_NAME}. Change them only when the user asks.`,
             {
-                action: { type: "string", enum: ["read", "add_todo", "complete_todo", "append_note"] },
+                action: { type: "string", enum: ["read", "add_todo", "complete_todo", "set_due", "append_note"] },
                 text: { ...str, description: "The to-do, or the text to add to the quick note." },
-                id: { type: "number", description: "The to-do to check off, from read." },
+                id: { type: "number", description: "The to-do to check off or date, from read." },
+                parent_id: { type: "number", description: "For add_todo: the to-do to add it under as a subtask, from read." },
+                due: { ...str, description: "A date as YYYY-MM-DD; empty clears it." },
             },
             ["action"],
             async (args) => runNotesAction(LEAD_NAME, args, LEAD_NOTE_ACTIONS),
@@ -318,7 +320,7 @@ export function leadTools(): Tool<any>[] {
     ];
 }
 
-const LEAD_NOTE_ACTIONS: ReadonlySet<string> = new Set(["read", "add_todo", "complete_todo", "append_note"]);
+const LEAD_NOTE_ACTIONS: ReadonlySet<string> = new Set(["read", "add_todo", "complete_todo", "set_due", "append_note"]);
 
 const LEAD_BRIEF = [
     `You are ${LEAD_NAME}, the user's lead agent in the ${APP_NAME} app.`,

@@ -587,18 +587,21 @@ function taskArtifactsTool(): Tool<unknown> {
     });
 }
 
-const WORKER_NOTE_ACTIONS: ReadonlySet<string> = new Set(["read", "add_todo"]);
+const WORKER_NOTE_ACTIONS: ReadonlySet<string> = new Set(["read", "add_todo", "set_due"]);
 
 /** The user's own to-dos and quick note: workers read them, and add a to-do when asked. */
 function userNotesTool(): Tool<unknown> {
     return defineTool("user_notes", {
         description:
-            "The user's own notes in the Workspace, kept across days and shared by every agent: a to-do list and a quick note. action read: the open to-dos with their ids, recently done ones, and the quick note. add_todo: add `text` as a to-do, signed with your name. Read them when the user asks or points you to them; add a to-do only when the user asks.",
+            "The user's own notes in the Workspace, kept across days and shared by every agent: a to-do list, where a to-do can have subtasks to any depth, a priority and a due date, and a quick note. action read: the open to-dos with their ids, subtasks indented under them, and recently done ones, and the quick note. add_todo: add `text` as a to-do signed with your name, or as a subtask of `parent_id`, with an optional `due` date. set_due: set to-do `id`'s `due` date, or clear it with an empty one. Read them when the user asks or points you to them; add or change a to-do only when the user asks.",
         parameters: {
             type: "object",
             properties: {
-                action: { type: "string", enum: ["read", "add_todo"] },
+                action: { type: "string", enum: ["read", "add_todo", "set_due"] },
                 text: { type: "string", description: "The to-do to add." },
+                id: { type: "number", description: "For set_due: the to-do to date, from read." },
+                parent_id: { type: "number", description: "For add_todo: the to-do to add it under as a subtask, from read." },
+                due: { type: "string", description: "A date as YYYY-MM-DD; empty clears it." },
             },
             required: ["action"],
             additionalProperties: false,

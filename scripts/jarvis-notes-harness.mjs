@@ -160,6 +160,133 @@ try {
         assert.notEqual(reAdded.id, proposal.id);
     }
 
+    // ---- subtasks, due dates and priorities ----
+    {
+        for (const t of await notes.listTodos()) if (t.parentId == null) await notes.deleteTodo(t.id);
+        const ids = async () => (await notes.listTodos()).map((t) => `${t.done ? "x" : " "} ${t.text}`);
+        const byId = async () => new Map((await notes.listTodos()).map((t) => [t.id, t]));
+        const ship = await notes.addTodo("Ship it");
+        const s1 = await notes.addTodo("Write the code", "you", undefined, { parentId: ship.id });
+        const s2 = await notes.addTodo("Get it reviewed", "you", undefined, { parentId: ship.id, due: "2026-03-04" });
+        const s1a = await notes.addTodo("Tests first", "you", undefined, { parentId: s1.id });
+        const other = await notes.addTodo("Something else");
+        assert.equal(s1.parentId, ship.id);
+        assert.equal(s2.due, "2026-03-04");
+        assert.deepEqual(await ids(), ["  Ship it", "  Write the code", "  Tests first", "  Get it reviewed", "  Something else"], "subtasks follow their to-do, depth first");
+
+        await assert.rejects(notes.addTodo("x", "you", undefined, { parentId: 9999 }), /gone/);
+        await assert.rejects(notes.addTodo("x", "you", undefined, { due: "2026-02-30" }), /real date/);
+        await assert.rejects(notes.addTodo("x", "you", undefined, { due: "tomorrow" }), /YYYY-MM-DD/);
+        await assert.rejects(
+            notes.addTodo("x", "you", { key: "need:req:s1:r1", taskId: "11111111-2222-4333-8444-555555555555" }, { parentId: ship.id }),
+            /top of the list/,
+            "a to-do from Needs you can't be a subtask",
+        );
+
+        // Subtasks move among their siblings only.
+        await notes.moveTodo(s2.id, "up");
+        assert.deepEqual(await ids(), ["  Ship it", "  Get it reviewed", "  Write the code", "  Tests first", "  Something else"]);
+        await notes.moveTodo(s2.id, "up");
+        assert.equal((await ids())[1], "  Get it reviewed", "the first subtask can't go higher");
+        await notes.moveTodo(s2.id, "down");
+
+        // Checking one off checks off what's under it; its parent stays open.
+        await notes.updateTodo(s1.id, { done: true });
+        let m = await byId();
+        assert.deepEqual([m.get(s1.id).done, m.get(s1a.id).done, m.get(ship.id).done], [true, true, false]);
+        assert.equal(m.get(s1a.id).doneNote, null);
+        assert.deepEqual(await ids(), ["  Ship it", "x Write the code", "x Tests first", "  Get it reviewed", "  Something else"], "a done subtask keeps its place");
+        await assert.rejects(notes.addTodo("x", "you", undefined, { parentId: s1.id }), /Reopen it/);
+        // Reopening one reopens what's above it, not what's beside or under it.
+        await notes.updateTodo(ship.id, { done: true });
+        await notes.updateTodo(s1a.id, { done: false });
+        m = await byId();
+        assert.deepEqual([m.get(s1a.id).done, m.get(s1.id).done, m.get(ship.id).done, m.get(s2.id).done], [false, false, false, true]);
+        assert.equal((await notes.listTodos())[0].id, other.id, "a reopened top-level to-do goes to the end of the open list");
+
+        // Due dates: set, changed and cleared, on any level.
+        assert.equal((await notes.updateTodo(s1a.id, { due: "2026-01-09" })).due, "2026-01-09");
+        assert.equal((await notes.updateTodo(ship.id, { due: "2026-01-31" })).due, "2026-01-31");
+        assert.equal((await byId()).get(s1a.id).due, "2026-01-09", "a subtask's date is its own");
+        assert.equal((await notes.updateTodo(s1a.id, { due: null })).due, null);
+        assert.equal((await notes.updateTodo(ship.id, { text: "Ship it!" })).due, "2026-01-31", "other changes leave the date");
+        await assert.rejects(notes.updateTodo(ship.id, { due: "2026-13-01" }), /real date/);
+
+        // Priorities: top level only, highest first, then the user's order.
+        await assert.rejects(notes.updateTodo(s1.id, { priority: 3 }), /Only top-level/);
+        await assert.rejects(notes.updateTodo(ship.id, { priority: 7 }), /high, medium, low or none/);
+        const third = await notes.addTodo("A third thing");
+        assert.deepEqual((await notes.listTodos()).filter((t) => t.parentId == null && !t.done).map((t) => t.text), ["Something else", "Ship it!", "A third thing"]);
+        assert.equal((await notes.updateTodo(third.id, { priority: "high" })).priority, 3);
+        await notes.updateTodo(ship.id, { priority: 1 });
+        assert.deepEqual(
+            (await notes.listTodos()).filter((t) => t.parentId == null && !t.done).map((t) => t.text),
+            ["A third thing", "Ship it!", "Something else"],
+            "high, then low, then none",
+        );
+        await notes.moveTodo(other.id, "up");
+        assert.equal((await notes.listTodos()).filter((t) => t.parentId == null).at(-1).text, "Something else", "moving stays within a priority");
+        await notes.updateTodo(third.id, { priority: "none" });
+
+        // Agents see the tree, and can add a subtask and set a date.
+        const worker = new Set(["read", "add_todo", "set_due"]);
+        assert.match(
+            await notes.runNotesAction("w1", { action: "add_todo", text: "Write the rollout note", parent_id: ship.id, due: "2026-02-01" }, worker),
+            new RegExp(`^Added to-do \\[\\d+\\] under \\[${ship.id}\\]: Write the rollout note \\(due 2026-02-01\\)$`),
+        );
+        assert.match(await notes.runNotesAction("w1", { action: "set_due", id: s2.id, due: "" }, worker), /has no due date now/);
+        assert.match(await notes.runNotesAction("w1", { action: "set_due", id: s2.id, due: "2026-02-02" }, worker), /is due 2026-02-02/);
+        assert.match(await notes.runNotesAction("w1", { action: "set_due", id: s2.id, due: "soon" }, worker), /^Not done: Give the due date/);
+        const read = await notes.notesForAgent();
+        assert.match(read, new RegExp(`- \\[${ship.id}\\] Ship it! \\(low priority, due 2026-01-31\\)\\n  - \\[${s1.id}\\] Write the code\\n    - \\[${s1a.id}\\] Tests first\\n`), "subtasks are indented under their to-do");
+        assert.match(read, new RegExp(`  - \\[${s2.id}\\] Get it reviewed \\(done, due 2026-02-02\\)`), "a done subtask shows as done");
+
+        // Starting a task: groups are checked, a subtask goes with its picked parent, and each must be open.
+        const plan = await notes.planTodoStart([[s1a.id, ship.id], [other.id, s1a.id], []]);
+        assert.deepEqual(plan.groups, [[ship.id], [other.id]], "a subtask goes with its picked to-do; a repeat counts once; empty groups go");
+        assert.deepEqual(
+            plan.todos.map((t) => t.id),
+            [ship.id, other.id],
+        );
+        assert.match(plan.outline, new RegExp(`^- \\[${ship.id}\\] Ship it!.*\\n  - \\[${s1.id}\\] Write the code`));
+        assert.equal(plan.groupOutlines.length, 2);
+        assert.match(plan.groupOutlines[1], new RegExp(`^- \\[${other.id}\\] Something else$`));
+        assert.deepEqual((await notes.planTodoStart([[s1.id]])).groups, [[s1.id]], "a subtask can be started on its own");
+        await assert.rejects(notes.planTodoStart([[s2.id]]), /is done/);
+        await assert.rejects(notes.planTodoStart([]), /Pick the to-dos/);
+        await assert.rejects(notes.planTodoStart([[]]), /Pick the to-dos/);
+        await assert.rejects(notes.planTodoStart([[123456]]), /gone/);
+        await assert.rejects(notes.planTodoStart(Array.from({ length: notes.TODO_START_MAX_WORKERS + 1 }, () => [ship.id])), /at most/);
+
+        // Linked to a task, its to-dos show it, and tick when it's done.
+        const store = await import("../jarvis-store.mjs");
+        const { task } = await store.createTask({ title: "Ship it", description: "" });
+        await notes.linkTodosToTask([ship.id], task.id);
+        assert.equal((await byId()).get(ship.id).taskId, task.id);
+        await store.updateTask(task.id, { status: "done" });
+        await new Promise((r) => setTimeout(r, 50));
+        m = await byId();
+        assert.deepEqual([m.get(ship.id).done, m.get(ship.id).doneNote, m.get(s1a.id).done], [true, notes.TASK_DONE_NOTE, true], "the task done ticks its to-dos");
+        assert.equal(m.get(other.id).done, false, "other to-dos are left alone");
+
+        // Deleting and clearing take the subtasks too; done ones past the limit go whole.
+        const sub = await notes.addTodo("Under the third", "you", undefined, { parentId: third.id });
+        await notes.deleteTodo(third.id);
+        assert.equal((await byId()).has(sub.id), false);
+        const keep = notes.NOTES_LIMITS.doneTodos;
+        notes.NOTES_LIMITS.doneTodos = 1;
+        const newer = await notes.addTodo("Newer");
+        const newerSub = await notes.addTodo("Newer's subtask", "you", undefined, { parentId: newer.id });
+        await new Promise((r) => setTimeout(r, 5));
+        await notes.updateTodo(newer.id, { done: true });
+        m = await byId();
+        assert.equal(m.has(ship.id) || m.has(s1.id) || m.has(s1a.id), false, "the older done to-do goes with its subtasks");
+        assert.equal(m.get(newerSub.id).done, true, "the kept one keeps its subtasks");
+        notes.NOTES_LIMITS.doneTodos = keep;
+        assert.equal(await notes.clearDoneTodos(), 2, "a cleared to-do takes its subtasks");
+        assert.deepEqual(await ids(), ["  Something else"]);
+    }
+
     console.log("jarvis-notes harness: ok");
 } finally {
     closeDb();

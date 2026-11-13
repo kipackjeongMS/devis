@@ -23,7 +23,7 @@ import {
 } from "./jarvis-store.mjs";
 import { listProjects, listRepositories } from "./ado.mjs";
 import { codebaseDir, codebaseStatus, syncCodebase, worktreeChanges, type WorktreeChanges } from "./jarvis-codebase.mjs";
-import { createTaskFromInput, previewWorkItem, refreshTaskWorkItems, rememberedPrs, startOfToday, todaySnapshot } from "./jarvis-today.mjs";
+import { createTaskFromInput, previewWorkItem, refreshTaskWorkItems, rememberedPrs, startOfToday, startTaskFromTodos, todaySnapshot } from "./jarvis-today.mjs";
 import {
     confirmRepos,
     decidePermission,
@@ -243,14 +243,22 @@ export async function handleJarvisApi(req: IncomingMessage, res: ServerResponse,
         }
 
         // ---- the user's notes: to-dos and the quick note ----
+        if (p === "/api/jarvis/todos" && get) return sendJson(res, 200, { todos: await listTodos() });
         if (p === "/api/jarvis/todos" && post) {
             const b = await readBody(req);
-            return sendJson(res, 200, { todo: await addTodo(b?.text, "you", b?.source), todos: await listTodos() });
+            const todo = await addTodo(b?.text, "you", b?.source, { parentId: b?.parentId, due: b?.due });
+            return sendJson(res, 200, { todo, todos: await listTodos() });
         }
         if (p === "/api/jarvis/todos/update" && post) {
             const b = await readBody(req);
-            await updateTodo(b?.id, { text: b?.text, done: b?.done });
+            await updateTodo(b?.id, { text: b?.text, done: b?.done, due: b?.due, priority: b?.priority });
             return sendJson(res, 200, { todos: await listTodos() });
+        }
+        // Start one task from to-dos, with a worker for each group of them.
+        if (p === "/api/jarvis/todos/start" && post) {
+            const b = await readBody(req);
+            const cfg = await readConfig();
+            return sendJson(res, 200, await startTaskFromTodos(b || {}, cfg.organizations, { taskRoot: cfg.taskRoot }));
         }
         if (p === "/api/jarvis/todos/delete" && post) {
             const b = await readBody(req);

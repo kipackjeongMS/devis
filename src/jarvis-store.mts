@@ -227,7 +227,14 @@ export function jarvisDb(): Promise<DatabaseSync> {
             if (!todoCols.some((c) => c.name === "source_json")) db.exec("ALTER TABLE jarvis_todos ADD COLUMN source_json TEXT");
             if (!todoCols.some((c) => c.name === "source_settled")) db.exec("ALTER TABLE jarvis_todos ADD COLUMN source_settled INTEGER NOT NULL DEFAULT 0");
             if (!todoCols.some((c) => c.name === "done_note")) db.exec("ALTER TABLE jarvis_todos ADD COLUMN done_note TEXT");
+            // Subtasks (any depth), a due date, a priority on top-level ones, and the task one was started as.
+            if (!todoCols.some((c) => c.name === "parent_id")) db.exec("ALTER TABLE jarvis_todos ADD COLUMN parent_id INTEGER");
+            if (!todoCols.some((c) => c.name === "due")) db.exec("ALTER TABLE jarvis_todos ADD COLUMN due TEXT");
+            if (!todoCols.some((c) => c.name === "priority")) db.exec("ALTER TABLE jarvis_todos ADD COLUMN priority INTEGER NOT NULL DEFAULT 0");
+            if (!todoCols.some((c) => c.name === "task_id")) db.exec("ALTER TABLE jarvis_todos ADD COLUMN task_id TEXT");
             db.exec("CREATE INDEX IF NOT EXISTS idx_jarvis_todos_source ON jarvis_todos(source_key) WHERE source_key IS NOT NULL");
+            db.exec("CREATE INDEX IF NOT EXISTS idx_jarvis_todos_parent ON jarvis_todos(parent_id) WHERE parent_id IS NOT NULL");
+            db.exec("CREATE INDEX IF NOT EXISTS idx_jarvis_todos_task ON jarvis_todos(task_id) WHERE task_id IS NOT NULL");
             // A task being removed is hidden while its recap is written; the column came later.
             const taskCols = db.prepare("PRAGMA table_info(jarvis_tasks)").all() as Array<{ name: string }>;
             if (!taskCols.some((c) => c.name === "removing_at")) db.exec("ALTER TABLE jarvis_tasks ADD COLUMN removing_at TEXT");
