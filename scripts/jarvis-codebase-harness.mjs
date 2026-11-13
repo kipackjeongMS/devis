@@ -278,6 +278,22 @@ try {
     assert.equal(twin.task.folder, join(taskRoot, "some-work-needed-2"));
     assert.equal(twin.worker.label, "birch", "a removed worker's name is free again");
 
+    // A worker the user asks to start another: a folder beside its own, the same setup, its instructions passed on.
+    const twinSession = sessions.find((s) => s.sessionId === twin.worker.sessionId);
+    const asked = await twinSession.tool("task_start_worker")({ instructions: "Take the tests." });
+    const sibling = sessions.at(-1);
+    const sibRow = await store.getWorker(sibling.sessionId);
+    assert.notEqual(sibRow.label, "birch");
+    assert.equal(sibRow.cwd, join(twin.task.folder, sibRow.label));
+    assert.equal(asked, `Started ${sibRow.label} in ${sibRow.cwd}. It works beside you on this task and reads note.md: add what it needs to know there.`);
+    assert.equal(sibRow.taskId, twin.task.id);
+    await until(() => sibling.sent.length, "the sibling's first turn");
+    assert.match(sibling.sent[0], /^Set up your workspace/, "it gets the same setup as one the user starts");
+    assert.match(sibling.sent[0], /Instructions from birch, another worker on this task, passing on what the user asked:\nTake the tests\.$/);
+    assert.equal(sibling.displayed[0], "Take the tests.");
+    await until(async () => (await store.getWorker(sibling.sessionId)).state === "turnDone", "the sibling's turn");
+    await workers.removeWorker(sibling.sessionId);
+
     // A branch already on origin isn't reused: the new one gets a number.
     const pushedFrom = join(root, "pushed");
     git(root, "clone", "-q", remoteOf.alpha, pushedFrom);

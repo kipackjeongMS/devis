@@ -457,6 +457,7 @@ function workerBrief(task: JarvisTask, worker: { label: string; cwd: string }, w
         "Before you end each turn, post one status line with task_status: where the task stands now and what is next, in under 160 characters (for example, \"API change done, tests next\"). It shows on the task's card in the user's Workspace and builds the task's timeline.",
         ...delivery,
         "When you need a decision from the user, ask with ask_user instead of guessing.",
+        "Start another worker on this task with task_start_worker only when the user explicitly asks for one, never on your own to split up the work; pass on what the user asked in its instructions.",
         WEB_BRIEF,
         "The user keeps a to-do list and a quick note in the Workspace that every agent can read with user_notes: check them when the user mentions their notes or to-dos.",
         ...reviews,
@@ -630,6 +631,46 @@ function taskLinkPrTool(): Tool<unknown> {
         defer: "never",
         // The task comes from the invoking session, never from the input.
         handler: async (args, invocation) => linkFromWorker(invocation.sessionId, (args as { pr?: unknown })?.pr),
+    });
+}
+
+/** Another worker on the invoking worker's own task, beside it: only when the user explicitly asks for one. */
+function taskStartWorkerTool(): Tool<unknown> {
+    return defineTool("task_start_worker", {
+        description:
+            "Start another worker on this task, beside you, with its first instructions. Only when the user explicitly asks you to start one, never on your own to split up the work. On a task with its own folder it gets its own folder beside yours, sets up its own repositories (or its own worktree, on a task that changes the app), and confirms its goal with the user before it changes anything. On an older task without a folder it works in your folder. Returns its name and folder.",
+        parameters: {
+            type: "object",
+            properties: {
+                instructions: { type: "string", description: "What the new worker should do, from what the user asked." },
+                model: { type: "string", description: "A model id, only when the user names one; otherwise the default." },
+            },
+            required: ["instructions"],
+            additionalProperties: false,
+        },
+        skipPermission: true,
+        defer: "never",
+        // The task comes from the invoking session, never from the input.
+        handler: async (args, invocation) => {
+            const worker = await getWorker(invocation.sessionId);
+            if (!worker) return "This session is not one of the Workspace's workers.";
+            if (lives.get(worker.sessionId)?.recapping) return "While writing the recap, only read.";
+            const a = (args || {}) as { instructions?: unknown; model?: unknown };
+            const instructions = typeof a.instructions === "string" ? a.instructions.trim() : "";
+            if (!instructions) return "Put what the new worker should do in instructions.";
+            try {
+                const started = await startWorker({
+                    taskId: worker.taskId,
+                    cwd: worker.cwd,
+                    prompt: instructions,
+                    model: typeof a.model === "string" ? a.model : null,
+                    startedBy: worker.label,
+                });
+                return `Started ${started.label} in ${started.cwd}. It works beside you on this task and reads note.md: add what it needs to know there.`;
+            } catch (error) {
+                return `Not started: ${(error as Error).message}`;
+            }
+        },
     });
 }
 
@@ -956,8 +997,8 @@ function sessionConfig(
     const effort = worker.effort?.trim();
     const devis = task.kind === "devis";
     const tools = devis
-        ? [taskArtifactsTool(), taskStatusTool(), userNotesTool(), devisShipTool()]
-        : [taskArtifactsTool(), taskStatusTool(), taskLinkPrTool(), userNotesTool(), taskValidationTool(), taskPrCommentsTool(), taskPrBuildsTool()];
+        ? [taskArtifactsTool(), taskStatusTool(), userNotesTool(), taskStartWorkerTool(), devisShipTool()]
+        : [taskArtifactsTool(), taskStatusTool(), taskLinkPrTool(), userNotesTool(), taskStartWorkerTool(), taskValidationTool(), taskPrCommentsTool(), taskPrBuildsTool()];
     if (task.folder && !devis) tools.push(taskWorkspaceTool());
     // Skills come from each repository first, then the worker's folder, then the user's own and plugins'.
     const roots = [...worktrees.map((w) => w.path), worker.cwd];
@@ -1373,29 +1414,37 @@ export interface StartWorker {
     model?: string | null;
     /** Reasoning effort for `model`; "" or null for its default. */
     effort?: string | null;
+    /** The worker on the same task that started this one, at the user's request. */
+    startedBy?: string | null;
+}
+
+/** How a new worker's first instructions are introduced: the user's own, or passed on by another worker. */
+function instructionsFrom(instructions: string, from: string | null | undefined): string {
+    if (!instructions) return "";
+    return from ? `Instructions from ${from}, another worker on this task, passing on what the user asked:\n${instructions}` : `The user's instructions:\n${instructions}`;
 }
 
 /** The first turn of a worker on a task with a folder: get its repositories, settle the goal, then start. */
-export function setupPrompt(instructions: string): string {
+export function setupPrompt(instructions: string, from?: string | null): string {
     return [
         "Set up your workspace for this task, then start on it.",
-        "1. Call task_workspace with action repos to see the repositories you can use. From the task's title and description (and the user's instructions below, if any), pick the ones this work needs and call task_workspace with action propose, saying briefly why each. The user confirms or changes the list, and the app makes a git worktree of each in your folder, on your own branch.",
+        "1. Call task_workspace with action repos to see the repositories you can use. From the task's title and description (and the instructions below, if any), pick the ones this work needs and call task_workspace with action propose, saying briefly why each. The user confirms or changes the list, and the app makes a git worktree of each in your folder, on your own branch.",
         "2. Before you change anything, make sure the goal, the scope and what done means are clear: state your understanding to the user with ask_user and ask them to confirm or correct it, along with anything the title and description leave open. One question at a time.",
         "3. Then start the work right away.",
-        instructions ? `The user's instructions:\n${instructions}` : "",
+        instructionsFrom(instructions, from),
     ]
         .filter(Boolean)
         .join("\n\n");
 }
 
 /** The first turn of a worker on a task that changes Devis itself: read up, settle the goal, then start. */
-export function devisSetupPrompt(instructions: string): string {
+export function devisSetupPrompt(instructions: string, from?: string | null): string {
     return [
         `Get ready to change ${APP_NAME}, then start.`,
         "1. Read DESIGN.md in your worktree, then the code this change touches.",
         "2. Before you change anything, make sure the goal, the scope and what done means are clear: state your understanding to the user with ask_user and ask them to confirm or correct it, along with anything the title and description leave open. One question at a time.",
         "3. Make the change on your branch, build it, run the harnesses it touches, and commit. Then call devis_ready_to_ship.",
-        instructions ? `The user's instructions:\n${instructions}` : "",
+        instructionsFrom(instructions, from),
     ]
         .filter(Boolean)
         .join("\n\n");
@@ -1419,6 +1468,7 @@ export async function startWorker(input: StartWorker): Promise<JarvisWorker> {
     let label: string;
     let prompt: string;
     let display: string | undefined;
+    const startedBy = typeof input.startedBy === "string" && input.startedBy.trim() ? input.startedBy.trim().slice(0, 60) : null;
     const devis = task.kind === "devis";
     if (devis && !task.folder) throw new JarvisError(`A task that changes ${APP_NAME} needs a folder: set the task folder under Settings > Workspace.`, 409);
     const source = devis ? await requireDevis() : null;
@@ -1435,11 +1485,13 @@ export async function startWorker(input: StartWorker): Promise<JarvisWorker> {
         label = await nextWorkerName((name) => !existsSync(join(root, name)));
         cwd = join(root, label);
         mkdirSync(cwd, { recursive: true });
-        prompt = devis ? devisSetupPrompt(instructions) : setupPrompt(instructions);
+        prompt = devis ? devisSetupPrompt(instructions, startedBy) : setupPrompt(instructions, startedBy);
         display = instructions || (devis ? "Get ready and start on this change." : "Set up your workspace and start on this task.");
     } else {
         cwd = cleanFolder(input.cwd);
-        prompt = cleanPrompt(input.prompt);
+        const instructions = cleanPrompt(input.prompt);
+        prompt = startedBy ? instructionsFrom(instructions, startedBy) : instructions;
+        if (startedBy) display = instructions;
         label = await nextWorkerLabel(cwd);
     }
     const sessionId = randomUUID();
@@ -1462,7 +1514,7 @@ export async function startWorker(input: StartWorker): Promise<JarvisWorker> {
         if (task.folder && isInside(cwd, task.folder)) removeFolder(cwd);
         throw new JarvisError(`Could not start the worker: ${(error as Error).message}`, 502);
     }
-    await recordEvent("worker.started", `${label} started on ${describeTask(task)} in ${cwd}`, { taskId: task.id, sessionId });
+    await recordEvent("worker.started", `${label} started on ${describeTask(task)} in ${cwd}${startedBy ? `, by ${startedBy}` : ""}`, { taskId: task.id, sessionId });
     runTurn(sessionId, prompt, display);
     return (await getWorker(sessionId))!;
 }
