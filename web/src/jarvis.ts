@@ -344,12 +344,12 @@ function writePref(key: string, value: string): void {
 /** The rail's folded sections. The Note starts folded. */
 function readRailFolded(): Set<RailSection> {
   try {
-    const list = JSON.parse(readPref(RAIL_FOLD_KEY, '["note"]'));
+    const list = JSON.parse(readPref(RAIL_FOLD_KEY, "[]"));
     if (Array.isArray(list)) return new Set(list.filter(isRailSection));
   } catch {
     /* unreadable: the default */
   }
-  return new Set<RailSection>(["note"]);
+  return new Set<RailSection>();
 }
 
 const svg = (name: IconName): string => icon(name);

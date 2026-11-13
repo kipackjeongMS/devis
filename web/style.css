@@ -2418,7 +2418,7 @@ button.thread-loc:focus-visible { outline-offset: -2px; }
 .stale-banner b { font-weight: 600; }
 .stale-banner.caution { border-color: rgba(255, 209, 102, .3); background: var(--caution-tint); }
 .stale-banner.caution svg.ic { color: var(--caution); }
-.stale-banner.caution span { flex: 1 1 320px; min-width: 0; color: var(--text-2); }
+.stale-banner.caution > span { flex: 1 1 320px; min-width: 0; color: var(--text-2); }
 .workspace { order: 2; }
 
 .spinner {

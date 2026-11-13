@@ -1,8 +1,8 @@
 // The Workspace's layout: which panels sit in which column, in what order, and how much room
 // each gets. Pure data, no DOM: workspaceGrid.ts puts it on screen and jarvis.ts owns the panels.
-//   Columns  — one to four, side by side. `w` is a column's share of the width once the user has
-//              dragged a border between columns; null leaves the widths to CSS. A column moves
-//              as a whole, its panels and width going with it.
+//   Columns  — one to four, side by side. `w` is a column's share of the width (the default sets
+//              them, and dragging a border between columns changes them); null leaves the widths
+//              to CSS. A column moves as a whole, its panels and width going with it.
 //   Panels   — Devis (always there, exactly once) and the seven sections. In a column, open panels
 //              share the height by `g` (a flex-grow, 1 when unset).
 //   Flat     — a window too narrow for the columns shows Devis alone and the sections in one
@@ -33,8 +33,8 @@ export const isPanelId = (value: unknown): value is PanelId => value === "devis"
 
 export interface PanelSlot {
   id: PanelId;
-  /** Its share of the column's height against the other open panels; 1 when unset. Until a gap in
-   *  the column is dragged none of its panels has one, and they fit their content instead. */
+  /** Its share of the column's height against the other open panels; 1 when unset. When none of a
+   *  column's panels has one (a gap double-clicked), they fit their content instead. */
   g?: number;
 }
 export interface Column {
@@ -74,8 +74,18 @@ const G_MIN = 0.05;
 const G_MAX = 20;
 const clampG = (g: number): number => Math.min(G_MAX, Math.max(G_MIN, g));
 
+/**
+ * Three columns: what's waiting on you (Needs you, To-dos, Note) on the left, Devis in the middle,
+ * and the work you watch (Tasks, Pull Requests, Meetings, Communication) on the right.
+ */
 export function defaultLayout(): Layout {
-  return { columns: [{ w: null, panels: [{ id: "devis" }] }, { w: null, panels: SECTIONS.map((id) => ({ id })) }] };
+  return {
+    columns: [
+      { w: 0.25, panels: [{ id: "needs", g: 1 }, { id: "todos", g: 1 }, { id: "note", g: 1 }] },
+      { w: 0.54, panels: [{ id: "devis" }] },
+      { w: 0.21, panels: [{ id: "tasks", g: 1.1 }, { id: "prs", g: 0.9 }, { id: "meetings", g: 1 }, { id: "comms", g: 1 }] },
+    ],
+  };
 }
 
 export function cloneLayout(l: Layout): Layout {
@@ -182,6 +192,10 @@ export function pruneEmpty(l: Layout): Layout {
   return next;
 }
 
+/** Sizes as saved (widths to 4 places, heights to 3) count as the same. */
+const sameSize = (a: number | null | undefined, b: number | null | undefined): boolean =>
+  (a ?? null) === (b ?? null) || (typeof a === "number" && typeof b === "number" && Math.abs(a - b) < 1e-3);
+
 export function isDefault(l: Layout): boolean {
   const d = defaultLayout();
   const p = pruneEmpty(l);
@@ -190,9 +204,9 @@ export function isDefault(l: Layout): boolean {
     p.columns.length === d.columns.length &&
     p.columns.every(
       (c, i) =>
-        c.w === null &&
+        sameSize(c.w, d.columns[i]!.w) &&
         c.panels.length === d.columns[i]!.panels.length &&
-        c.panels.every((s, j) => s.id === d.columns[i]!.panels[j]!.id && s.g === undefined)
+        c.panels.every((s, j) => s.id === d.columns[i]!.panels[j]!.id && sameSize(s.g, d.columns[i]!.panels[j]!.g))
     )
   );
 }
@@ -280,14 +294,18 @@ export function readLayout(): Layout {
       return defaultLayout();
     }
   }
-  // First read: take the rail's order and the Devis/rail split from before columns.
+  // First read: take the rail's order and the Devis/rail split from before columns, when there are any.
   let order: unknown = null;
+  let hadOrder = false;
   try {
-    order = JSON.parse(localStorage.getItem(LEGACY_ORDER_KEY) || "null");
+    const raw = localStorage.getItem(LEGACY_ORDER_KEY);
+    hadOrder = raw !== null;
+    order = JSON.parse(raw || "null");
   } catch {
     /* unreadable: the default order */
   }
   const share = savedShare("workspace");
+  if (!hadOrder && share === null) return defaultLayout();
   const sections = Array.isArray(order) ? order.filter(isSection) : [];
   const layout = normalize({
     columns: [
