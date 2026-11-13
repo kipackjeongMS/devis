@@ -8,6 +8,7 @@
 
 import { getJSON, postJSON, type ApiError } from "./api.js";
 import { esc } from "./util.js";
+import { icon } from "./icons.js";
 
 export type SetupActionId = "azure-install" | "azure-signin" | "copilot-signin" | "github-signin" | "agency-install" | "devis-source";
 
@@ -21,6 +22,9 @@ export interface SetupJob {
   endedAt?: string;
   restart?: boolean;
   path?: string;
+  /** While a sign-in waits on a web page: where it is, and the code to enter there. */
+  link?: string;
+  code?: string;
 }
 
 export interface SetupStateView {
@@ -44,7 +48,7 @@ const RUNNING_LABEL: Record<SetupActionId, string> = {
   "agency-install": "Installing…",
   "azure-signin": "Signing in…",
   "copilot-signin": "Signing in…",
-  "github-signin": "Signing in…",
+  "github-signin": "Waiting for GitHub…",
   "devis-source": "Getting it…",
 };
 
@@ -209,12 +213,16 @@ interface ActionView {
   message: string;
   tone: "" | "ok" | "err";
   progress: number | null | undefined;
+  code?: string;
+  link?: string;
 }
 
 function viewOf(action: SetupActionId, label: string): ActionView {
   const job = setupJob(action);
   if (!job) return { label, disabled: false, hidden: false, restart: false, message: "", tone: "", progress: undefined };
-  if (job.state === "running") return { label: RUNNING_LABEL[action], disabled: true, hidden: false, restart: false, message: job.message, tone: "", progress: job.progress };
+  if (job.state === "running") {
+    return { label: RUNNING_LABEL[action], disabled: true, hidden: false, restart: false, message: job.message, tone: "", progress: job.code ? undefined : job.progress, code: job.code, link: job.link };
+  }
   if (job.state === "failed") return { label: "Try again", disabled: false, hidden: false, restart: false, message: job.message, tone: "err", progress: undefined };
   if (job.restart) return { label: "Restart Devis", disabled: false, hidden: false, restart: true, message: job.message, tone: "ok", progress: undefined };
   return { label, disabled: false, hidden: true, restart: false, message: job.message, tone: "ok", progress: undefined };
@@ -239,7 +247,14 @@ function statusInner(v: ActionView): string {
     v.progress === undefined
       ? ""
       : `<span class="setup-bar${v.progress === null ? " indeterminate" : ""}" aria-hidden="true"><i style="width:${Math.round((v.progress ?? 0) * 100)}%"></i></span>`;
-  return `<span class="setup-act-msg${v.tone ? ` tone-${v.tone}` : ""}">${esc(v.message)}</span>${bar}`;
+  // A sign-in waiting on a web page: the code to enter, and the page, in case the browser didn't come forward.
+  const prompt =
+    v.code || v.link
+      ? `<span class="setup-prompt">${v.code ? `<code class="setup-code">${esc(v.code)}</code>` : ""}${
+          v.link ? `<a class="setup-link" href="${esc(v.link)}" target="_blank" rel="noopener">${esc(v.link.replace(/^https?:\/\//, ""))}${icon("external")}</a>` : ""
+        }</span>`
+      : "";
+  return `<span class="setup-act-msg${v.tone ? ` tone-${v.tone}` : ""}">${esc(v.message)}</span>${prompt}${bar}`;
 }
 
 /** Bring every setup button and status line under `root` up to date. */

@@ -5439,6 +5439,22 @@ a.todo-src { text-decoration: none; }
 .setup-act-msg { color: var(--text-3); font-size: var(--fs-caption); line-height: var(--lh-caption); overflow-wrap: anywhere; }
 .setup-act-msg.tone-ok { color: var(--success); }
 .setup-act-msg.tone-err { color: var(--critical); }
+/* A sign-in waiting on a web page: the one-time code, big enough to read off, and the page. */
+.setup-prompt { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.setup-code {
+  padding: 2px 8px;
+  border: 1px solid var(--stroke-control);
+  border-radius: var(--r-control);
+  background: var(--well);
+  color: var(--text-1);
+  font-family: var(--mono);
+  font-size: var(--fs-label);
+  font-weight: 600;
+  letter-spacing: .08em;
+  user-select: all;
+}
+.setup-link { display: inline-flex; align-items: center; gap: 4px; color: var(--accent-text); font-size: var(--fs-caption); }
+.setup-link svg.ic { width: 12px; height: 12px; }
 .setup-bar { position: relative; display: block; width: 160px; max-width: 100%; height: 4px; overflow: hidden; border-radius: 2px; background: var(--neutral-tint); }
 .setup-bar i { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width var(--t-slow) var(--ease); }
 .setup-bar.indeterminate i { width: 40% !important; animation: node-progress 1.4s var(--ease) infinite; }

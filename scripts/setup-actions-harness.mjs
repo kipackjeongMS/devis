@@ -124,15 +124,19 @@ try {
     {
         const window = deferred();
         let opened = 0;
+        let signedIn = false;
         setSetupEnv({
             azureCli: () => "C:\\az\\bin\\az.cmd",
             openConsole: (title, line) => {
                 opened++;
                 assert.equal(title, "Azure sign-in");
                 assert.equal(line, "C:\\az\\bin\\az.cmd login --allow-no-subscriptions");
-                return window.promise;
+                return window.promise.then((code) => ((signedIn = true), code));
             },
-            azureAccount: async () => "me@contoso.com",
+            azureAccount: async () => {
+                if (!signedIn) throw new Error("az token failed: AADSTS70043 the refresh token has expired");
+                return "me@contoso.com";
+            },
         });
         const a = startSetupAction("azure-signin");
         const b = startSetupAction("azure-signin");
@@ -147,11 +151,13 @@ try {
         assert.equal(a.progress, 1);
         assert.ok(a.endedAt);
         assert.deepEqual(setupActivity(), []);
-        // The finished job stays, for a page that reloads; pressing again starts a new one.
+        // The finished job stays, for a page that reloads; pressing again starts a new one, which finds you signed in.
         assert.deepEqual(setupJobs(), [a]);
         const again = startSetupAction("azure-signin");
         assert.notEqual(again.id, a.id);
         await finished(again);
+        assert.equal(again.message, "Already signed in as me@contoso.com.");
+        assert.equal(opened, 1, "no window when you're already signed in");
         assert.equal(setupJobs().length, 1);
     }
 
@@ -163,30 +169,100 @@ try {
         assert.equal(noAz.state, "failed");
         assert.equal(noAz.message, "Install the Azure CLI first.");
 
-        setSetupEnv({ azureCli: () => "az.cmd", openConsole: async () => 1, azureAccount: async () => { throw new Error("AADSTS"); } });
+        setSetupEnv({ azureCli: () => "az.cmd", openConsole: async () => 1, azureAccount: async () => { throw new Error("az token failed:\nAADSTS50076 MFA required"); } });
         const notSigned = startSetupAction("azure-signin");
         await finished(notSigned);
-        assert.match(notSigned.message, /^Still not signed in\./);
+        assert.equal(notSigned.message, "Still not signed in (AADSTS50076 MFA required). Try again, and finish signing in in the window that opens.");
 
         setSetupEnv({ copilotLogin: async () => null });
         const noAgency = startSetupAction("copilot-signin");
         await finished(noAgency);
         assert.match(noAgency.message, /needs Agency/);
 
-        setSetupEnv({ copilotLogin: async () => ["C:\\agency\\agency.exe", "copilot", "login"], openConsole: async (_t, line) => (assert.equal(line, "C:\\agency\\agency.exe copilot login"), 0), copilotAccount: async () => "octo" });
+        let copilotWho = null;
+        let copilotWindows = 0;
+        setSetupEnv({
+            copilotLogin: async () => ["C:\\agency\\agency.exe", "copilot", "login"],
+            openConsole: async (_t, line) => (assert.equal(line, "C:\\agency\\agency.exe copilot login"), copilotWindows++, (copilotWho = "octo"), 0),
+            copilotAccount: async () => copilotWho,
+        });
         const copilot = startSetupAction("copilot-signin");
         await finished(copilot);
         assert.equal(copilot.message, "Signed in as octo.");
+        const copilotAgain = startSetupAction("copilot-signin");
+        await finished(copilotAgain);
+        assert.equal(copilotAgain.message, "Already signed in as octo.");
+        assert.equal(copilotWindows, 1);
 
         setSetupEnv({ gh: () => null });
         const noGh = startSetupAction("github-signin");
         await finished(noGh);
         assert.match(noGh.message, /winget install GitHub\.cli/);
 
-        setSetupEnv({ gh: () => "gh.exe", openConsole: async () => 0, ghAccount: async () => null });
-        const ghNot = startSetupAction("github-signin");
-        await finished(ghNot);
-        assert.match(ghNot.message, /^Still not signed in to GitHub/);
+        // GitHub: no console window. The device code and its page show in the job; gh stores the sign-in itself.
+        const signedOut = { signedIn: false, login: null, error: null };
+        const opened = [];
+        let ghWho = signedOut;
+        const prompted = deferred();
+        const approve = deferred();
+        setSetupEnv({
+            gh: () => "gh.exe",
+            openConsole: async () => assert.fail("GitHub's sign-in opens no console"),
+            ghAccount: async (gh) => (assert.equal(gh, "gh.exe"), ghWho),
+            ghLogin: async (gh, onPrompt, ms) => {
+                assert.equal(gh, "gh.exe");
+                assert.equal(ms, 15 * 60_000);
+                onPrompt({ code: "C575-065A", url: "https://github.com/login/device", copied: true });
+                prompted.resolve();
+                await approve.promise;
+                ghWho = { signedIn: true, login: "octo", error: null };
+                return ok();
+            },
+            openUrl: (url) => opened.push(url),
+        });
+        const gh = startSetupAction("github-signin");
+        await prompted.promise;
+        await until(() => gh.code === "C575-065A");
+        assert.equal(gh.link, "https://github.com/login/device");
+        assert.equal(gh.message, "Enter this code on the GitHub page (it's on your clipboard), then approve the GitHub CLI:");
+        assert.deepEqual(opened, ["https://github.com/login/device"], "the page opens in the browser");
+        approve.resolve();
+        await finished(gh);
+        assert.equal(gh.state, "done");
+        assert.equal(gh.message, "Signed in to GitHub as octo.");
+        assert.equal(gh.code, undefined, "the code goes once it's used");
+        assert.equal(gh.link, undefined);
+
+        // Already signed in: nothing to do.
+        const ghAgain = startSetupAction("github-signin");
+        await finished(ghAgain);
+        assert.equal(ghAgain.message, "Already signed in to GitHub as octo.");
+
+        // Signed in, but GitHub didn't answer: say why, and don't sign in again over it.
+        let logins = 0;
+        setSetupEnv({
+            gh: () => "gh.exe",
+            ghAccount: async () => ({ signedIn: true, login: null, error: "error connecting to api.github.com" }),
+            ghLogin: async () => (logins++, ok()),
+            openUrl: () => {},
+        });
+        const unreachable = startSetupAction("github-signin");
+        await finished(unreachable);
+        assert.equal(unreachable.state, "failed");
+        assert.match(unreachable.message, /signed in, but GitHub didn't answer it: error connecting to api\.github\.com/);
+        assert.equal(logins, 0);
+
+        // The sign-in stopped without signing in.
+        setSetupEnv({ gh: () => "gh.exe", ghAccount: async () => signedOut, ghLogin: async () => fail("authentication cancelled"), openUrl: () => {} });
+        const cancelled = startSetupAction("github-signin");
+        await finished(cancelled);
+        assert.equal(cancelled.message, "The GitHub sign-in stopped: authentication cancelled");
+
+        // Nobody entered the code.
+        setSetupEnv({ gh: () => "gh.exe", ghAccount: async () => signedOut, ghLogin: async () => ({ code: null, stdout: "", stderr: "", timedOut: true }), openUrl: () => {} });
+        const late = startSetupAction("github-signin");
+        await finished(late);
+        assert.match(late.message, /^GitHub waited 15 minutes for the code/);
     }
 
     // cmd quoting for console windows.

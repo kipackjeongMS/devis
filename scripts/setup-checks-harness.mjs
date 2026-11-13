@@ -89,6 +89,13 @@ assert.equal(tokenAccount(""), null);
     r = byId(await run({ github: async () => ({ gh: "gh.exe", login: null, access: false }) }));
     assert.deepEqual(r.github.action, { id: "github-signin", label: "Sign in" });
     assert.deepEqual(r.github.needs, ["Updates"]);
+    // Signed in, but GitHub didn't answer: say why, and offer no sign-in that wouldn't help.
+    r = byId(await run({ github: async () => ({ gh: "gh.exe", login: null, access: false, signedIn: true, error: "error connecting to api.github.com" }) }));
+    assert.equal(r.github.status, "warn");
+    assert.match(r.github.detail, /^The GitHub CLI is signed in, but GitHub didn't answer it: error connecting to api\.github\.com\./);
+    assert.equal(r.github.action, undefined);
+    r = byId(await run({ github: async () => ({ gh: "gh.exe", login: "octo", access: false, signedIn: true, error: "HTTP 502: Bad Gateway" }) }));
+    assert.match(r.github.detail, /^Signed in as octo, but GitHub didn't say whether you can see kipackjeongMS\/devis: HTTP 502/);
     r = byId(await run({ github: async () => ({ gh: "gh.exe", login: "octo", access: false }) }));
     assert.equal(r.github.status, "warn");
     assert.match(r.github.detail, /octo, who can't see kipackjeongMS\/devis yet.*invite/);

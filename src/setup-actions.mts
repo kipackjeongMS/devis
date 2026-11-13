@@ -2,9 +2,12 @@
 // the sign-ins, and getting Devis' source for developer mode. Each runs as a job the page polls.
 //
 // One job per action at a time (pressing Install twice joins the first), and the latest job per
-// action is kept, so a page that reloads still sees how the last one went. Sign-ins open a console
-// window, because az, gh and copilot all sign in interactively; the job waits for that window to
-// close, then checks the sign-in took. Jobs in flight keep the service running.
+// action is kept, so a page that reloads still sees how the last one went. The Azure and Copilot
+// sign-ins open a console window, because az and copilot sign in interactively; the job waits for
+// that window to close, then checks the sign-in took. GitHub needs no window: gh's device sign-in
+// runs hidden, and the page shows its one-time code and opens github.com/login/device. Every
+// sign-in checks first and skips the window when you're already signed in. Jobs in flight keep the
+// service running.
 //
 // Everything that touches the machine goes through SetupEnv, so the harness can stand in for it.
 
@@ -33,6 +36,9 @@ export interface SetupJob {
     restart?: boolean;
     /** What came of it, for the page: the source folder, for devis-source. */
     path?: string;
+    /** While a sign-in waits on a web page: where it is, and the code to enter there. */
+    link?: string;
+    code?: string;
 }
 
 export interface RunResult {
@@ -48,6 +54,12 @@ export interface RunOptions {
     env?: NodeJS.ProcessEnv;
     /** Each non-empty line of output, as it comes. */
     onLine?: (line: string) => void;
+}
+
+export interface GhAccountView {
+    signedIn: boolean;
+    login: string | null;
+    error: string | null;
 }
 
 /** The machine, behind one seam. */
@@ -71,7 +83,15 @@ export interface SetupEnv {
     /** Who Copilot is signed in as, or null when it isn't. */
     copilotAccount(): Promise<string | null>;
     gh(): string | null;
-    ghAccount(gh: string): Promise<string | null>;
+    /** The GitHub CLI's github.com sign-in: whether there is one, who, and why GitHub didn't answer. */
+    ghAccount(gh: string): Promise<GhAccountView>;
+    /**
+     * gh's device sign-in, with no console: `onPrompt` gets the one-time code and the page to enter it on
+     * as soon as gh prints them. Resolves once gh is done (it stores the sign-in itself), or past `timeoutMs`.
+     */
+    ghLogin(gh: string, onPrompt: (prompt: { code: string; url: string; copied: boolean }) => void, timeoutMs: number): Promise<RunResult>;
+    /** Open a web page in the default browser. */
+    openUrl(url: string): void;
     git(): string;
     node(): string;
     npm(): string;
@@ -261,8 +281,33 @@ const realEnv: SetupEnv = {
     },
     gh: () => null,
     async ghAccount(gh) {
-        const r = await runProgram(gh, ["api", "user", "--jq", ".login"], { timeoutMs: 30_000 });
-        return r.code === 0 && r.stdout.trim() ? r.stdout.trim() : null;
+        const { readGhAccount } = await import("./setup-checks.mjs");
+        return readGhAccount(gh, 30_000);
+    },
+    ghLogin(gh, onPrompt, timeoutMs) {
+        // A token in the environment wins over a stored sign-in, and gh refuses to sign in over one.
+        const env: NodeJS.ProcessEnv = { ...process.env, NO_COLOR: "1" };
+        for (const key of ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"]) delete env[key];
+        let said = "";
+        let told = false;
+        return runProgram(gh, ["auth", "login", "--web", "--hostname", "github.com", "--git-protocol", "https"], {
+            timeoutMs,
+            env,
+            onLine(line) {
+                said += line + "\n";
+                const code = /\bcode\b[^\n]*?\b([A-Z0-9]{4}-[A-Z0-9]{4})\b/i.exec(said)?.[1];
+                if (told || !code) return;
+                told = true;
+                const url = /https:\/\/\S+\/login\/device\b/i.exec(said)?.[0] || "https://github.com/login/device";
+                onPrompt({ code: code.toUpperCase(), url, copied: /copied to (the )?clipboard/i.test(said) });
+            },
+        });
+    },
+    openUrl(url) {
+        if (!isWin) return;
+        spawn("rundll32.exe", ["url.dll,FileProtocolHandler", url], { detached: true, stdio: "ignore" })
+            .on("error", () => undefined)
+            .unref();
     },
     git: () => "git",
     node: () => "node",
@@ -302,7 +347,7 @@ interface Outcome {
     path?: string;
 }
 
-type Update = (patch: Partial<Pick<SetupJob, "progress" | "message">>) => void;
+type Update = (patch: Partial<Pick<SetupJob, "progress" | "message" | "code" | "link">>) => void;
 
 function lastLine(text: string): string {
     const lines = text
@@ -362,6 +407,12 @@ async function azureInstall(e: SetupEnv, update: Update): Promise<Outcome> {
 async function azureSignIn(e: SetupEnv, update: Update): Promise<Outcome> {
     const az = e.azureCli();
     if (!az) throw new SetupError("Install the Azure CLI first.");
+    update({ message: "Checking the Azure CLI…" });
+    const already = await e.azureAccount().then(
+        (who) => ({ who }),
+        () => null,
+    );
+    if (already) return { message: already.who ? `Already signed in as ${already.who}.` : "Already signed in." };
     update({ message: "Finish signing in in the window that opened." });
     // No subscriptions is fine: Devis only needs Azure DevOps.
     await e.openConsole("Azure sign-in", cmdLine([az, "login", "--allow-no-subscriptions"]), CONSOLE_MS);
@@ -369,8 +420,9 @@ async function azureSignIn(e: SetupEnv, update: Update): Promise<Outcome> {
     let who: string | null;
     try {
         who = await e.azureAccount();
-    } catch {
-        throw new SetupError("Still not signed in. Try again, and finish signing in in the window that opens.");
+    } catch (error) {
+        const why = lastLine((error as Error)?.message || "");
+        throw new SetupError(`Still not signed in${why === "no output" ? "" : ` (${why})`}. Try again, and finish signing in in the window that opens.`);
     }
     return { message: who ? `Signed in as ${who}.` : "Signed in." };
 }
@@ -378,6 +430,9 @@ async function azureSignIn(e: SetupEnv, update: Update): Promise<Outcome> {
 async function copilotSignIn(e: SetupEnv, update: Update): Promise<Outcome> {
     const login = await e.copilotLogin();
     if (!login) throw new SetupError("Signing in to Copilot needs Agency. Install Agency first, then sign in.");
+    update({ message: "Checking Copilot…" });
+    const already = await e.copilotAccount().catch(() => null);
+    if (already) return { message: `Already signed in as ${already}.` };
     update({ message: "Finish signing in in the window that opened." });
     await e.openConsole("Copilot sign-in", cmdLine(login), CONSOLE_MS);
     update({ message: "Checking the sign-in…" });
@@ -389,12 +444,29 @@ async function copilotSignIn(e: SetupEnv, update: Update): Promise<Outcome> {
 async function githubSignIn(e: SetupEnv, update: Update): Promise<Outcome> {
     const gh = e.gh();
     if (!gh) throw new SetupError("Install the GitHub CLI first: run winget install GitHub.cli, then check again.");
-    update({ message: "Finish signing in in the window that opened." });
-    await e.openConsole("GitHub sign-in", cmdLine([gh, "auth", "login", "--web", "--git-protocol", "https", "--hostname", "github.com"]), CONSOLE_MS);
-    update({ message: "Checking the sign-in…" });
-    const who = await e.ghAccount(gh).catch(() => null);
-    if (!who) throw new SetupError("Still not signed in to GitHub. Try again, and finish signing in in the window that opens.");
-    return { message: `Signed in to GitHub as ${who}.` };
+    update({ message: "Checking the GitHub CLI…" });
+    const before = await e.ghAccount(gh).catch(() => null);
+    if (before?.login) return { message: `Already signed in to GitHub as ${before.login}.` };
+    // Signing in again wouldn't help: say what GitHub said instead.
+    if (before?.signedIn) {
+        throw new SetupError(`The GitHub CLI is signed in, but GitHub didn't answer it: ${before.error || "no reason given"}. Check the network or proxy, then try again.`);
+    }
+    update({ message: "Starting the GitHub sign-in…" });
+    const login = await e.ghLogin(
+        gh,
+        ({ code, url, copied }) => {
+            e.openUrl(url);
+            update({ message: `Enter this code on the GitHub page${copied ? " (it's on your clipboard)" : ""}, then approve the GitHub CLI:`, code, link: url });
+        },
+        CONSOLE_MS,
+    );
+    if (login.timedOut) throw new SetupError(`GitHub waited 15 minutes for the code, so ${APP_NAME} stopped the sign-in. Try again.`);
+    update({ message: "Checking the sign-in…", code: undefined, link: undefined });
+    const after = await e.ghAccount(gh).catch(() => null);
+    if (after?.login) return { message: `Signed in to GitHub as ${after.login}.` };
+    if (after?.signedIn) throw new SetupError(`Signed in, but GitHub didn't answer the GitHub CLI: ${after.error || "no reason given"}. Check the network or proxy, then try again.`);
+    if (login.code !== 0) throw new SetupError(`The GitHub sign-in stopped: ${lastLine(login.stderr || login.stdout)}`);
+    throw new SetupError("Still not signed in to GitHub. Try again, and approve the GitHub CLI on the page that opens.");
 }
 
 async function agencyInstall(e: SetupEnv, update: Update): Promise<Outcome> {
@@ -485,17 +557,23 @@ export function startSetupAction(action: string, input: { folder?: unknown } = {
         if (job.state !== "running") return;
         if ("progress" in patch) job.progress = patch.progress === null || patch.progress === undefined ? null : Math.max(0, Math.min(1, patch.progress));
         if (patch.message) job.message = patch.message;
+        if ("code" in patch) job.code = patch.code;
+        if ("link" in patch) job.link = patch.link;
     };
     void machine()
         .then((e) => RUNNERS[action](e, update, input))
         .then(
             (outcome) => {
+                delete job.code;
+                delete job.link;
                 Object.assign(job, { state: "done", progress: 1, message: outcome.message, endedAt: new Date().toISOString() });
                 if (outcome.restart) job.restart = true;
                 if (outcome.path) job.path = outcome.path;
                 console.log(`[setup] ${LABELS[action]}: ${outcome.message}`);
             },
             (error: Error) => {
+                delete job.code;
+                delete job.link;
                 Object.assign(job, { state: "failed", message: error?.message || String(error), endedAt: new Date().toISOString() });
                 console.warn(`[setup] ${LABELS[action]} failed: ${job.message}`);
             },
