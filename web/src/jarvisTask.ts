@@ -807,8 +807,6 @@ function selectWorker(sessionId: string): void {
   autoSize(m.input);
   paintTray(m.pane.tray, imageDrafts.get(sessionId) ?? null, patchHtml);
   render();
-  // Each worker's conversation opens at its latest message.
-  m.log.scrollTop = m.log.scrollHeight;
   m.input.focus();
 }
 
@@ -1722,6 +1720,7 @@ function renderLog(task: TodayTask, w: TodayWorker | undefined): void {
   if (!w) {
     region("log", JSON.stringify(["none", task.status]), () =>
       paintChatLog(m.log, {
+        session: "",
         items: [],
         empty:
           task.status === "done"
@@ -1745,6 +1744,8 @@ function renderLog(task: TodayTask, w: TodayWorker | undefined): void {
   const showPending = !!pending;
   const s = workerState(w);
   const spec: ChatLogSpec = {
+    // Each worker's conversation opens at its latest message.
+    session: w.sessionId,
     items: chatItems(messages, notes),
     loading: !!log?.loading && !messages.length,
     notice: log?.error

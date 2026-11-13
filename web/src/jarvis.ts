@@ -553,7 +553,7 @@ function mount(): void {
   leadPane.steer.addEventListener("click", () => void sendToLead(leadPane.input.value, "now"));
   void loadModelCatalog().then(() => renderLeadPicker());
   overviewEl = el('<div class="jv-overview"></div>');
-  leadPane.log.before(overviewEl);
+  leadPane.view.before(overviewEl);
 
   railButton = q(".jv-railbtn");
   railBadge = q(".jv-badge");
