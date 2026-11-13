@@ -376,6 +376,8 @@ try {
     assert.ok(commentsTool?.skipPermission, "the worker has task_pr_comments");
     const buildsTool = session.config.tools.find((t) => t.name === "task_pr_builds");
     assert.ok(buildsTool?.skipPermission, "the worker has task_pr_builds");
+    const spawnTool = session.config.tools.find((t) => t.name === "task_start_worker");
+    const workersBefore = (await store.listWorkers(task.id)).length;
     const linkedBefore = await linkedIds();
     const notesBefore = await userNotes({ action: "read" });
     const seen = {};
@@ -398,6 +400,7 @@ try {
         seen.done = await commentsTool.handler({ action: "done" }, as);
         seen.buildCheck = await buildsTool.handler({ action: "check", prId: 7 }, as);
         seen.buildDone = await buildsTool.handler({ action: "done", prId: 7 }, as);
+        seen.spawn = await spawnTool.handler({ instructions: "Take the docs" }, as);
         seen.mcpUpdate = await s.ask(mcp("wit_work_item", { action: "update", id: 1 }));
         seen.mcpGet = await s.ask(mcp("wit_work_item", { action: "get", id: 1 }));
         seen.mcpWriteTool = await s.ask(mcp("repo_pull_request_thread_write", { action: "get" }));
@@ -408,10 +411,12 @@ try {
     const reviewStatusCount = (await store.listStatuses({ taskId: task.id })).length;
     assert.equal(await workers.auditTurn(plain.sessionId, "Review PR 7's comments", "Review PR 7"), "done");
     const refused = /^While reviewing PR feedback, only read; /;
-    for (const key of ["append", "write", "noAction", "todo", "status", "link", "vpropose", "vrun", "check", "done", "buildCheck", "buildDone"]) {
+    for (const key of ["append", "write", "noAction", "todo", "status", "link", "vpropose", "vrun",     "check", "done", "buildCheck", "buildDone", "spawn"]) {
         assert.match(String(seen[key]), refused, `${key} is refused during a review`);
     }
     assert.match(seen.append, /task_artifacts append can't run now/);
+        assert.match(seen.spawn, /task_start_worker can't run now/);
+        assert.equal((await store.listWorkers(task.id)).length, workersBefore, "no worker was started");
     assert.match(seen.status, /task_status can't run now/);
     assert.equal(seen.read, "# Design\n\nOption B.", "reading an artifact still works");
     assert.match(seen.list, /^note\.md · /);
@@ -749,6 +754,7 @@ try {
     relive.script = async (s) => {
         guard.push(await s.ask({ kind: "shell", fullCommandText: "git push" }));
         guard.push(await s.question({ question: "Should I push?" }));
+        guard.push(await s.config.tools.find((t) => t.name === "task_start_worker").handler({ instructions: "x" }, { sessionId: s.sessionId }));
         return "Here's the recap:\n\n# Recap: Parameter editor\n\n- Goal: an editor for block parameters.\n- Decision: option B, for the simpler schema.";
     };
     await store.updateTask(task.id, { status: "done" });
@@ -771,6 +777,7 @@ try {
     assert.equal(long.match(/· w: u\d+/g).length, 200);
     assert.equal(guard[0].kind, "reject", "a recap turn can't run commands");
     assert.match(guard[1].answer, /isn't here/, "or wait on a question");
+    assert.equal(guard[2], "While writing the recap, only read.", "or start a worker");
     assert.equal(workers.workerLiveState(plain.sessionId).requests.length, 0, "nothing reached Needs you");
     assert.equal((await store.listStatuses({ taskId: task.id })).length, statusCount, "the recap posts no status");
     assert.equal((await store.getWorker(plain.sessionId)).summary, "Wrote the task's recap (recap.md).");
@@ -781,6 +788,8 @@ try {
     // ---- a done task takes no more work ----
     await assert.rejects(workers.messageWorker(plain.sessionId, "More"), /Reopen the task/);
     await assert.rejects(workers.startWorker({ taskId: task.id, cwd: repo, prompt: "x" }), /Reopen the task/);
+    const reliveSpawn = relive.config.tools.find((t) => t.name === "task_start_worker");
+    assert.match(await reliveSpawn.handler({ instructions: "x" }, { sessionId: plain.sessionId }), /^Not started: Reopen the task/, "nor from a worker");
 
     // ---- marked done mid-turn: the recap waits for the turn to end ----
     const moverSession = created.find((s) => s.sessionId === mover.sessionId);
@@ -1162,6 +1171,45 @@ try {
         await assert.rejects(workers.messageWorker(iw.sessionId, "x", undefined, undefined, [{ id: "nope.png", name: "x" }]), /isn't one the app saved/);
         await assert.rejects(workers.messageWorker(iw.sessionId, "", undefined, undefined, []), /Tell the worker/);
         await workers.removeWorker(iw.sessionId);
+    }
+
+    // ---- a worker starts another on its own task, when the user asks it to ----
+    {
+        const { task: sib } = await store.createTask({ title: "Sibling work" });
+        const { task: other } = await store.createTask({ title: "Someone else's" });
+        const first = await workers.startWorker({ taskId: sib.id, cwd: repo, prompt: "Start" });
+        await until(async () => (await stateOf(first.sessionId)) === "turnDone", "first worker's turn");
+        const firstSession = created.find((s) => s.sessionId === first.sessionId);
+        assert.match(firstSession.config.systemMessage.content, /task_start_worker only when the user explicitly asks for one, never on your own/);
+        const startTool = firstSession.config.tools.find((t) => t.name === "task_start_worker");
+        assert.ok(startTool?.skipPermission, "the worker has task_start_worker");
+        const start = (args, sessionId = first.sessionId) => startTool.handler(args, { sessionId });
+        assert.match(await start({ instructions: "x" }, "not-a-worker"), /not one of the Workspace's workers/);
+        assert.equal(await start({ instructions: "  " }), "Put what the new worker should do in instructions.");
+        assert.match(await start({ instructions: "x", model: "bad model!" }), /^Not started: Unknown model/);
+        assert.equal((await store.listWorkers(sib.id)).length, 1, "nothing started on a refusal");
+
+        const reply = await start({ instructions: "Take the docs", model: "gpt-5-mini", taskId: other.id });
+        const [, label, cwd] = reply.match(/^Started (\S+) in (.+?)\. It works beside you on this task/) || [];
+        assert.ok(label, reply);
+        const sibling = (await store.listWorkers(sib.id)).find((w) => w.label === label);
+        assert.ok(sibling, "the new worker is on the asking worker's task, whatever the input said");
+        assert.deepEqual(await store.listWorkers(other.id), []);
+        assert.notEqual(sibling.label, first.label);
+        assert.equal(sibling.cwd, repo, "on a task without a folder it works in the asking worker's folder");
+        assert.equal(cwd, repo);
+        const siblingSession = created.at(-1);
+        assert.equal(siblingSession.sessionId, sibling.sessionId);
+        assert.equal(siblingSession.config.model, "gpt-5-mini");
+        await until(async () => (await stateOf(sibling.sessionId)) === "turnDone", "sibling's turn");
+        assert.equal(siblingSession.sent[0], `Instructions from ${first.label}, another worker on this task, passing on what the user asked:\nTake the docs`);
+        assert.equal(siblingSession.displayed[0], "Take the docs", "the chat shows what was asked, not the lead-in");
+        const started = await store.listEvents({ taskId: sib.id, kinds: ["worker.started"] });
+        assert.ok(started.some((e) => e.text.endsWith(`, by ${first.label}`)), "history names who started it");
+        assert.ok(!started.find((e) => e.sessionId === first.sessionId).text.includes(", by "), "a worker the user starts names no one");
+
+        await workers.discardWorkerSessions(await store.deleteTask(sib.id));
+        await store.deleteTask(other.id);
     }
 
     // ---- the history records what happened ----
