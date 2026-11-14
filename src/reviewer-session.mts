@@ -9,6 +9,7 @@
 import { spawn } from "node:child_process";
 import { defineTool, type CopilotSession, type Tool } from "@github/copilot-sdk";
 import {
+    explainCopilotError,
     prSessionOptions,
     replyText,
     resumeCommand,
@@ -278,7 +279,7 @@ export function sendReviewerChat(sessionId: string, scope: ReviewerScope, text: 
         }
     }).then(
         () => settle(null),
-        (error: Error) => settle(error.message || "The reviewer did not reply."),
+        (error: Error) => settle(explainCopilotError(error.message || "") || "The reviewer did not reply."),
     );
 }
 

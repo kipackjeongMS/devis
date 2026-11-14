@@ -11,7 +11,7 @@ assert.match(models, /withCopilotClient/);
 assert.match(runtime, /@github\/copilot-sdk/);
 assert.match(runtime, /resolveCopilotCliPath/);
 assert.match(runtime, /process\.platform === "win32" \? "where\.exe" : "which"/);
-assert.match(runtime, /RuntimeConnection\.forStdio\(\{\s*path:\s*runtime\.command,\s*args:\s*runtime\.args\s*\}\)/);
+assert.match(runtime, /RuntimeConnection\.forStdio\(\{\s*path:\s*runtime\.command,\s*args:\s*runtime\.args[,\s}]/);
 assert.match(models, /client\.listModels\(\)/);
 assert.doesNotMatch(models, /FALLBACK|comma-separated list|copilot -p/);
 assert.match(models, /throw new Error\("Copilot returned no available models"\)/);

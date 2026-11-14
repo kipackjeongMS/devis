@@ -4,7 +4,7 @@
 
 import { randomUUID } from "node:crypto";
 import { defineTool, type Tool } from "@github/copilot-sdk";
-import { prSessionOptions, sendAndSettle, withCopilotClient, type SettleSession } from "./copilot-runtime.mjs";
+import { explainCopilotError, prSessionOptions, sendAndSettle, withCopilotClient, type SettleSession } from "./copilot-runtime.mjs";
 import { publishReview, PUBLISH_REVIEW_SCHEMA } from "./review-publish.mjs";
 import {
     acknowledgeReviewJobs,
@@ -90,7 +90,7 @@ export async function reviewRunnerActivity(): Promise<WorkItem[]> {
 }
 
 function errorMessage(error: unknown): string {
-    return (error as Error)?.message || String(error);
+    return explainCopilotError((error as Error)?.message || String(error));
 }
 
 /** The tool a reviewer session calls once to store its finished review. */

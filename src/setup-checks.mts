@@ -25,11 +25,15 @@ export interface SetupCheck {
 
 export interface CopilotProbe {
     via: "agency" | "bundled" | "copilot";
+    /** Whether that's the Copilot built into Devis (Agency pointed at it, or run directly). */
+    builtIn?: boolean;
     version: string;
     signedIn: boolean;
     login: string | null;
     /** Whether Devis can open a sign-in: through Agency or the Copilot CLI. The built-in runtime has none. */
     canSignIn: boolean;
+    /** The oldest Copilot Devis works with, when this one is older; else null. */
+    needsVersion?: string | null;
 }
 
 export interface GitHubProbe {
@@ -88,13 +92,26 @@ export function tokenAccount(token: string): string | null {
     }
 }
 
-const RUNTIME = { agency: "Through Agency", bundled: "Built-in runtime", copilot: "Copilot CLI" } as const;
+/** Which Copilot runs, and how: "Through Agency · Copilot 1.0.94, built into Devis". */
+function runtimeLine(c: CopilotProbe): string {
+    const version = c.version ? `Copilot ${c.version}` : "Copilot";
+    if (c.via === "agency") return `Through Agency · ${version}${c.builtIn ? `, built into ${APP_NAME}` : ""}`;
+    if (c.via === "bundled") return `${version}, built into ${APP_NAME}`;
+    return `${version} CLI`;
+}
 
 async function copilotCheck(probes: SetupProbes, ms: number): Promise<SetupCheck> {
     const row = { id: "copilot", label: "GitHub Copilot" } as const;
     try {
         const c = await within(probes.copilot(), ms);
-        const base = [RUNTIME[c.via], c.version].filter(Boolean).join(" ");
+        const base = runtimeLine(c);
+        if (c.needsVersion) {
+            return {
+                ...row,
+                status: "warn",
+                detail: `${base}, older than the ${c.needsVersion} ${APP_NAME} needs, so the Lead, reviews and summaries fail. Run \`copilot update\` in a terminal, then restart ${APP_NAME}.`,
+            };
+        }
         if (!c.signedIn) {
             if (c.canSignIn) return { ...row, status: "warn", detail: `${base}. Not signed in to GitHub, so reviews and the Lead wait.`, action: { id: "copilot-signin", label: "Sign in" } };
             return { ...row, status: "warn", detail: `${base}. Not signed in to GitHub, so reviews and the Lead wait. Install Agency to sign in, or run \`copilot login\`, then check again.` };
@@ -216,7 +233,7 @@ export async function readGhAccount(exe: string, timeoutMs = 20_000): Promise<Gh
 
 /** The real machine. */
 export async function machineProbes(): Promise<SetupProbes> {
-    const [{ resolveCopilotRuntime, resolveCopilotCliPath, withCopilotClient, agencyExePath }, tools, { getAzToken }, { ADO_RESOURCE }, { installedIdes }] = await Promise.all([
+    const [{ resolveCopilotRuntime, resolveCopilotCliPath, withCopilotClient, agencyExePath, olderThan, MIN_COPILOT_VERSION }, tools, { getAzToken }, { ADO_RESOURCE }, { installedIdes }] = await Promise.all([
         import("./copilot-runtime.mjs"),
         import("./machine-tools.mjs"),
         import("./azauth.mjs"),
@@ -225,10 +242,11 @@ export async function machineProbes(): Promise<SetupProbes> {
     ]);
     return {
         copilot: async () => {
-            const { via } = await resolveCopilotRuntime();
+            const { via, builtIn } = await resolveCopilotRuntime();
             const [status, auth] = await withCopilotClient((client) => Promise.all([client.getStatus(), client.getAuthStatus()]));
             const canSignIn = !!agencyExePath() || !!(await resolveCopilotCliPath().catch(() => null));
-            return { via, version: status.version, signedIn: auth.isAuthenticated, login: auth.login ?? null, canSignIn };
+            const needsVersion = olderThan(status.version, MIN_COPILOT_VERSION) ? MIN_COPILOT_VERSION : null;
+            return { via, builtIn, version: status.version, signedIn: auth.isAuthenticated, login: auth.login ?? null, canSignIn, needsVersion };
         },
         azureCli: () => tools.findAzureCli().command,
         adoToken: () => getAzToken(ADO_RESOURCE),

@@ -20,12 +20,35 @@ let fresh = 0;
 const load = () => import(`../copilot-runtime.mjs?case=${++fresh}`);
 
 try {
-    // ---- with Agency ----
+    // ---- with Agency: pointed at the Copilot built into Devis, the version the SDK is built for ----
     process.env.ADO_PR_OPS_AGENCY_PATH = agency;
     let rt = await load();
-    assert.deepEqual(await rt.resolveCopilotRuntime(), { via: "agency", command: agency, args: ["copilot"], warning: null });
+    const builtIn = rt.bundledRuntimePath();
+    assert.deepEqual(await rt.resolveCopilotRuntime(), {
+        via: "agency",
+        command: agency,
+        args: ["copilot"],
+        env: { AGENCY_COPILOT_PATH: builtIn },
+        builtIn: true,
+        warning: null,
+    });
     assert.deepEqual(await rt.resumeCommand(id), { command: agency, args: ["copilot", "--resume", id] }, "terminals reopen through Agency too");
     assert.deepEqual(Object.keys(rt.reviewMcpServers("msazure", "Azure AppConfig")).sort(), ["ado", "bluebird"], "PR sessions scope ado and bluebird to the PR");
+    // Opting out leaves Agency to its own Copilot.
+    process.env.ADO_PR_OPS_AGENCY_OWN_COPILOT = "1";
+    rt = await load();
+    assert.deepEqual(await rt.resolveCopilotRuntime(), { via: "agency", command: agency, args: ["copilot"], builtIn: false, warning: null });
+    delete process.env.ADO_PR_OPS_AGENCY_OWN_COPILOT;
+
+    // ---- versions: older than 1.0.51 lacks session.options.update ----
+    assert.equal(rt.olderThan("1.0.50", rt.MIN_COPILOT_VERSION), true);
+    assert.equal(rt.olderThan("1.0.51", rt.MIN_COPILOT_VERSION), false);
+    assert.equal(rt.olderThan("1.0.112", rt.MIN_COPILOT_VERSION), false);
+    assert.equal(rt.olderThan("0.0.419-0", rt.MIN_COPILOT_VERSION), true);
+    assert.equal(rt.olderThan("v1.1.0", rt.MIN_COPILOT_VERSION), false);
+    assert.equal(rt.olderThan("unknown", rt.MIN_COPILOT_VERSION), false, "an unreadable version isn't called old");
+    assert.match(rt.explainCopilotError("Unhandled method session.options.update"), /^Copilot is too old for Devis: it needs 1\.0\.51 or newer\. Run copilot update/);
+    assert.equal(rt.explainCopilotError("something else"), "something else");
 
     // ---- without it: the runtime built into Devis, and a warning that says what's missing ----
     process.env.ADO_PR_OPS_AGENCY_PATH = join(root, "missing", "agency.exe");
@@ -33,7 +56,7 @@ try {
     const bundledExe = rt.bundledRuntimePath();
     assert.match(bundledExe ?? "", /copilot-sdk-win32-x64[\\/]prebuilds[\\/]win32-x64[\\/]copilot-runtime\.exe$/, "the SDK's runtime ships in node_modules");
     const bundled = await rt.resolveCopilotRuntime();
-    assert.deepEqual([bundled.via, bundled.command, bundled.args], ["bundled", bundledExe, []]);
+    assert.deepEqual([bundled.via, bundled.command, bundled.args, bundled.builtIn], ["bundled", bundledExe, [], true]);
     assert.match(bundled.warning, /Agency isn't installed \(looked for .+missing.+agency\.exe\), so Copilot runs on the runtime built into Devis/);
     assert.deepEqual(await rt.resumeCommand(id), { command: copilot, args: ["--resume", id] }, "the built-in runtime has no terminal: the CLI reopens it");
     delete process.env.ADO_PR_OPS_COPILOT_PATH;

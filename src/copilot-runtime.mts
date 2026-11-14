@@ -3,9 +3,11 @@
 // catalog, and the Workspace's Lead, workers and write-ups. It runs through Agency
 // (`agency copilot`), so every session gets Agency's MCP servers, plugins and
 // session tracking, on the user's own Copilot login and session store (a
-// session can be reopened with `agency copilot --resume <id>`). Without Agency
-// it runs the Copilot runtime that ships inside Devis (the SDK's platform package),
-// and only when that's missing too, the `copilot` CLI on PATH; either way it says so.
+// session can be reopened with `agency copilot --resume <id>`). Agency would run
+// whatever `copilot` it finds, so Devis points it (AGENCY_COPILOT_PATH) at the Copilot
+// runtime that ships inside Devis (the SDK's platform package), the version this SDK
+// is built for. Without Agency it runs that runtime directly, and only when that's
+// missing too, the `copilot` CLI on PATH; either way it says so.
 //
 // To keep the machine responsive, the runtime and every MCP server under it run at
 // below-normal CPU priority (runtime-priority.mts), and sessions share one
@@ -25,6 +27,7 @@ import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
+import { APP_NAME } from "./brand.mjs";
 import { keepTreeLow } from "./runtime-priority.mjs";
 import { sharedMcpServers, sharedPlaywrightReady, startSharedPlaywright, stopSharedPlaywright } from "./shared-playwright.mjs";
 
@@ -73,8 +76,40 @@ export interface CopilotRuntime {
     /** The program to run, and the arguments that come before Copilot's own. */
     command: string;
     args: string[];
+    /** Environment added for the runtime: Agency's AGENCY_COPILOT_PATH, when Devis pins its own Copilot. */
+    env?: Record<string, string>;
+    /** Whether the Copilot that runs is the one built into Devis (directly, or under Agency). */
+    builtIn: boolean;
     /** Set when Copilot runs without Agency: what's missing, for the user to see. */
     warning: string | null;
+}
+
+/**
+ * The oldest Copilot CLI this SDK works with: older ones don't know `session.options.update`, which the
+ * SDK sends for any session that skips custom instructions (the Lead, reviews, summaries), so those fail
+ * with "Unhandled method session.options.update" while workers still run.
+ */
+export const MIN_COPILOT_VERSION = "1.0.51";
+
+/** a < b, comparing major.minor.patch (a pre-release or build suffix is ignored). Unreadable is never older. */
+export function olderThan(a: string | null | undefined, b: string): boolean {
+    const parse = (v: string | null | undefined) => /^v?(\d+)\.(\d+)\.(\d+)/.exec((v || "").trim())?.slice(1).map(Number) ?? null;
+    const x = parse(a);
+    const y = parse(b);
+    if (!x || !y) return false;
+    for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i]! < y[i]!;
+    return false;
+}
+
+let runningVersion: string | null = null;
+
+/** The Copilot version the shared runtime reported when it started, or null before it has. */
+export const copilotVersion = (): string | null => runningVersion;
+
+/** What to say when the runtime is too old for something Devis asked of it. */
+export function explainCopilotError(message: string): string {
+    if (!/Unhandled method session\.options\.update/i.test(message)) return message;
+    return `Copilot ${runningVersion ? `CLI ${runningVersion} is` : "is"} too old for ${APP_NAME}: it needs ${MIN_COPILOT_VERSION} or newer. Run copilot update in a terminal, then restart ${APP_NAME}.`;
 }
 
 /**
@@ -100,18 +135,25 @@ const WITHOUT_AGENCY =
 
 async function locateRuntime(): Promise<CopilotRuntime> {
     const agency = agencyExePath();
-    if (agency) return { via: "agency", command: agency, args: ["copilot"], warning: null };
-    const looked = `Agency isn't installed (looked for ${agencyExpectedPath()})`;
     const bundled = bundledRuntimePath();
+    if (agency) {
+        // Agency runs whatever `copilot` it finds, which can be older than this SDK supports (or
+        // newer than it was tested with). Point it at the runtime built into Devis, which matches the SDK.
+        if (bundled && !process.env.ADO_PR_OPS_AGENCY_OWN_COPILOT) {
+            return { via: "agency", command: agency, args: ["copilot"], env: { AGENCY_COPILOT_PATH: bundled }, builtIn: true, warning: null };
+        }
+        return { via: "agency", command: agency, args: ["copilot"], builtIn: false, warning: null };
+    }
+    const looked = `Agency isn't installed (looked for ${agencyExpectedPath()})`;
     if (bundled) {
         const warning = `${looked}, so Copilot runs on the runtime built into Devis: ${WITHOUT_AGENCY}`;
         console.warn(`[copilot] ${warning}`);
-        return { via: "bundled", command: bundled, args: [], warning };
+        return { via: "bundled", command: bundled, args: [], builtIn: true, warning };
     }
     const cli = await resolveCopilotCliPath();
     const warning = `${looked}, so Copilot runs on the Copilot CLI: ${WITHOUT_AGENCY}`;
     console.warn(`[copilot] ${warning}`);
-    return { via: "copilot", command: cli, args: [], warning };
+    return { via: "copilot", command: cli, args: [], builtIn: false, warning };
 }
 
 /** Agency's `copilot` when it's installed, else the built-in runtime, else the CLI. Read once per service. */
@@ -148,14 +190,24 @@ export function getCopilotClient(): Promise<CopilotClient> {
     if (!clientPromise) {
         clientPromise = (async () => {
             const runtime = await resolveCopilotRuntime();
+            // `env` replaces the inherited environment, so it carries all of it plus the additions.
+            const env = runtime.env ? { ...inheritedEnv(), ...runtime.env } : undefined;
             const client = new CopilotClient({
-                connection: RuntimeConnection.forStdio({ path: runtime.command, args: runtime.args }),
+                connection: RuntimeConnection.forStdio({ path: runtime.command, args: runtime.args, ...(env ? { env } : {}) }),
                 // Agency gives the runtime access to the folder it starts in: start it in the empty one.
                 workingDirectory: sessionWorkingDirectory(),
             });
             startSharedPlaywright(sessionWorkingDirectory());
             await client.start();
-            console.log(`[copilot] runtime started through ${RUNTIME_LABEL[runtime.via]} (${runtime.command})`);
+            runningVersion = await client
+                .getStatus()
+                .then((s) => s.version || null)
+                .catch(() => null);
+            const which = runtime.builtIn && runtime.via === "agency" ? ", on the Copilot built into Devis" : "";
+            console.log(`[copilot] runtime ${runningVersion ?? "(version unknown)"} started through ${RUNTIME_LABEL[runtime.via]}${which} (${runtime.command})`);
+            if (olderThan(runningVersion, MIN_COPILOT_VERSION)) {
+                console.warn(`[copilot] Copilot ${runningVersion} is older than ${MIN_COPILOT_VERSION}: the Lead, reviews and summaries will fail until it's updated (copilot update).`);
+            }
             keepTreeLow(runtimeProcessId(client), "copilot runtime");
             await sharedPlaywrightReady(PLAYWRIGHT_GRACE_MS);
             return client;
@@ -165,6 +217,13 @@ export function getCopilotClient(): Promise<CopilotClient> {
         });
     }
     return clientPromise;
+}
+
+/** This process's environment, without unset entries (the SDK takes strings only). */
+function inheritedEnv(): Record<string, string> {
+    const env: Record<string, string> = {};
+    for (const [key, value] of Object.entries(process.env)) if (typeof value === "string") env[key] = value;
+    return env;
 }
 
 const DEAD_RUNTIME = /not connected|connection (?:closed|failed)|server exited|EPIPE|ECONNRESET|disposed/i;

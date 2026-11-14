@@ -5,7 +5,7 @@
 
 import { mkdirSync } from "node:fs";
 import { defineTool, type CopilotSession, type PermissionRequest, type ResumeSessionConfig, type Tool } from "@github/copilot-sdk";
-import { CLIENT_NAME, sendAndSettle, TurnStoppedError, WEB_BRIEF, withCopilotClient } from "./copilot-runtime.mjs";
+import { CLIENT_NAME, explainCopilotError, sendAndSettle, TurnStoppedError, WEB_BRIEF, withCopilotClient } from "./copilot-runtime.mjs";
 import { sharedMcpServers } from "./shared-playwright.mjs";
 import type { WorkItem } from "./service-files.mjs";
 import { runNotesAction } from "./jarvis-notes.mjs";
@@ -795,7 +795,7 @@ function startLeadTurn(text: string, images: readonly ChatImage[] = []): void {
             const stopped = lead.stopping || error instanceof TurnStoppedError;
             ended = stopped ? "stopped" : "failed";
             if (stopped) lead.stopped = true;
-            else lead.error = (error as Error).message || `${LEAD_NAME} did not reply.`;
+            else lead.error = explainCopilotError((error as Error).message || "") || `${LEAD_NAME} did not reply.`;
             const session = await lead.session?.catch(() => null);
             await session?.abort().catch(() => undefined);
             // Drop the cached session (not the saved id) so the next message resumes it afresh.

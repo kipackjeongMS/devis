@@ -33,7 +33,7 @@ assert.equal(tokenAccount(""), null);
     assert.deepEqual(rows.map((r) => r.id), ["copilot", "azure", "github", "git", "agency", "vscode"]);
     assert.ok(rows.every((r) => r.status === "ok"), JSON.stringify(rows));
     const r = byId(rows);
-    assert.equal(r.copilot.detail, "Through Agency 1.0.40 · octo");
+    assert.equal(r.copilot.detail, "Through Agency · Copilot 1.0.40 · octo");
     assert.equal(r.azure.detail, "Signed in through the Azure CLI as me@contoso.com");
     assert.equal(r.git.detail, "Git 2.50.1 on this machine");
     assert.equal(r.vscode.detail, "Found VSCode and VSCode Insiders");
@@ -44,11 +44,17 @@ assert.equal(tokenAccount(""), null);
 
 // ---- Copilot ----
 {
-    let r = byId(await run({ copilot: async () => ({ via: "bundled", version: "1.0.18", signedIn: true, login: null }) }));
-    assert.equal(r.copilot.detail, "Built-in runtime 1.0.18");
+    let r = byId(await run({ copilot: async () => ({ via: "bundled", version: "1.0.94", signedIn: true, login: null }) }));
+    assert.equal(r.copilot.detail, "Copilot 1.0.94, built into Devis");
+    r = byId(await run({ copilot: async () => ({ via: "agency", builtIn: true, version: "1.0.94", signedIn: true, login: "octo" }) }));
+    assert.equal(r.copilot.detail, "Through Agency · Copilot 1.0.94, built into Devis · octo");
+    // A Copilot too old for the SDK: the Lead, reviews and summaries fail, so it says so even when signed in.
+    r = byId(await run({ copilot: async () => ({ via: "agency", version: "1.0.50", signedIn: true, login: "octo", needsVersion: "1.0.51" }) }));
+    assert.equal(r.copilot.status, "warn");
+    assert.match(r.copilot.detail, /^Through Agency · Copilot 1\.0\.50, older than the 1\.0\.51 Devis needs, so the Lead, reviews and summaries fail\. Run `copilot update`/);
     r = byId(await run({ copilot: async () => ({ via: "copilot", version: "1.0.40", signedIn: false, login: null, canSignIn: true }) }));
     assert.equal(r.copilot.status, "warn");
-    assert.match(r.copilot.detail, /^Copilot CLI 1\.0\.40\. Not signed in/);
+    assert.match(r.copilot.detail, /^Copilot 1\.0\.40 CLI\. Not signed in/);
     assert.deepEqual(r.copilot.action, { id: "copilot-signin", label: "Sign in" });
     r = byId(await run({ copilot: async () => ({ via: "bundled", version: "1.0.18", signedIn: false, login: null, canSignIn: false }) }));
     assert.equal(r.copilot.action, undefined, "the built-in runtime can't open a sign-in");
