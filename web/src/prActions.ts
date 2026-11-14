@@ -259,6 +259,8 @@ export interface ActionDialogOptions {
   confirmLabel: string;
   danger?: boolean;
   onConfirm: (dialog: HTMLElement) => Promise<void>;
+  /** After the dialog is gone, however it closed. */
+  onClose?: () => void;
 }
 
 export function openActionDialog(opts: ActionDialogOptions): HTMLElement {
@@ -289,8 +291,11 @@ export function openActionDialog(opts: ActionDialogOptions): HTMLElement {
     document.removeEventListener("keydown", onKey, true);
     overlay.remove();
     returnFocus?.focus();
+    opts.onClose?.();
   };
   const onKey = (event: KeyboardEvent): void => {
+    // A field's open suggestion list takes Escape first, to close just the list.
+    if (event.key === "Escape" && (event.target as Element | null)?.matches?.('[role="combobox"][aria-expanded="true"]')) return;
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation(); // keep the PR slide-over open

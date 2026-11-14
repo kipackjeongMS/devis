@@ -182,6 +182,8 @@ interface RawOptions {
     token?: string;
     accept?: string;
     body?: unknown;
+    /** Socket-idle limit for this call; REQUEST_TIMEOUT_MS when unset. */
+    timeoutMs?: number;
 }
 
 // Socket-idle limit for one ADO call: a stalled request would otherwise hold its
@@ -228,9 +230,8 @@ function rawRequest(method: string, url: string, opts: RawOptions = {}, retried 
                 );
             },
         );
-        req.setTimeout(REQUEST_TIMEOUT_MS, () =>
-            req.destroy(new Error(`ADO ${method} timed out after ${REQUEST_TIMEOUT_MS / 1000}s`)),
-        );
+        const timeoutMs = opts.timeoutMs ?? REQUEST_TIMEOUT_MS;
+        req.setTimeout(timeoutMs, () => req.destroy(new Error(`ADO ${method} timed out after ${timeoutMs / 1000}s`)));
         req.on("error", (err: NodeJS.ErrnoException) => {
             // The server may close an idle keep-alive socket just as we reuse it.
             // A GET is safe to replay once on a fresh socket; writes never are.
@@ -245,9 +246,9 @@ function rawRequest(method: string, url: string, opts: RawOptions = {}, retried 
     });
 }
 
-async function adoJson(method: string, url: string, body?: unknown): Promise<any> {
+async function adoJson(method: string, url: string, body?: unknown, timeoutMs?: number): Promise<any> {
     const token = await getToken();
-    const r = await rawRequest(method, url, { token, body });
+    const r = await rawRequest(method, url, { token, body, timeoutMs });
     if (r.status < 200 || r.status >= 300) {
         throw new Error(`ADO ${method} ${r.status}: ${r.text.slice(0, 500)}`);
     }
@@ -1110,7 +1111,7 @@ export interface WorkItemInfo {
 const WORK_ITEM_FIELDS = ["System.Title", "System.WorkItemType", "System.State", "System.TeamProject", "System.Parent"];
 
 /** Work items by id, in one org. Ids that do not exist (or are not visible) are left out. */
-export async function getWorkItems(org: string, ids: number[]): Promise<WorkItemInfo[]> {
+export async function getWorkItems(org: string, ids: number[], timeoutMs?: number): Promise<WorkItemInfo[]> {
     const wanted = [...new Set(ids.filter((id) => Number.isSafeInteger(id) && id > 0))];
     const out: WorkItemInfo[] = [];
     for (let i = 0; i < wanted.length; i += 200) {
@@ -1118,6 +1119,8 @@ export async function getWorkItems(org: string, ids: number[]): Promise<WorkItem
         const data = await adoJson(
             "GET",
             `${orgBase(org)}/_apis/wit/workitems?ids=${chunk.join(",")}&fields=${enc(WORK_ITEM_FIELDS.join(","))}&errorPolicy=omit&${API}`,
+            undefined,
+            timeoutMs,
         );
         for (const item of data?.value || []) {
             if (!item || typeof item.id !== "number") continue;
@@ -1177,6 +1180,94 @@ export async function getWorkItemDescription(org: string, id: number): Promise<s
     if (repro) parts.push(`Repro steps:\n${repro}`);
     if (criteria) parts.push(`Acceptance criteria:\n${criteria}`);
     return parts.join("\n\n");
+}
+
+// The New task picker's lookups: it waits on them while you type, so they give up sooner than other calls.
+const WORK_ITEM_LOOKUP_TIMEOUT_MS = 15_000;
+
+/** States that mean a work item is finished, across the Agile, Scrum, CMMI and Basic processes. */
+export const FINISHED_WORK_ITEM_STATES = ["Closed", "Done", "Removed", "Resolved", "Completed", "Cut"];
+
+/** A work item as the New task picker lists it. */
+export type WorkItemSummary = Omit<WorkItemInfo, "parentId">;
+
+const wiqlString = (s: string): string => `'${s.replace(/'/g, "''")}'`;
+
+/** WIQL for your open work items in `projects`, the most recently changed first. */
+export function assignedWorkItemsWiql(projects: string[]): string {
+    return (
+        "SELECT [System.Id] FROM WorkItems" +
+        ` WHERE [System.TeamProject] IN (${projects.map(wiqlString).join(", ")})` +
+        " AND [System.AssignedTo] = @Me" +
+        ` AND [System.State] NOT IN (${FINISHED_WORK_ITEM_STATES.map(wiqlString).join(", ")})` +
+        " ORDER BY [System.ChangedDate] DESC"
+    );
+}
+
+/**
+ * What's typed, as Work Item Search text: plain words, the last one also matching as a prefix
+ * while it's still being typed, and finished items left out. Search syntax in what's typed
+ * (filters like s:Closed, AND/OR/NOT, quotes) is taken as words. "" when nothing searchable is left.
+ */
+export function workItemSearchText(input: string): string {
+    const words = input
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}._]+/gu, " ")
+        .split(" ")
+        .filter((w) => /[\p{L}\p{N}]/u.test(w))
+        .slice(0, 12);
+    if (!words.length) return "";
+    const last = words.length - 1;
+    if (words[last].length >= 3 && !/\s$/.test(input)) words[last] += "*";
+    return `(${words.join(" ")}) ${FINISHED_WORK_ITEM_STATES.map((s) => `NOT s:${s}`).join(" ")}`;
+}
+
+/** Your open work items in `projects` of one org, the most recently changed first. */
+export async function getAssignedWorkItems(org: string, projects: string[], top = 20): Promise<WorkItemSummary[]> {
+    if (!projects.length) return [];
+    const data = await adoJson(
+        "POST",
+        `${orgBase(org)}/_apis/wit/wiql?$top=${top}&${API}`,
+        { query: assignedWorkItemsWiql(projects) },
+        WORK_ITEM_LOOKUP_TIMEOUT_MS,
+    );
+    const ids: number[] = (data?.workItems || []).map((w: any) => Number(w?.id)).filter((id: number) => Number.isSafeInteger(id) && id > 0);
+    const byId = new Map((await getWorkItems(org, ids, WORK_ITEM_LOOKUP_TIMEOUT_MS)).map((w) => [w.id, w]));
+    return ids.flatMap((id) => {
+        const w = byId.get(id);
+        if (!w) return [];
+        const { parentId: _, ...summary } = w;
+        return [summary];
+    });
+}
+
+/** Work Item Search over titles, descriptions and the rest, best match first, in `projects` of one org. */
+export async function searchWorkItems(org: string, projects: string[], text: string, top = 20): Promise<WorkItemSummary[]> {
+    const searchText = workItemSearchText(text);
+    if (!projects.length || !searchText) return [];
+    const data = await adoJson(
+        "POST",
+        `https://almsearch.dev.azure.com/${enc(org)}/_apis/search/workitemsearchresults?${API}`,
+        { searchText, $skip: 0, $top: top, filters: { "System.TeamProject": projects }, includeFacets: false },
+        WORK_ITEM_LOOKUP_TIMEOUT_MS,
+    );
+    const out: WorkItemSummary[] = [];
+    for (const r of data?.results || []) {
+        const f = r?.fields || {};
+        const id = Number(f["system.id"]);
+        if (!Number.isSafeInteger(id) || id <= 0) continue;
+        const project = String(r?.project?.name || f["system.teamproject"] || "");
+        out.push({
+            org,
+            project,
+            id,
+            title: String(f["system.title"] || `Work item ${id}`),
+            type: String(f["system.workitemtype"] || "Work item"),
+            state: String(f["system.state"] || ""),
+            url: `${orgBase(org)}/${enc(project)}/_workitems/edit/${id}`,
+        });
+    }
+    return out;
 }
 
 // ---------------------------------------------------------------------------

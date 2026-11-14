@@ -37,6 +37,8 @@ import { toast } from "./toast.js";
 import { state } from "./state.js";
 import { openPrWindow } from "./prWindow.js";
 import { openActionDialog } from "./prActions.js";
+import { attachWorkItemPicker, type WorkItemPicker } from "./workItemPicker.js";
+import { classifyQuery, type WorkItemOption } from "./workItemPickerModel.js";
 import { sendPrsToCopilot } from "./bridge.js";
 import { requestNotifyPermission } from "./notifyWatch.js";
 import { closeTaskModal, openTaskModal, pruneTaskModalState, reposFromCard, requestCardHtml, shipFromCard, updateTaskModal, warnUnsaved, type LeftTab, type TaskModalHost } from "./jarvisTask.js";
@@ -2802,6 +2804,7 @@ function openNewTask(): void {
       : "";
   const services = serviceChoices();
   const root = state.config.taskRoot || "";
+  let picker: WorkItemPicker | null = null;
   const dialog = openActionDialog({
     title: "New task",
     loc: "Today",
@@ -2815,7 +2818,9 @@ function openNewTask(): void {
       </fieldset>
       <div class="jv-fields jt-wi">
         <label class="rp-label" for="jt-ref">Work item</label>
-        <input id="jt-ref" class="ask-q jv-field" spellcheck="false" autocomplete="off" placeholder="2841124, or paste its link">
+        <div class="wi-anchor">
+          <input id="jt-ref" class="ask-q jv-field" spellcheck="false" autocomplete="off" placeholder="Search titles, or enter a number or link">
+        </div>
         <p class="pa-note jt-wi-found" hidden></p>
         ${orgField}
       </div>
@@ -2847,7 +2852,8 @@ function openNewTask(): void {
         body = { title: node.querySelector<HTMLInputElement>("#jt-title")!.value, org: org || null, project: project || null, description, folderRoot };
       } else {
         const ref = node.querySelector<HTMLInputElement>("#jt-ref")!.value.trim();
-        if (!ref) throw new Error("Enter a work item number or link.");
+        if (!ref) throw new Error("Pick a work item, or enter its number or link.");
+        if (classifyQuery(ref) !== "ref") throw new Error("Pick a work item from the list, or enter its number or link.");
         body = { workItem: ref, org: node.querySelector<HTMLSelectElement>("#jt-org")?.value || orgs[0], description, folderRoot };
       }
       const res = await postJSON("/api/jarvis/tasks", body);
@@ -2858,6 +2864,7 @@ function openNewTask(): void {
       // Show the new task's chat, where its worker asks about the repositories.
       if (res.created && res.worker && data?.tasks.some((t) => t.id === res.task.id)) openDrawer({ kind: "task", taskId: res.task.id });
     },
+    onClose: () => picker?.destroy(),
   });
   const field = <T extends HTMLElement>(sel: string) => dialog.querySelector<T>(sel)!;
   const desc = field<HTMLTextAreaElement>("#jt-desc");
@@ -2876,12 +2883,13 @@ function openNewTask(): void {
   };
   let lookup = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
-  const findItem = (): void => {
+  /** Look up a number or link in the field; words in it are a search, which the picker's list answers. */
+  const findItem = (delay = 500): void => {
     if (timer) clearTimeout(timer);
     const ref = field<HTMLInputElement>("#jt-ref").value.trim();
     const token = ++lookup;
     itemTitle = "";
-    if (!ref) {
+    if (classifyQuery(ref) !== "ref") {
       found.hidden = true;
       paintRoot();
       return;
@@ -2904,17 +2912,29 @@ function openNewTask(): void {
         found.textContent = (e as Error).message;
       }
       paintRoot();
-    }, 500);
+    }, delay);
   };
+  const refField = field<HTMLInputElement>("#jt-ref");
+  const orgSelect = dialog.querySelector<HTMLSelectElement>("#jt-org");
+  /** A row picked from the list: its number, with the org chosen to match, or its link when no choice names its org. */
+  const pickItem = (item: WorkItemOption): void => {
+    const same = (org: string | undefined): boolean => !!org && org.toLowerCase() === item.org.toLowerCase();
+    const option = orgSelect ? [...orgSelect.options].find((o) => same(o.value)) : undefined;
+    if (option) orgSelect!.value = option.value;
+    refField.value = option || (!orgSelect && same(orgs[0])) ? String(item.id) : item.url;
+    findItem(0);
+  };
+  picker = attachWorkItemPicker({ input: refField, multiOrg: orgs.length > 1, onPick: pickItem });
   desc.addEventListener("input", () => (descFromItem = !desc.value.trim()));
-  field<HTMLInputElement>("#jt-ref").addEventListener("input", findItem);
-  dialog.querySelector<HTMLSelectElement>("#jt-org")?.addEventListener("change", findItem);
+  refField.addEventListener("input", () => findItem());
+  orgSelect?.addEventListener("change", () => findItem());
   field<HTMLInputElement>("#jt-title").addEventListener("input", paintRoot);
   field<HTMLInputElement>("#jt-root").addEventListener("input", paintRoot);
   const sync = (): void => {
     const isCustom = custom();
     field<HTMLElement>(".jt-wi").hidden = isCustom;
     field<HTMLElement>(".jt-custom").hidden = !isCustom;
+    if (isCustom) picker?.close();
     // A work item's description doesn't carry over to a custom task.
     if (isCustom && descFromItem) desc.value = "";
     paintRoot();

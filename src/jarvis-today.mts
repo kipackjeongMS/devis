@@ -3,7 +3,15 @@
 // The API serves it to the page and the Lead reads it through its tools.
 
 import type { Pr } from "./ado.mjs";
-import { getWorkItemDescription, getWorkItems } from "./ado.mjs";
+import {
+    FINISHED_WORK_ITEM_STATES,
+    getAssignedWorkItems,
+    getWorkItemDescription,
+    getWorkItems,
+    searchWorkItems,
+    workItemSearchText,
+    type WorkItemSummary,
+} from "./ado.mjs";
 import {
     JarvisError,
     cleanDescription,
@@ -291,6 +299,73 @@ export async function previewWorkItem(input: { workItem?: unknown; org?: unknown
     if (!item) throw new JarvisError(`Work item #${ref.id} was not found in ${org}.`, 404);
     const description = await getWorkItemDescription(org, ref.id).catch(() => "");
     return { org, id: item.id, title: item.title, type: item.type, state: item.state, project: item.project, description };
+}
+
+export interface WorkItemSuggestions {
+    /** "assigned": your open items, for an empty box; "search": what matches what's typed. */
+    scope: "assigned" | "search";
+    items: WorkItemSummary[];
+    /** Orgs whose lookup failed; the others' items still come back. */
+    errors: Array<{ org: string; message: string }>;
+    /** No project is opted in under Settings, so there's nothing to look in. */
+    noProjects: boolean;
+}
+
+const SUGGESTIONS_MAX = 20;
+const FINISHED_STATES = new Set(FINISHED_WORK_ITEM_STATES.map((s) => s.toLowerCase()));
+
+/** Each org's list, best first, taken in turns into one: open items only, each once, at most `limit`. */
+export function mergeWorkItemLists(lists: WorkItemSummary[][], limit = SUGGESTIONS_MAX): WorkItemSummary[] {
+    const out: WorkItemSummary[] = [];
+    const seen = new Set<string>();
+    for (let i = 0; out.length < limit && lists.some((l) => i < l.length); i++) {
+        for (const list of lists) {
+            const item = list[i];
+            if (!item || FINISHED_STATES.has(item.state.toLowerCase())) continue;
+            const key = `${item.org.toLowerCase()}:${item.id}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            out.push(item);
+            if (out.length >= limit) break;
+        }
+    }
+    return out;
+}
+
+/** Where suggestWorkItems gets each org's list; the harness passes fakes. */
+export interface WorkItemLookups {
+    assigned: typeof getAssignedWorkItems;
+    search: typeof searchWorkItems;
+}
+
+/**
+ * Work items for the New task picker, from the projects opted in under Settings: with nothing
+ * typed, your open items, the most recently changed first; otherwise the open items that best
+ * match what's typed. One org failing doesn't hide the others' items.
+ */
+export async function suggestWorkItems(
+    query: string,
+    cfg: { organizations: string[]; projects: Record<string, string[]> },
+    lookups: WorkItemLookups = { assigned: getAssignedWorkItems, search: searchWorkItems },
+): Promise<WorkItemSuggestions> {
+    // A trailing space stays: it says the last word is whole, not a prefix still being typed.
+    const text = query.slice(0, 200);
+    const scope = text.trim() ? "search" : "assigned";
+    const scopes = cfg.organizations.map((org) => ({ org, projects: cfg.projects[org] || [] })).filter((s) => s.projects.length);
+    if (!scopes.length) return { scope, items: [], errors: [], noProjects: true };
+    if (scope === "search" && !workItemSearchText(text)) return { scope, items: [], errors: [], noProjects: false };
+    const settled = await Promise.allSettled(
+        scopes.map((s) =>
+            scope === "assigned" ? lookups.assigned(s.org, s.projects, SUGGESTIONS_MAX) : lookups.search(s.org, s.projects, text, SUGGESTIONS_MAX),
+        ),
+    );
+    const lists: WorkItemSummary[][] = [];
+    const errors: WorkItemSuggestions["errors"] = [];
+    settled.forEach((r, i) => {
+        if (r.status === "fulfilled") lists.push(r.value);
+        else errors.push({ org: scopes[i].org, message: String(r.reason?.message || r.reason).slice(0, 200) });
+    });
+    return { scope, items: mergeWorkItemLists(lists), errors, noProjects: false };
 }
 
 export interface CreatedTask {

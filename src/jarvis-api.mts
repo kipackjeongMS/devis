@@ -23,7 +23,7 @@ import {
 } from "./jarvis-store.mjs";
 import { listProjects, listRepositories } from "./ado.mjs";
 import { codebaseDir, codebaseStatus, syncCodebase, worktreeChanges, type WorktreeChanges } from "./jarvis-codebase.mjs";
-import { createTaskFromInput, previewWorkItem, refreshTaskWorkItems, rememberedPrs, startOfToday, startTaskFromTodos, todaySnapshot } from "./jarvis-today.mjs";
+import { createTaskFromInput, previewWorkItem, refreshTaskWorkItems, rememberedPrs, startOfToday, startTaskFromTodos, suggestWorkItems, todaySnapshot } from "./jarvis-today.mjs";
 import {
     confirmRepos,
     decidePermission,
@@ -330,6 +330,9 @@ export async function handleJarvisApi(req: IncomingMessage, res: ServerResponse,
         if (p === "/api/jarvis/workitem" && get) {
             const cfg = await readConfig();
             return sendJson(res, 200, { item: await previewWorkItem({ workItem: q.get("ref") || "", org: q.get("org") || "" }, cfg.organizations) });
+        }
+        if (p === "/api/jarvis/workitems" && get) {
+            return sendJson(res, 200, await suggestWorkItems(q.get("q") || "", await readConfig()));
         }
         if (p === "/api/jarvis/tasks/update" && post) {
             const b = await readBody(req);

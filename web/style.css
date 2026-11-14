@@ -5763,6 +5763,35 @@ select.jv-field { width: 100%; }
 .jt-root-note { margin-top: -2px; color: var(--text-3); font-size: var(--fs-caption); line-height: var(--lh-caption); overflow-wrap: anywhere; }
 .jt-wi-found[hidden] { display: none; }
 .jt-root-note { font-family: var(--mono); font-size: var(--fs-readout); }
+/* The New task dialog's work item picker: the list opens under the field, inside the dialog. */
+.wi-anchor { position: relative; }
+.wi-anchor > .ask-q { display: block; }
+.wi-popup {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  left: 0;
+  z-index: 3;
+  max-height: min(340px, 50vh);
+  padding: 4px;
+  overflow-y: auto;
+  border: 1px solid var(--stroke-card);
+  border-radius: var(--r-surface);
+  background: #1b1b1b;
+  box-shadow: var(--shadow-flyout);
+  animation: menu-in var(--t-normal) var(--ease);
+}
+.wi-popup.above { top: auto; bottom: calc(100% + 4px); }
+.wi-popup[hidden] { display: none; }
+.wi-popup .chat-pop-group[hidden],
+.wi-popup .chat-pop-msg[hidden] { display: none; }
+.chat-pop-item.wi-option { display: grid; grid-template-columns: minmax(0, 1fr); row-gap: 2px; }
+.wi-title { overflow: hidden; color: var(--text-1); font-size: var(--fs-caption); line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
+.wi-title mark { padding: 0 1px; border-radius: 2px; background: var(--accent-tint-2); color: inherit; }
+.wi-meta { overflow: hidden; color: var(--text-3); font: var(--fs-readout)/16px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+/* Rows from the last lookup, while the next one is on its way. */
+.wi-list[aria-busy="true"] .wi-option { opacity: .55; }
+.wi-popup .chat-pop-msg[title] { cursor: help; }
 /* What removing a task or worker would lose from its worktrees. */
 .pa-note.jt-changes {
   padding: 8px 10px;
