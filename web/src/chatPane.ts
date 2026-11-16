@@ -14,6 +14,7 @@ import { patchHtml } from "./patch.js";
 import { groupOptions, type ChatNote } from "./taskChatModel.js";
 import { pickerView, type PickerOption, type PickerState } from "./modelChoice.js";
 import { IMAGE_TYPES, messageImagesHtml, type ChatImage } from "./chatImages.js";
+import { aboutOf } from "./needsChat.js";
 
 /** A message as the log shows it. One from the session's history carries its id. */
 export interface ChatLine {
@@ -24,7 +25,11 @@ export interface ChatLine {
   images?: ChatImage[];
 }
 
-export type LogItem = { type: "message"; message: ChatLine } | { type: "note"; note: ChatNote };
+export type LogItem =
+  | { type: "message"; message: ChatLine }
+  | { type: "note"; note: ChatNote }
+  /** Something the host writes into the thread itself, such as Devis's notices. `sig` changes when it does. */
+  | { type: "html"; key: string; sig: string; html: string };
 
 // ---- the pane -----------------------------------------------------------------------
 
@@ -196,8 +201,16 @@ export function noteHtml(n: ChatNote): string {
   return `<div class="chat-out"${key}>${head}${body}${link}</div>`;
 }
 
-/** The user's words in their bubble; none for a message that is only images. */
-const userText = (content: string): string => (content.trim() ? `<p>${esc(content)}</p>` : "");
+/**
+ * The user's words in their bubble; none for a message that is only images. A message sent with
+ * a Needs you item attached shows the item's name over the words, and keeps its details for Devis.
+ */
+const userText = (content: string): string => {
+  const about = aboutOf(content);
+  const words = about ? about.text : content;
+  const ref = about ? `<span class="chat-about">${icon("warning")}<span>${esc(about.label)}</span></span>` : "";
+  return ref + (words.trim() ? `<p>${esc(words)}</p>` : "");
+};
 
 export const thinkingHtml = (text: string): string => `<p class="chat-thinking" data-key="thinking"><span class="spinner"></span> ${esc(text)}</p>`;
 
@@ -271,7 +284,7 @@ export function queueHtml(spec: Pick<ChatLogSpec, "queued" | "queueHeld" | "busy
     .map(
       (m, i) => `<li class="chat-queued" data-key="q:${esc(m.id)}">
         <span class="chat-queued-n" aria-hidden="true">${i + 1}</span>
-        <div class="chat-queued-body">${messageImagesHtml(m.images, true)}${m.text.trim() ? `<p>${esc(m.text)}</p>` : ""}</div>
+        <div class="chat-queued-body">${messageImagesHtml(m.images, true)}${userText(m.text)}</div>
         <span class="chat-queued-actions">
           <button type="button" class="btn sm ghost" data-queue-send="${esc(m.id)}" title="${esc(sendTitle)}"${blocked ? " disabled" : ""}>Send now</button>
           <button type="button" class="icon-btn sm" data-queue-remove="${esc(m.id)}" title="Remove from the queue" aria-label="Remove from the queue">${icon("dismiss")}</button>
@@ -294,7 +307,7 @@ export function chatLogParts(spec: ChatLogSpec, partial: string | undefined = sp
   const history: string[] = [];
   if (spec.loading) history.push(`<p class="chat-muted"><span class="spinner"></span> Loading the conversation…</p>`);
   if (spec.notice) history.push(spec.notice);
-  for (const item of spec.items) history.push(item.type === "message" ? messageHtml(item.message) : noteHtml(item.note));
+  for (const item of spec.items) history.push(item.type === "message" ? messageHtml(item.message) : item.type === "note" ? noteHtml(item.note) : item.html);
   const tail: string[] = [];
   if (isSending(spec)) tail.push(messageHtml({ role: "user", content: spec.sending || "", images: spec.sendingImages }, spec.sendingAccepted ? "sent" : "sending"));
   for (const m of spec.steered || []) tail.push(steeredHtml(m));
@@ -313,7 +326,8 @@ export function chatLogParts(spec: ChatLogSpec, partial: string | undefined = sp
 const isSending = (spec: Pick<ChatLogSpec, "sending" | "sendingImages">): boolean => !!spec.sending || !!spec.sendingImages?.length;
 
 /** A message as the signatures see it: id, length, and how many images. */
-const itemSig = (i: LogItem): string => (i.type === "message" ? `${i.message.id ?? ""}:${i.message.content.length}:${i.message.images?.length || 0}` : `n:${i.note.id}`);
+const itemSig = (i: LogItem): string =>
+  i.type === "message" ? `${i.message.id ?? ""}:${i.message.content.length}:${i.message.images?.length || 0}` : i.type === "note" ? `n:${i.note.id}` : `h:${i.key}:${i.sig}`;
 
 /** What's being sent, in a few bytes: its words and its images. */
 const sendingSig = (spec: Pick<ChatLogSpec, "sending" | "sendingImages">): string =>

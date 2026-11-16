@@ -1,6 +1,6 @@
 {
   "name": "devis",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "private": true,
   "productName": "Devis",
   "description": "Desktop console for reviewing Azure DevOps pull requests with GitHub Copilot.",

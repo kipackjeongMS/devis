@@ -1,8 +1,9 @@
 // The Workspace: Devis and the day's sections in columns, and a drawer over Devis's column.
 //   Devis    — the Lead console, one persistent Copilot session that watches the Workspace and
-//              keeps its history. "Today so far" is pinned over its thread.
-//   Sections — the day at a glance: Needs you, Tasks, Pull Requests (yours and reviews),
-//              Communication, Meetings, the user's own to-dos and a quick note. Each folds. The
+//              keeps its history. "Today so far" is pinned over its thread. What needs you shows
+//              in the thread too, as Devis's own notices written by this page (needsChat.ts).
+//   Sections — the day at a glance: Tasks, Pull Requests (yours and reviews), Communication,
+//              Meetings, the user's own to-dos and a quick note. Each folds. The
 //              to-dos and note belong to no day; Devis and the workers can read them when asked.
 //   Layout   — every panel, Devis too, moves by its grip (or Alt+arrows) to any place in any
 //              column, and the gaps drag to resize; workspaceGrid.ts does that. On a narrow
@@ -26,7 +27,22 @@ import {
   setHint,
   type ChatLogSpec,
   type ChatPane,
+  type LogItem,
 } from "./chatPane.js";
+import {
+  interleave,
+  noticeContext,
+  noticeLabel,
+  noticeLine,
+  noticeReceipts,
+  noticeTime,
+  readLedger,
+  trackNotices,
+  withAbout,
+  type NoticeLedger,
+  type NoticeOutcome,
+  type NoticePart,
+} from "./needsChat.js";
 import { loadModelCatalog, modelCatalog } from "./modelCatalog.js";
 import { ImageDraft, paintTray, sameImages, trayNote, uploadWith, wireImages, type ChatImage } from "./chatImages.js";
 import { effortLabel, nextChoice, type PickerState } from "./modelChoice.js";
@@ -81,6 +97,7 @@ import {
   inService,
   needsItems,
   needTodo,
+  oneLine,
   commsNeedTitle,
   commsNeedWhere,
   commsNeedWho,
@@ -130,6 +147,8 @@ interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
+  /** When it was sent, from the session's events: Devis's notices are placed by it. */
+  timestamp?: string;
   images?: ChatImage[];
 }
 
@@ -183,6 +202,8 @@ const MEETINGS_SEEN_KEY = "adoPrOps.workspace.meetingsSeen";
 const COMMUNICATION_SEEN_KEY = "adoPrOps.workspace.communicationSeen";
 /** The quick note's unsaved edit, kept until it saves. */
 const NOTE_DRAFT_KEY = "adoPrOps.workspace.noteDraft";
+/** Devis's notices: the ones shown, and today's receipts (needsChat.ts NoticeLedger). */
+const NOTICE_LEDGER_KEY = "adoPrOps.workspace.notices";
 const FAST_MS = 1500;
 const MID_MS = 4000;
 const SLOW_MS = 8000;
@@ -265,19 +286,27 @@ let leadPosting = false;
 /** The center: Devis's chat, with the drawer over it. */
 let center: HTMLElement;
 let rail: HTMLElement;
-/** The Overview button that opens the rail as a sheet on a narrow window, and its count of needs. */
+/** The Overview button that opens the rail as a sheet on a narrow window, and its count of what's new. */
 let railButton: HTMLButtonElement;
 let railBadge: HTMLElement;
-/** The needs line over Devis on a narrow window. */
-let needsBanner: HTMLElement;
 let devisBannerEl: HTMLElement;
 let updateBannerEl: HTMLElement;
 /** "Today so far", pinned over Devis's thread so it stays in view while the chat scrolls. */
 let overviewEl: HTMLElement;
 /** Devis's line under the hello: what it watches. */
 let leadWatch: HTMLElement;
-let needsBody: HTMLElement;
-let needsCount: HTMLElement;
+/** "3 need you" in Devis's head: goes to the next notice that's open. */
+let noticeCount: HTMLButtonElement;
+/** Over the thread while open notices are scrolled out of view: goes to the nearest. */
+let noticePill: HTMLButtonElement;
+/** The last notice the head's count went to, to go on from. */
+let noticeAt = "";
+/** The notices the thread has shown, and the ones gone today (needsChat.ts). Kept per device. */
+let noticeLedger: NoticeLedger = readNoticeLedger();
+/** What the user did about a notice here, by its source, until the ask is gone. */
+const noticeOutcomes = new Map<string, NoticeOutcome>();
+/** The notice attached to the next message to Devis: its name, and what Devis reads about it. */
+let leadAbout: { source: string; label: string; context: string } | null = null;
 let tasksBody: HTMLElement;
 let tasksCount: HTMLElement;
 let prsBody: HTMLElement;
@@ -292,7 +321,6 @@ let todosBody: HTMLElement;
 let todosCount: HTMLElement;
 let noteBody: HTMLElement;
 let statusLine: HTMLElement;
-let needsSig = "";
 let daySig = "";
 let tasksSig = "";
 let overviewSig = "";
@@ -352,6 +380,14 @@ function readRailFolded(): Set<RailSection> {
     /* unreadable: the default */
   }
   return new Set<RailSection>();
+}
+
+function readNoticeLedger(): NoticeLedger {
+  try {
+    return readLedger(JSON.parse(readPref(NOTICE_LEDGER_KEY, "{}")));
+  } catch {
+    return {};
+  }
 }
 
 const svg = (name: IconName): string => icon(name);
@@ -502,7 +538,6 @@ function mount(): void {
         ${iconBtn("lead-new", "add", "New Lead session")}
         ${iconBtn("lead-terminal", "terminal", "Open the Lead in a terminal")}
       </div>
-      <button type="button" class="jv-banner" data-act="rail-open" hidden></button>
       <div class="jv-devis" role="status" hidden></div>
       <div class="jv-devis jv-update" role="status" hidden></div>
       ${chatPaneHtml({
@@ -510,6 +545,7 @@ function mount(): void {
         inputLabel: "Message Devis",
         headHtml: `<button type="button" class="pn-grip" data-act="pn-move" aria-haspopup="menu" aria-label="Move Devis" title="Drag to move · Alt+arrows">${svg("grip")}</button>
           <span class="jv-who">${svg("sparkle")}<b>Devis</b><span class="jv-watch"></span></span>
+          <button type="button" class="nt-count" data-act="notice-next" title="Go to the next thing that needs you" hidden></button>
           <span class="chat-state tone-idle" hidden></span>
           <span class="chat-actions"><button type="button" class="btn sm ghost" data-act="lead-stop" hidden>${svg("stop")}<span>Stop</span></button></span>`,
       })}
@@ -551,6 +587,11 @@ function mount(): void {
   leadPicker = leadPane.tools;
   leadStop = q('[data-act="lead-stop"]');
   leadWatch = q(".jv-watch");
+  noticeCount = q(".nt-count");
+  noticePill = el('<button type="button" class="nt-pill" data-act="notice-pill" hidden></button>') as HTMLButtonElement;
+  leadPane.view.append(noticePill);
+  leadPane.log.addEventListener("scroll", paintNoticePill, { passive: true });
+  new ResizeObserver(paintNoticePill).observe(leadPane.log);
   leadPane.tools.addEventListener("change", onLeadPick);
   leadPane.steer.addEventListener("click", () => void sendToLead(leadPane.input.value, "now"));
   void loadModelCatalog().then(() => renderLeadPicker());
@@ -559,13 +600,10 @@ function mount(): void {
 
   railButton = q(".jv-railbtn");
   railBadge = q(".jv-badge");
-  needsBanner = q(".jv-banner");
   devisBannerEl = q(".jv-devis:not(.jv-update)");
   updateBannerEl = q(".jv-update");
   const body = (sec: RailSection): HTMLElement => q(`#rs-b-${sec}`);
   const count = (sec: RailSection): HTMLElement => q(`[data-rs="${sec}"] .rs-n`);
-  needsBody = body("needs");
-  needsCount = count("needs");
   tasksBody = body("tasks");
   tasksCount = count("tasks");
   prsBody = body("prs");
@@ -786,12 +824,12 @@ function drawerGoBack(): void {
 
 /**
  * On a narrow window the sections are a sheet over the right edge, behind the Overview button.
- * With columns they're always in view: "open" takes the keyboard to Needs you.
+ * With columns they're always in view: "open" takes the keyboard to Tasks.
  */
 function setSheet(open: boolean): void {
   if (!root) return;
   if (open && !isFlat()) {
-    root.querySelector<HTMLElement>('[data-rs="needs"] .rs-t')?.focus({ preventScroll: true });
+    root.querySelector<HTMLElement>('[data-rs="tasks"] .rs-t')?.focus({ preventScroll: true });
     return;
   }
   const was = root.classList.contains("sheet-open");
@@ -856,6 +894,7 @@ const LEAD_STARTERS = ["What needs me today?", "Recap yesterday for my standup",
 
 function renderLead(): void {
   const chat = lead;
+  const notices = threadNotices(Date.now());
   const sig = JSON.stringify([
     chat?.messages.map((m) => `${m.id}:${m.content.length}:${m.images?.length || 0}`),
     chat?.pending,
@@ -873,6 +912,8 @@ function renderLead(): void {
     leadNote,
     modelNote,
     leadPosting,
+    notices.map((n) => `${n.key}:${n.sig}`),
+    leadAbout?.source,
   ]);
   if (sig === leadSig) return renderLeadPicker();
   leadSig = sig;
@@ -882,8 +923,18 @@ function renderLead(): void {
   const working = !!chat?.pending || leadSending();
   // What was just sent shows until the transcript has it: the same words and images.
   const shownSent = leadSending() && !(last?.role === "user" && last.content === leadSent && sameImages(last.images, leadSentImages));
+  const welcome = emptyHtml(
+    "Ask Devis",
+    "I watch your Workspace and keep its history: tasks, the workers on them, the pull requests waiting for you, and your to-dos and quick note when you ask. What needs you shows up here too.",
+    `<div class="chat-starters">${LEAD_STARTERS.map((s) => `<button type="button" class="chip-btn" data-starter="${esc(s)}">${esc(s)}</button>`).join("")}</div>`
+  );
+  // Devis's notices sit in the thread by time; with no conversation yet, the welcome stays over them.
+  const items: LogItem[] = interleave(messages, notices).map((x) =>
+    "message" in x ? { type: "message", message: x.message } : { type: "html", key: x.extra.key, sig: x.extra.sig, html: x.extra.html }
+  );
+  if (!messages.length && notices.length) items.unshift({ type: "html", key: "welcome", sig: "1", html: welcome });
   const spec: ChatLogSpec = {
-    items: messages.map((message) => ({ type: "message", message })),
+    items,
     sending: shownSent ? leadSent : null,
     sendingImages: shownSent ? leadSentImages : undefined,
     sendingAccepted: !leadPosting,
@@ -894,15 +945,17 @@ function renderLead(): void {
     queued: chat?.queue || [],
     queueHeld: !!chat?.queueHeld,
     canSteer: !!chat?.canSteer,
-    empty: emptyHtml(
-      "Ask Devis",
-      "I watch your Workspace and keep its history: tasks, the workers on them, the pull requests waiting for you, and your to-dos and quick note when you ask.",
-      `<div class="chat-starters">${LEAD_STARTERS.map((s) => `<button type="button" class="chip-btn" data-starter="${esc(s)}">${esc(s)}</button>`).join("")}</div>`
-    ),
+    empty: welcome,
   };
   paintChatLog(leadPane.log, spec);
+  paintNoticeCount();
+  paintNoticePill();
   setComposer(leadPane, {
-    placeholder: working ? "Queue a message for after this turn, or send it now…" : "Ask or direct Devis…",
+    placeholder: working
+      ? "Queue a message for after this turn, or send it now…"
+      : leadAbout
+        ? `Ask Devis about ${leadAbout.label}…`
+        : "Ask or direct Devis…",
     disabled: false,
     busy: leadPosting,
     working,
@@ -993,9 +1046,12 @@ async function changeModel(model: string, effort: string): Promise<void> {
  * (Ctrl+Enter, Send now) steered into it.
  */
 async function sendToLead(text: string, how: "send" | "now" = "send"): Promise<void> {
-  const message = text.trim();
-  if (leadPosting || (!message && !leadDraft?.ready.length)) return;
+  const typed = text.trim();
+  if (leadPosting || (!typed && !leadDraft?.ready.length)) return;
   if (leadDraft?.uploading) return toast("An image is still uploading. Send once it's in.", "err");
+  // A notice the user asked about goes with the message: Devis reads its details, the bubble shows its name.
+  const about = leadAbout;
+  const message = about ? withAbout(about.label.charAt(0).toUpperCase() + about.label.slice(1), about.context, typed) : typed;
   const taken = leadDraft?.take() || [];
   const images: ChatImage[] = taken.map((d) => ({ id: d.id!, name: d.name }));
   const working = !!lead?.pending || leadSending();
@@ -1017,6 +1073,10 @@ async function sendToLead(text: string, how: "send" | "now" = "send"): Promise<v
     }
     leadDraft?.release(taken);
     leadNote = "";
+    if (about && leadAbout === about) {
+      leadAbout = null;
+      paintLeadAbout();
+    }
     if (mode === "now" && res.result === "queued") toast("Devis was starting its turn, so this is queued to run after it.", "ok");
     if (res.result === "steered" && leadPane.sr.textContent !== "Sent into this turn") leadPane.sr.textContent = "Sent into this turn";
   } catch (e) {
@@ -1025,7 +1085,7 @@ async function sendToLead(text: string, how: "send" | "now" = "send"): Promise<v
       leadSentImages = [];
     }
     if (!leadPane.input.value) {
-      leadPane.input.value = message;
+      leadPane.input.value = typed;
       autoSize(leadPane.input);
     }
     leadDraft?.restore(taken);
@@ -1041,6 +1101,238 @@ async function sendToLead(text: string, how: "send" | "now" = "send"): Promise<v
 async function leadQueueAct(button: HTMLElement, path: string, id: string): Promise<void> {
   await act(button, () => postJSON(path, { id }));
   void loadLead();
+}
+
+// ---- Devis's notices ----------------------------------------------------------------
+// What needs you, in Devis's thread (needsChat.ts). This page writes them from Today's data; the
+// Lead's session never sees them unless the user asks about one, which attaches it to the message.
+
+/** Everything waiting on the user, across services, less what the to-dos took. */
+const openNotices = (): NeedItem[] => (data ? visibleNeeds(needsItems(data.tasks, teamsAsks(), commsNeedsNow()), data.todos) : []);
+
+/** A short, stable fingerprint of a notice's HTML: the thread repaints it when this moves. */
+function strSig(s: string): string {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return `${s.length}.${(h >>> 0).toString(36)}`;
+}
+
+/** The thread's notices: what needs you now, and today's receipts for what's gone, each with its time. */
+function threadNotices(now: number): Array<{ key: string; at: number; sig: string; html: string }> {
+  if (!data) return [];
+  const open = openNotices();
+  const shown = new Set(open.map((n) => n.source));
+  const out = open.map((n) => {
+    const html = noticeHtml(n, now);
+    return { key: `nt:${n.source}`, at: n.at, sig: strSig(html), html };
+  });
+  for (const r of noticeReceipts(noticeLedger)) {
+    if (shown.has(r.source)) continue;
+    const html = receiptHtml(r, now);
+    out.push({ key: `ntr:${r.source}`, at: r.at, sig: strSig(html), html });
+  }
+  return out;
+}
+
+const partsHtml = (parts: NoticePart[]): string =>
+  parts.map((p) => (typeof p === "string" ? esc(p) : "strong" in p ? `<b>${esc(p.strong)}</b>` : `<i>${esc(p.em)}</i>`)).join("");
+
+const timeHtml = (at: number, now: number): string =>
+  at ? `<time datetime="${new Date(at).toISOString()}" title="${esc(new Date(at).toLocaleString())}">${esc(noticeTime(at, now))}</time>` : "";
+
+/**
+ * One ask as Devis's message: who needs you for what, the ask itself (answerable here), then
+ * To-do, Ask Devis and, for Teams and email, Dismiss. It carries the ids the actions read.
+ */
+function noticeHtml(n: NeedItem, now: number): string {
+  const label = noticeLabel(n);
+  const attrs = [`data-key="nt:${esc(n.source)}"`, `data-source="${esc(n.source)}"`];
+  if (n.kind !== "teams" && n.kind !== "comms") attrs.push(`data-task="${esc(n.task.id)}"`);
+  if (n.kind === "request" || n.kind === "failed") attrs.push(`data-session="${esc(n.worker.sessionId)}"`);
+  if (n.kind === "teams") attrs.push(`data-ask="${n.ask.id}"`);
+  if (n.kind === "comms") attrs.push(`data-comms-need="${esc(n.need.key)}"`);
+  const tag = `<span class="nt-tag" title="From your Workspace, not from Devis's session. Devis sees it only when you ask about it.">${svg("warning")}<span>Needs you</span></span>`;
+  const foot = [
+    n.kind === "request" ? `<button type="button" class="btn sm ghost" data-act="open-task">Open the task</button>` : "",
+    `<button type="button" class="btn sm ghost" data-act="need-todo" title="Move it to your to-dos">${svg("checklist")}<span>To-do</span></button>`,
+    `<button type="button" class="btn sm ghost" data-act="need-ask" title="Ask Devis about it: it goes with your next message">${svg("sparkle")}<span>Ask Devis</span></button>`,
+    n.kind === "teams" || n.kind === "comms"
+      ? `<button type="button" class="btn sm ghost" data-act="need-dismiss" title="Dismiss: nobody's waiting on you">${svg("dismiss")}<span>Dismiss</span></button>`
+      : "",
+  ].join("");
+  return `<article class="nt" ${attrs.join(" ")} aria-label="${esc(`Devis: ${label} needs you`)}">
+      <p class="nt-head">${svg("sparkle")}<b>Devis</b>${tag}${timeHtml(n.at, now)}</p>
+      <p class="nt-lead">${partsHtml(noticeLine(n))}</p>
+      <div class="nt-card">${noticeBodyHtml(n, now)}</div>
+      <div class="nt-foot">${foot}</div>
+    </article>`;
+}
+
+/** The ask itself, as Needs you showed it: a worker's questions, or the card to act on. */
+function noticeBodyHtml(n: NeedItem, now: number): string {
+  const ask = (glyph: IconName, text: string, button: string): string =>
+    `<div class="ask-card"><p class="ask-card-title">${svg(glyph)}<span>${esc(text)}</span></p><div class="ask-card-actions">${button}</div></div>`;
+  const review = (proposal: boolean): string =>
+    `<button type="button" class="btn sm accent" data-act="task-comments">${proposal ? "Review the plan" : "See what happened"}</button>`;
+  switch (n.kind) {
+    case "request":
+      return n.worker.requests.map((r) => requestCardHtml(n.worker.label, r, drafts.get(`ans:${r.id}`) || "")).join("");
+    case "failed":
+      return ask("warning", n.worker.summary ? `Its turn failed: ${n.worker.summary}` : "Its turn failed.", `<button type="button" class="btn sm accent" data-act="open-task">Open the chat</button>`);
+    case "validation":
+      return ask(
+        "flow",
+        n.text,
+        `<button type="button" class="btn sm accent" data-act="task-validation">${n.task.validation?.attention === "proposal" ? "Review the proposal" : "See what failed"}</button>`
+      );
+    case "prComments":
+      return ask("pullRequest", n.text, review(n.pr.attention === "proposal"));
+    case "prBuilds":
+      return ask("pipeline", n.text, review(n.pr.attention === "proposal"));
+    case "teams":
+      return teamsNoticeBody(n.ask, now);
+    case "comms":
+      return commsNoticeBody(n.need);
+  }
+}
+
+/** A PR someone asked you to review in Teams: what they wrote (and who else asked), the PR and the message. */
+function teamsNoticeBody(a: CommsAsk, now: number): string {
+  const latest = a.askers[0];
+  const quote = (x: CommsAsk["askers"][number]): string => (x.snippet ? `<p class="ask-teams-quote">${esc(x.snippet)}</p>` : "");
+  const others = a.askers
+    .slice(1, 3)
+    .map((x) => `<p class="ask-teams-line"><span class="ask-teams-who">${esc(x.name)}</span> ${esc(askerWhere(x))} · ${esc(agoPhrase(x.at, now))}</p>${quote(x)}`)
+    .join("");
+  const more = a.askers.length > 3 ? `<p class="ask-teams-line">and ${a.askers.length - 3} more</p>` : "";
+  const teams = latest?.link
+    ? `<a class="btn sm" href="${esc(latest.link)}" target="_blank" rel="noopener">${svg("chat")}<span>Open in Teams</span></a>`
+    : "";
+  return `<div class="ask-card ask-teams">${latest ? quote(latest) : ""}${others}${more}
+      <div class="ask-card-actions"><button type="button" class="btn sm accent" data-act="need-pr">${svg("pullRequest")}<span>Review PR</span></button>${teams}</div>
+    </div>`;
+}
+
+/** A chat or email thread someone waits on you in: what they need, the conversation, and where Communication has it. */
+function commsNoticeBody(c: CommsNeed): string {
+  const mail = c.source === "mail";
+  const ask = c.needsYou.charAt(0).toUpperCase() + c.needsYou.slice(1);
+  const open =
+    c.link && (mail ? isOutlookLink(c.link) : isTeamsLink(c.link))
+      ? `<a class="btn sm" href="${esc(c.link)}" target="_blank" rel="noopener">${svg(mail ? "mail" : "chat")}<span>${mail ? "Open in Outlook" : "Open in Teams"}</span></a>`
+      : "";
+  const show = `<button type="button" class="btn sm ghost" data-act="need-comms"${c.summary ? ` title="${esc(c.summary)}"` : ""}>Show in Communication</button>`;
+  return `<div class="ask-card ask-teams"><p class="ask-teams-quote">${esc(ask)}</p><div class="ask-card-actions">${open}${show}</div></div>`;
+}
+
+/** A handled ask: one line where it was, saying what became of it and when. */
+function receiptHtml(r: { source: string; goneAt: number; outcome?: string; dropped?: boolean; label: string }, now: number): string {
+  const text = r.outcome || `${r.label.charAt(0).toUpperCase()}${r.label.slice(1)} doesn't need you anymore`;
+  return `<p class="nt done${r.dropped ? " dropped" : ""}" data-key="ntr:${esc(r.source)}">${svg(r.dropped ? "dismiss" : "check")}<span>${esc(text)}</span>${timeHtml(r.goneAt, now)}</p>`;
+}
+
+/**
+ * After each Today read: record the open notices, and give the ones that left their receipts. A
+ * Teams ask or a chat whose read failed this time isn't taken as gone.
+ */
+function trackThread(now: number): void {
+  if (!data || loadError) return;
+  const open = openNotices().map((n) => ({ source: n.source, at: n.at, label: noticeLabel(n) }));
+  const taken = new Set((data.todos || []).filter((t) => !t.done && t.source).map((t) => t.source!.key));
+  const comms = data.comms;
+  const unsure = (source: string): boolean =>
+    source.startsWith("need:teams:") ? !!comms?.failed : source.startsWith("need:chat:") || source.startsWith("need:mail:") ? !!comms?.needsFailed : false;
+  const next = trackNotices(noticeLedger, open, now, { outcomes: noticeOutcomes, taken, unsure });
+  for (const source of [...noticeOutcomes.keys()]) if (next[source]?.goneAt !== undefined || !next[source]) noticeOutcomes.delete(source);
+  const json = JSON.stringify(next);
+  if (json === JSON.stringify(noticeLedger)) return;
+  noticeLedger = next;
+  writePref(NOTICE_LEDGER_KEY, json);
+}
+
+/** Remember what the user did about the notice `node` is in, for its receipt once the ask is gone. */
+function noteOutcome(node: Element, outcome: NoticeOutcome): void {
+  const source = node.closest<HTMLElement>(".nt[data-source]")?.dataset.source;
+  if (source) noticeOutcomes.set(source, outcome);
+}
+
+const openNoticeEls = (): HTMLElement[] => [...leadPane.log.querySelectorAll<HTMLElement>(".nt:not(.done)")];
+
+function paintNoticeCount(): void {
+  const n = openNoticeEls().length;
+  noticeCount.hidden = !n;
+  if (noticeCount.dataset.n === String(n)) return;
+  noticeCount.dataset.n = String(n);
+  noticeCount.innerHTML = n ? `${svg("warning")}<span>${n} need${n === 1 ? "s" : ""} you</span>` : "";
+  noticeCount.setAttribute("aria-label", `${n} ${n === 1 ? "thing needs" : "things need"} you. Go to the next one`);
+}
+
+let pillFrame = 0;
+/** The pill over the thread: open notices scrolled out of view, above first. */
+function paintNoticePill(): void {
+  if (pillFrame) return;
+  pillFrame = requestAnimationFrame(() => {
+    pillFrame = 0;
+    const box = leadPane.log.getBoundingClientRect();
+    const items = openNoticeEls();
+    const above = items.filter((e) => e.getBoundingClientRect().bottom < box.top + 24);
+    const below = above.length ? [] : items.filter((e) => e.getBoundingClientRect().top > box.bottom - 24);
+    const list = above.length ? above : below;
+    noticePill.hidden = !list.length || !box.height;
+    if (!list.length) return;
+    const up = above.length > 0;
+    const key = `${list.length}|${up}`;
+    noticePill.dataset.target = (up ? above[above.length - 1]! : below[0]!).dataset.source || "";
+    if (noticePill.dataset.key === key) return;
+    noticePill.dataset.key = key;
+    noticePill.classList.toggle("down", !up);
+    const what = `${list.length} need${list.length === 1 ? "s" : ""} you ${up ? "above" : "below"}`;
+    noticePill.innerHTML = `${svg(up ? "up" : "down")}<span>${what}</span>`;
+    noticePill.setAttribute("aria-label", `${what}. Go to it`);
+  });
+}
+
+/** Bring a notice into view in Devis's thread, flash it, and put the keyboard on its first control. */
+function goToNotice(source: string): void {
+  const node = leadPane.log.querySelector<HTMLElement>(`.nt[data-source="${CSS.escape(source)}"]`);
+  if (!node) return;
+  noticeAt = source;
+  if (drawer) closeDrawer(false);
+  if (isFlat()) setSheet(false);
+  flashInView(node, node.querySelector<HTMLElement>(".nt-card button, .nt-card textarea, .nt-card input"));
+}
+
+/** The head's count: each click goes to the next open notice, oldest first, and round again. */
+function nextNotice(): void {
+  const items = openNoticeEls();
+  if (!items.length) return;
+  const i = items.findIndex((e) => e.dataset.source === noticeAt);
+  goToNotice(items[(i + 1) % items.length]!.dataset.source || "");
+}
+
+/** Ask Devis about a notice: it rides with the next message, shown as a chip on the box until then. */
+function askAboutNotice(node: HTMLElement): void {
+  const source = node.closest<HTMLElement>("[data-source]")?.dataset.source;
+  const item = source ? openNotices().find((n) => n.source === source) : undefined;
+  if (!item) return;
+  leadAbout = { source: item.source, label: noticeLabel(item), context: noticeContext(item) };
+  paintLeadAbout();
+  leadPane.input.focus();
+}
+
+function paintLeadAbout(): void {
+  let chip = leadPane.form.querySelector<HTMLElement>(".nt-ctx");
+  if (!leadAbout) {
+    chip?.remove();
+  } else {
+    if (!chip) {
+      chip = el('<div class="nt-ctx"></div>');
+      leadPane.form.prepend(chip);
+    }
+    chip.innerHTML = `${svg("warning")}<span>With <b>${esc(leadAbout.label)}</b>. Devis sees it with your message.</span><button type="button" class="icon-btn sm" data-act="need-unask" title="Don't attach it" aria-label="Don't attach ${esc(leadAbout.label)}">${svg("dismiss")}</button>`;
+  }
+  leadSig = "";
+  renderLead();
 }
 
 // ---- Today: data --------------------------------------------------------------------
@@ -1105,13 +1397,15 @@ function reviewedInService(events: JarvisEvent[]): JarvisEvent[] {
 
 // ---- Today: render ------------------------------------------------------------------
 
-/** Repaint both panes; each skips itself when nothing it shows changed. */
+/** Repaint every pane, Devis's notices too; each skips itself when nothing it shows changed. */
 function renderToday(force = false): void {
   if (!root) return;
   renderTasks(force);
   renderPrs(force);
   renderDay(force);
   renderComms(force);
+  trackThread(Date.now());
+  renderLead();
 }
 
 /** Pull Requests: yours, then other people's to review. Skips the paint when nothing changed. */
@@ -1221,10 +1515,10 @@ function loadMeetings(): Promise<void> {
 }
 
 /** What's new, by rail section; on a narrow window the Overview button's badge adds them up. */
-const railNew = { needs: 0, prs: 0, comms: 0, meetings: 0 };
+const railNew = { prs: 0, comms: 0, meetings: 0 };
 
 function paintRailBadge(): void {
-  const n = railNew.needs + railNew.prs + railNew.comms + railNew.meetings;
+  const n = railNew.prs + railNew.comms + railNew.meetings;
   railBadge.hidden = !n;
   railBadge.textContent = n ? String(n) : "";
   railButton.setAttribute("aria-label", n ? `Show the overview, ${n} new` : "Show the overview");
@@ -1356,115 +1650,6 @@ const loadingHtml = (what: string): string =>
     : `<div class="loading"><span class="spinner"></span> Loading ${what}…</div>`;
 const staleNote = (): string => (loadError ? `<div class="today-note err">Showing the last update. ${esc(loadError)}</div>` : "");
 
-function needHtml(n: NeedItem, now: number): string {
-  if (n.kind === "teams") return teamsNeedHtml(n, now);
-  if (n.kind === "comms") return commsNeedHtml(n, now);
-  const who = n.kind === "validation" || n.kind === "prComments" || n.kind === "prBuilds" ? n.who : n.worker.label;
-  const session = n.kind === "validation" || n.kind === "prComments" || n.kind === "prBuilds" ? "" : ` data-session="${esc(n.worker.sessionId)}"`;
-  const glyph = n.kind === "validation" ? "flow" : n.kind === "prComments" ? "pullRequest" : n.kind === "prBuilds" ? "pipeline" : "warning";
-  const ask = (text: string, button: string): string =>
-    `<div class="ask-card"><p class="ask-card-title">${svg(glyph)}<span>${esc(text)}</span></p><div class="ask-card-actions">${button}</div></div>`;
-  const body =
-    n.kind === "request"
-      ? n.worker.requests.map((r) => requestCardHtml(n.worker.label, r, drafts.get(`ans:${r.id}`) || "")).join("")
-      : n.kind === "failed"
-        ? ask(n.worker.summary ? `Its turn failed: ${n.worker.summary}` : "Its turn failed.", `<button type="button" class="btn sm accent" data-act="open-task">Open the chat</button>`)
-        : n.kind === "prComments"
-          ? ask(n.text, `<button type="button" class="btn sm accent" data-act="task-comments">${n.pr.attention === "proposal" ? "Review the plan" : "See what happened"}</button>`)
-          : n.kind === "prBuilds"
-            ? ask(n.text, `<button type="button" class="btn sm accent" data-act="task-comments">${n.pr.attention === "proposal" ? "Review the plan" : "See what happened"}</button>`)
-            : ask(
-              n.text,
-              `<button type="button" class="btn sm accent" data-act="task-validation">${n.task.validation?.attention === "proposal" ? "Review the proposal" : "See what failed"}</button>`
-            );
-  const age = n.at ? `<span class="need-age">${esc(ago(new Date(n.at).toISOString(), now))}</span>` : "";
-  // Taken on as a to-do, it leaves Needs you; the to-do ticks itself once the ask is gone.
-  const toTodo = `<button type="button" class="need-todo" data-act="need-todo" title="Move it to your to-dos" aria-label="Move to your to-dos: ${esc(n.task.title)}, ${esc(who)}">${svg("checklist")}<span>To-do</span></button>`;
-  return `
-    <article class="need" data-key="need:${esc(n.key)}" data-need="${esc(n.task.id)}" data-task="${esc(n.task.id)}" data-source="${esc(n.source)}"${session}>
-      <div class="need-head">
-        <span class="need-icon">${svg("warning")}</span>
-        <button type="button" class="need-task" data-act="open-task" title="Open the task">${esc(n.task.title)}</button>
-        <span class="need-who">${esc(who)}</span>
-        <span class="need-end">${age}${toTodo}</span>
-      </div>
-      <div class="need-body">${body}</div>
-    </article>`;
-}
-
-/**
- * A PR someone asked the user to review in Teams: the PR and who asked on one line, then what they
- * wrote and where, with the PR to open, the message in Teams, To-do and Dismiss.
- */
-function teamsNeedHtml(n: Extract<NeedItem, { kind: "teams" }>, now: number): string {
-  const a = n.ask;
-  const latest = a.askers[0];
-  const who = askersLine(a.askers);
-  const pr = `PR ${a.prId}${a.title ? ` · ${a.title}` : ""}`;
-  // The PR's title says what it's about; who asked, where and when are on the line under it.
-  const title = a.title || `PR ${a.prId}`;
-  const toTodo = `<button type="button" class="need-todo" data-act="need-todo" title="Move it to your to-dos" aria-label="Move to your to-dos: ${esc(pr)}, asked by ${esc(who)}">${svg("checklist")}<span>To-do</span></button>`;
-  const dismiss = `<button type="button" class="icon-btn need-dismiss" data-act="need-dismiss" title="Dismiss" aria-label="Dismiss: ${esc(pr)}, asked by ${esc(who)}">${svg("dismiss")}</button>`;
-  const asked = (x: CommsAsk["askers"][number]): string =>
-    `<p class="ask-teams-line"><span class="ask-teams-who">${esc(x.name)}</span> ${esc(askerWhere(x))} · ${esc(agoPhrase(x.at, now))}</p>` +
-    (x.snippet ? `<p class="ask-teams-quote">${esc(x.snippet)}</p>` : "");
-  const others = a.askers.slice(1, 3).map(asked).join("");
-  const more = a.askers.length > 3 ? `<p class="ask-teams-line">and ${a.askers.length - 3} more</p>` : "";
-  const teams = latest?.link
-    ? `<a class="btn sm" href="${esc(latest.link)}" target="_blank" rel="noopener" data-act="need-teams">${svg("chat")}<span>Open in Teams</span></a>`
-    : "";
-  return `
-    <article class="need need-teams" data-key="need:${esc(n.key)}" data-ask="${a.id}" data-source="${esc(n.source)}">
-      <div class="need-head">
-        <span class="need-icon">${svg("chat")}</span>
-        <button type="button" class="need-task" data-act="need-pr" title="Open ${esc(pr)}">${esc(title)}</button>
-        <span class="need-end">${toTodo}${dismiss}</span>
-      </div>
-      <div class="need-body">
-        <div class="ask-card ask-teams">
-          ${latest ? asked(latest) : ""}${others}${more}
-          <div class="ask-card-actions">
-            <button type="button" class="btn sm accent" data-act="need-pr">${svg("pullRequest")}<span>Review PR</span></button>${teams}
-          </div>
-        </div>
-      </div>
-    </article>`;
-}
-
-/**
- * A chat or email thread someone waits on you in: what it is on one line (it opens in the
- * Communication tab), then who asked, where and when, and what they need, with the chat in Teams or
- * the email in Outlook, To-do and Dismiss.
- */
-function commsNeedHtml(n: Extract<NeedItem, { kind: "comms" }>, now: number): string {
-  const c = n.need;
-  const mail = c.source === "mail";
-  const who = commsNeedWho(c);
-  const title = commsNeedTitle(c);
-  const label = `${title}, ${who}`;
-  const ask = c.needsYou.charAt(0).toUpperCase() + c.needsYou.slice(1);
-  const toTodo = `<button type="button" class="need-todo" data-act="need-todo" title="Move it to your to-dos" aria-label="Move to your to-dos: ${esc(label)}">${svg("checklist")}<span>To-do</span></button>`;
-  const dismiss = `<button type="button" class="icon-btn need-dismiss" data-act="need-dismiss" title="Dismiss: nobody's waiting on you" aria-label="Dismiss: ${esc(label)}">${svg("dismiss")}</button>`;
-  const open = c.link && (mail ? isOutlookLink(c.link) : isTeamsLink(c.link))
-    ? `<a class="btn sm" href="${esc(c.link)}" target="_blank" rel="noopener" data-act="need-open">${svg(mail ? "mail" : "chat")}<span>${mail ? "Open in Outlook" : "Open in Teams"}</span></a>`
-    : "";
-  return `
-    <article class="need need-teams need-comms" data-key="need:${esc(n.key)}" data-comms-need="${esc(c.key)}" data-source="${esc(n.source)}">
-      <div class="need-head">
-        <span class="need-icon">${svg(mail ? "mail" : "chat")}</span>
-        <button type="button" class="need-task" data-act="need-comms" title="${esc(c.summary || "Show it in Communication")}">${esc(title)}</button>
-        <span class="need-end">${toTodo}${dismiss}</span>
-      </div>
-      <div class="need-body">
-        <div class="ask-card ask-teams">
-          <p class="ask-teams-line"><span class="ask-teams-who">${esc(who)}</span> ${esc(commsNeedWhere(c))} · ${esc(agoPhrase(c.lastAt, now))}</p>
-          <p class="ask-teams-quote">${esc(ask)}</p>
-          ${open ? `<div class="ask-card-actions">${open}</div>` : ""}
-        </div>
-      </div>
-    </article>`;
-}
-
 /** The chats and email threads someone waits on you in. */
 const commsNeedsNow = (): CommsNeed[] => data?.comms?.needs || [];
 
@@ -1483,10 +1668,12 @@ function showCommsNeed(key: string): void {
   if (!show()) void Promise.all([loadChats(), loadMail()]).then(() => void show());
 }
 
-/** Dismiss a chat's or thread's ask: it leaves Needs you at once, and no longer shows as waiting in Communication. */
+/** Dismiss a chat's or thread's ask: its notice leaves at once, and it no longer shows as waiting in Communication. */
 async function dismissCommsNeed(key: string): Promise<void> {
   if (!data?.comms) return;
   const before = data.comms.needs || [];
+  const need = before.find((n) => n.key === key);
+  if (need) noticeOutcomes.set(key, { text: `Dismissed ${noticeLabel({ kind: "comms", key: `comms:${key}`, source: key, need, at: 0 })}`, dropped: true });
   data.comms.needs = before.filter((n) => n.key !== key);
   renderToday(true);
   try {
@@ -1495,6 +1682,7 @@ async function dismissCommsNeed(key: string): Promise<void> {
   } catch (e) {
     if ((e as ApiError).status !== 404 && data?.comms) {
       data.comms.needs = before;
+      noticeOutcomes.delete(key);
       toast((e as Error).message, "err");
     }
   }
@@ -1523,10 +1711,12 @@ function openAskPr(ask: CommsAsk): void {
   window.open(url, "_blank", "noopener");
 }
 
-/** Dismiss a Teams ask: it leaves Needs you at once; a to-do made from it ticks on the next poll. */
+/** Dismiss a Teams ask: its notice leaves at once; a to-do made from it ticks on the next poll. */
 async function dismissAsk(ask: CommsAsk): Promise<void> {
   if (!data?.comms) return;
   const before = data.comms.asks;
+  const source = `need:teams:${ask.id}`;
+  noticeOutcomes.set(source, { text: `Dismissed ${noticeLabel({ kind: "teams", key: `teams:${ask.id}`, source, ask, at: 0 })}`, dropped: true });
   data.comms.asks = before.filter((a) => a.id !== ask.id);
   renderToday(true);
   try {
@@ -1535,6 +1725,7 @@ async function dismissAsk(ask: CommsAsk): Promise<void> {
   } catch (e) {
     if ((e as ApiError).status !== 404 && data?.comms) {
       data.comms.asks = before;
+      noticeOutcomes.delete(source);
       toast((e as Error).message, "err");
     }
   }
@@ -1616,7 +1807,7 @@ function renderTasks(force: boolean): void {
   patchPane(tasksBody, html.join(""));
 }
 
-// ---- The day: Needs you, the overview, to-dos and the note ----------------------------
+// ---- The day: the overview, to-dos and the note ----------------------------------------
 
 function renderDay(force: boolean): void {
   // The note can save before the Workspace is ever shown (an edit restored at startup).
@@ -1645,29 +1836,10 @@ function renderDay(force: boolean): void {
   // The count is of what's on the list: open top-level to-dos, not their subtasks.
   const openTodos = todos.filter((t) => !t.done && t.parentId === null).length;
   todosCount.textContent = openTodos ? String(openTodos) : "";
-  // Needs you covers every service: the filter belongs to the board in Tasks.
-  const needs = data ? visibleNeeds(needsItems(data.tasks, teamsAsks(), commsNeedsNow()), data.todos) : [];
-  needsCount.textContent = needs.length ? String(needs.length) : "";
-  root.querySelector('[data-rs="needs"]')!.classList.toggle("has-needs", needs.length > 0);
-  railNew.needs = needs.length;
-  paintRailBadge();
-  const banner = needs.length ? `${needs.length} thing${needs.length === 1 ? "" : "s"} need${needs.length === 1 ? "s" : ""} you` : "";
-  needsBanner.hidden = !banner;
-  if (needsBanner.dataset.text !== banner) {
-    needsBanner.dataset.text = banner;
-    needsBanner.innerHTML = banner ? `${svg("warning")}<span>${esc(banner)}</span><span class="jv-banner-go">Show</span>` : "";
-  }
   paintDevisBanner(data?.devis || null);
   paintUpdateBanner(data?.update || null);
 
-  if (!data) {
-    needsBody.innerHTML = loadingHtml("Today");
-    return;
-  }
-  patchPane(
-    needsBody,
-    staleNote() + (needs.length ? needs.map((n) => needHtml(n, now)).join("") : `<p class="rs-empty" data-key="none">${esc(SECTIONS[0].empty)}</p>`)
-  );
+  if (!data) return;
   patchPane(overviewEl, renderOverview(data.tasks, now));
   todoList.render(force);
   patchPane(noteBody, renderNote(now));
@@ -1731,16 +1903,18 @@ function paintUpdateBanner(b: UpdateBanner | null): void {
 // The list itself (subtasks, due dates, priority, selection, starting a task) is todoList.ts.
 
 /**
- * Take a Needs you item on as a to-do: it leaves Needs you at once, and the to-do it becomes
- * remembers it, so it ticks itself once the ask is gone. Undo takes the to-do back out.
+ * Take a notice on as a to-do: it leaves Devis's thread at once (a receipt stays), and the to-do
+ * it becomes remembers it, so it ticks itself once the ask is gone. Undo takes the to-do back out.
  */
 async function needToTodo(button: HTMLElement): Promise<void> {
   const source = button.closest<HTMLElement>("[data-source]")?.dataset.source;
   const item = data ? needsItems(data.tasks, teamsAsks(), commsNeedsNow()).find((n) => n.source === source) : undefined;
   if (!item || !data) return;
   const { text, source: from } = needTodo(item);
-  // Where the keyboard goes once the item is gone: the next item's To-do, else the new to-do.
-  const next = button.closest(".need")?.nextElementSibling?.querySelector<HTMLElement>("[data-act='need-todo']")?.closest<HTMLElement>("[data-source]")?.dataset.source;
+  // Where the keyboard goes once the notice is gone: the next one's To-do, else the new to-do.
+  const shown = openNoticeEls();
+  const mine = button.closest<HTMLElement>(".nt");
+  const next = mine ? shown[shown.indexOf(mine) + 1]?.dataset.source : undefined;
   const iso = new Date().toISOString();
   const placeholder: Todo = {
     id: -Date.now(),
@@ -1765,7 +1939,7 @@ async function needToTodo(button: HTMLElement): Promise<void> {
   renderTasks(true);
   if (!ok) return;
   const added = data.todos?.find((t) => !t.done && t.source?.key === from.key);
-  if (next) root!.querySelector<HTMLElement>(`[data-source="${CSS.escape(next)}"] [data-act='need-todo']`)?.focus({ preventScroll: true });
+  if (next) root!.querySelector<HTMLElement>(`.nt[data-source="${CSS.escape(next)}"] [data-act='need-todo']`)?.focus({ preventScroll: true });
   else if (added) todoList.focusTodo(added.id);
   toast(
     "Moved to your to-dos",
@@ -2095,12 +2269,11 @@ function jumpToTask(taskId: string): void {
   openDrawer({ kind: "task", taskId });
 }
 
-/** Show the first thing a task waits on you for, under Needs you. */
+/** Show the first thing a task waits on you for: its notice in Devis's thread. */
 function jumpToNeed(taskId: string): void {
+  const item = leadPane.log.querySelector<HTMLElement>(`.nt:not(.done)[data-task="${CSS.escape(taskId)}"]`);
+  if (item) return goToNotice(item.dataset.source || "");
   if (drawer) closeDrawer(false);
-  revealRail("needs");
-  const item = needsBody.querySelector<HTMLElement>(`.need[data-need="${CSS.escape(taskId)}"]`);
-  if (item) return flashInView(item, item.querySelector<HTMLElement>(".need-body button, .need-body textarea, .need-body input"));
   // Taken on as a to-do: that's where it is now. Else the task itself.
   revealRail("todos");
   const todo = todosBody.querySelector<HTMLElement>(`.todo-src[data-src-task="${CSS.escape(taskId)}"]`)?.closest<HTMLElement>(".todo");
@@ -2358,9 +2531,14 @@ function onClick(e: MouseEvent): void {
     const w = workerFor(decision);
     const requestId = decision.closest<HTMLElement>("[data-request]")?.dataset.request;
     if (w && requestId) {
-      void act(decision, () =>
-        postJSON("/api/jarvis/workers/decide", { sessionId: w.sessionId, requestId, decision: decision.dataset.decide })
-      );
+      const how = decision.dataset.decide;
+      void act(decision, async () => {
+        await postJSON("/api/jarvis/workers/decide", { sessionId: w.sessionId, requestId, decision: how });
+        noteOutcome(
+          decision,
+          how === "deny" ? { text: `You denied ${w.label}'s request`, dropped: true } : { text: how === "always" ? `You allowed everything from ${w.label}` : `You allowed ${w.label}'s request` }
+        );
+      });
     }
     return;
   }
@@ -2369,7 +2547,10 @@ function onClick(e: MouseEvent): void {
     const w = workerFor(choice);
     const requestId = choice.closest<HTMLElement>("[data-request]")?.dataset.request;
     if (w && requestId) {
-      void act(choice, () => postJSON("/api/jarvis/workers/message", { sessionId: w.sessionId, requestId, text: choice.dataset.choice }));
+      void act(choice, async () => {
+        await postJSON("/api/jarvis/workers/message", { sessionId: w.sessionId, requestId, text: choice.dataset.choice });
+        noteOutcome(choice, { text: `You answered ${w.label}: “${choice.dataset.choice}”` });
+      });
     }
     return;
   }
@@ -2380,7 +2561,10 @@ function onClick(e: MouseEvent): void {
     const repos = reposFromCard(reposButton);
     if (!w || !requestId || !repos) return;
     if (reposButton.dataset.repos === "confirm" && !repos.length) return void toast("Check at least one repository, or choose None.", "err");
-    void act(reposButton, () => postJSON("/api/jarvis/workers/repos", { sessionId: w.sessionId, requestId, repos }));
+    void act(reposButton, async () => {
+      await postJSON("/api/jarvis/workers/repos", { sessionId: w.sessionId, requestId, repos });
+      noteOutcome(reposButton, { text: repos.length ? `You confirmed ${w.label}'s repositories` : `You gave ${w.label} no repositories` });
+    });
     return;
   }
   const shipButton = target.closest<HTMLElement>("[data-ship]");
@@ -2393,6 +2577,7 @@ function onClick(e: MouseEvent): void {
     if (!requestId || !pick) return;
     void act(shipButton, async () => {
       await postJSON("/api/jarvis/workers/ship", { sessionId: w.sessionId, requestId, ...pick });
+      noteOutcome(shipButton, pick.decision === "back" ? { text: `You sent ${w.label}'s change back`, dropped: true } : { text: `You shipped ${w.label}'s change` });
       if (pick.decision !== "back") toast("Shipping. Devis restarts on the new build when it's deployed.", "ok");
     });
     return;
@@ -2452,6 +2637,16 @@ function onClick(e: MouseEvent): void {
       return void window.open("/todos.html", "devis-todos");
     case "need-todo":
       return void needToTodo(node);
+    case "need-ask":
+      return askAboutNotice(node);
+    case "need-unask":
+      leadAbout = null;
+      paintLeadAbout();
+      return leadPane.input.focus();
+    case "notice-next":
+      return nextNotice();
+    case "notice-pill":
+      return goToNotice(node.dataset.target || "");
     case "need-pr": {
       const ask = askOf(node);
       if (ask) openAskPr(ask);
@@ -2649,6 +2844,7 @@ function onSubmit(e: SubmitEvent): void {
   const button = form.querySelector<HTMLButtonElement>("button[type=submit]");
   void act(button, async () => {
     await postJSON("/api/jarvis/workers/message", { sessionId: w.sessionId, text, requestId });
+    if (requestId) noteOutcome(form, { text: `You answered ${w.label}: “${oneLine(text, 80)}”` });
     drafts.delete(key);
     area.value = "";
   });
@@ -2961,7 +3157,7 @@ function openStartWorker(task: TodayTask): void {
         <textarea id="jw-prompt" class="ask-q" rows="5" placeholder="What should this worker do first?"></textarea>
         ${MODEL_FIELDS}
       </div>
-      <p class="pa-note">The worker is a Copilot session in that folder with your own Copilot setup. It can read freely. Shell commands, file edits and other tools wait for you under Needs you.</p>`,
+      <p class="pa-note">The worker is a Copilot session in that folder with your own Copilot setup. It can read freely. Shell commands, file edits and other tools wait for your OK in Devis's chat.</p>`,
     confirmLabel: "Start worker",
     onConfirm: async (node) => {
       const res = await postJSON("/api/jarvis/workers/start", {
@@ -2989,7 +3185,7 @@ function openStartTaskWorker(task: TodayTask, folder: string): void {
         <textarea id="jw-prompt" class="ask-q" rows="5" placeholder="What should this worker take on? Leave it empty to have it work from the task's description."></textarea>
         ${MODEL_FIELDS}
       </div>
-      <p class="pa-note">The worker gets its own folder in <code>${esc(folder)}</code>. Like the task's other workers, it proposes the repositories it needs for you to confirm, gets a worktree of each on its own branch, and settles the goal with you before it starts. Shell commands, file edits and other tools wait for you under Needs you.</p>`,
+      <p class="pa-note">The worker gets its own folder in <code>${esc(folder)}</code>. Like the task's other workers, it proposes the repositories it needs for you to confirm, gets a worktree of each on its own branch, and settles the goal with you before it starts. Shell commands, file edits and other tools wait for your OK in Devis's chat.</p>`,
     confirmLabel: "Start worker",
     onConfirm: async (node) => {
       const res = await postJSON("/api/jarvis/workers/start", {

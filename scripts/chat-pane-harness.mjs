@@ -118,6 +118,19 @@ const s1 = c.chatLogSig({ items: [], busy: true, partial: "abc" });
 assert.notEqual(s1, c.chatLogSig({ items: [], busy: true, partial: "abcd" }), "a streaming reply repaints as it grows");
 assert.notEqual(c.chatLogSig({ items: [], sending: "x" }), c.chatLogSig({ items: [], sending: "x", sendingAccepted: true }), "a message turning sent repaints");
 
+// ---- the host's own items in the thread (Devis's notices) ----
+const hostItem = { type: "html", key: "nt:x", sig: "1", html: '<article class="nt" data-key="nt:x">ask</article>' };
+const withHost = c.chatLogParts({ items: [items[0], hostItem, items[1]] }).history;
+assert.ok(withHost.indexOf('m:a"') < withHost.indexOf("nt:x") && withHost.indexOf("nt:x") < withHost.indexOf("n:n1"), "a host item sits where the host puts it");
+assert.notEqual(c.chatLogSig({ items: [hostItem] }), c.chatLogSig({ items: [{ ...hostItem, sig: "2" }] }), "a host item that changed repaints");
+
+// ---- a message sent with a notice attached: its name over the words, its details only for Devis ----
+const aboutMsg = c.messageHtml(msg("user", "[Needs you: Nova's question]\nTask (id t1).\n---\nIs it quick?", "u9"));
+assert.match(aboutMsg, /class="chat-about">.*Nova.{1,6}s question<\/span><\/span><p>Is it quick\?<\/p>/);
+assert.doesNotMatch(aboutMsg, /id t1/, "the details are for Devis");
+assert.match(c.queueHtml({ queued: [{ id: "q9", text: "[Needs you: X]\nctx\n---\nlater" }] }), /chat-about[\s\S]*<p>later<\/p>/, "queued ones show it too");
+assert.doesNotMatch(c.queueHtml({ queued: [{ id: "q9", text: "[Needs you: X]\nctx\n---\nlater" }] }), /ctx/);
+
 // ---- the log's two parts ----
 // The conversation repaints only when it changes; the live tail (sent, steered, streaming, queue) moves on its own.
 const parts = c.chatLogParts({ items, notice: "<p>n</p>", sending: "next", sendingAccepted: true, steered: [{ id: "s1", text: "st" }], busy: true, partial: "so far", queued: q0() });

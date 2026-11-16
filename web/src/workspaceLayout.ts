@@ -3,23 +3,23 @@
 //   Columns  — one to four, side by side. `w` is a column's share of the width (the default sets
 //              them, and dragging a border between columns changes them); null leaves the widths
 //              to CSS. A column moves as a whole, its panels and width going with it.
-//   Panels   — Devis (always there, exactly once) and the seven sections. In a column, open panels
+//   Panels   — Devis (always there, exactly once) and the six sections. In a column, open panels
 //              share the height by `g` (a flex-grow, 1 when unset).
 //   Flat     — a window too narrow for the columns shows Devis alone and the sections in one
 //              list behind the Overview button. `flat` is that list's order once the user moves
 //              something there; until then it reads the columns left to right, top to bottom.
 // Kept per device in localStorage. The first read takes over the rail's order and the
 // Devis/rail split that step 1 saved, then drops those keys. A section new since the layout
-// was saved goes in under the section before it, so Pull Requests lands under Tasks.
+// was saved goes in under the section before it, so Pull Requests lands under Tasks. One no longer
+// there (Needs you, now Devis's notices) is dropped on read.
 import { savedShare } from "./splitter.js";
 
-export type Section = "needs" | "tasks" | "prs" | "comms" | "meetings" | "todos" | "note";
+export type Section = "tasks" | "prs" | "comms" | "meetings" | "todos" | "note";
 export type PanelId = "devis" | Section;
 
-export const SECTIONS: readonly Section[] = ["needs", "tasks", "prs", "comms", "meetings", "todos", "note"];
+export const SECTIONS: readonly Section[] = ["tasks", "prs", "comms", "meetings", "todos", "note"];
 export const PANEL_NAME: Record<PanelId, string> = {
   devis: "Devis",
-  needs: "Needs you",
   tasks: "Tasks",
   prs: "Pull Requests",
   comms: "Communication",
@@ -75,13 +75,13 @@ const G_MAX = 20;
 const clampG = (g: number): number => Math.min(G_MAX, Math.max(G_MIN, g));
 
 /**
- * Three columns: what's waiting on you (Needs you, To-dos, Note) on the left, Devis in the middle,
- * and the work you watch (Tasks, Pull Requests, Meetings, Communication) on the right.
+ * Three columns: what's yours to do (To-dos, Note) on the left, Devis in the middle with what needs
+ * you, and the work you watch (Tasks, Pull Requests, Meetings, Communication) on the right.
  */
 export function defaultLayout(): Layout {
   return {
     columns: [
-      { w: 0.25, panels: [{ id: "needs", g: 1 }, { id: "todos", g: 1 }, { id: "note", g: 1 }] },
+      { w: 0.25, panels: [{ id: "todos", g: 1.4 }, { id: "note", g: 1 }] },
       { w: 0.54, panels: [{ id: "devis" }] },
       { w: 0.21, panels: [{ id: "tasks", g: 1.1 }, { id: "prs", g: 0.9 }, { id: "meetings", g: 1 }, { id: "comms", g: 1 }] },
     ],

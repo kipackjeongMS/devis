@@ -1066,7 +1066,7 @@ export type BoardSection = Exclude<SectionId, "needs">;
 
 /**
  * Where a task's card sits on the board, or null once it was finished before `dayStart`.
- * Needing the user never moves a card: the ask is listed under Needs you, and the card stays
+ * Needing the user never moves a card: the ask shows in Devis's chat, and the card stays
  * put with a warning (needsYou). A worker waiting on the user is mid-turn, so its task stays
  * under Running, even a task marked done.
  */
@@ -1182,7 +1182,7 @@ export function taskNeeds(tasks: TodayTask[]): TaskNeedItem[] {
 }
 
 /** The oldest of a worker's open requests: the one its Needs you item stands for. */
-function firstRequest(requests: WorkerRequest[]): WorkerRequest {
+export function firstRequest(requests: WorkerRequest[]): WorkerRequest {
   return requests.reduce((a, b) => (time(b.at) < time(a.at) ? b : a));
 }
 
@@ -1192,7 +1192,7 @@ export function visibleNeeds<T extends NeedItem>(items: T[], todos: Todo[] | und
   return taken.size ? items.filter((n) => !taken.has(n.source)) : items;
 }
 
-const oneLine = (text: string, max = 200): string => {
+export const oneLine = (text: string, max = 200): string => {
   const t = text.replace(/\s+/g, " ").trim();
   return t.length > max ? `${t.slice(0, max - 1).trimEnd()}…` : t;
 };
