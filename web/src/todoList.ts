@@ -620,13 +620,12 @@ export function createTodoList(body: HTMLElement, host: TodoListHost): TodoList 
       setTimeout(() => settleFocus(first, before));
       return done;
     };
-    if (picks.length === 1 && !subs) return void go();
     const one = picks.length === 1 ? picks[0]! : null;
     openActionDialog({
       title: one ? "Delete the to-do" : `Delete ${picks.length} to-dos`,
       loc: one ? one.text : "To-dos",
       body: `<p class="pa-note">${
-        one ? `Its ${plural(subs, "subtask")} go${subs === 1 ? "es" : ""} with it.` : `${subs ? `Their ${plural(subs, "subtask")} go with them. ` : ""}`
+        one ? (subs ? `Its ${plural(subs, "subtask")} go${subs === 1 ? "es" : ""} with it. ` : "") : `${subs ? `Their ${plural(subs, "subtask")} go with them. ` : ""}`
       }You can't undo this.</p>`,
       confirmLabel: "Delete",
       danger: true,

@@ -21,6 +21,18 @@ import {
 import { CLIENT_NAME, replyText, resumeCommand, sendAndSettle, TurnStoppedError, WEB_BRIEF, withCopilotClient } from "./copilot-runtime.mjs";
 import { sharedMcpServers } from "./shared-playwright.mjs";
 import { effortProblem, carriedEffort, getModelCatalog, sessionModelState, switchSessionModel, type ModelChoice, type ModelState } from "./models.mjs";
+import {
+    applyCommandResult,
+    note,
+    parseSlash,
+    pickCommand,
+    readSessionCommands,
+    stripAnsi,
+    type ChatCommand,
+    type CommandHooks,
+    type CommandOutcome,
+    type CommandResult,
+} from "./chat-commands.mjs";
 import { MessageQueue, sendMode, steer, type QueuedMessage } from "./chat-queue.mjs";
 import { imageAttachments, requestImages, type ChatImage } from "./chat-images.mjs";
 import { promptFor, sameImages } from "./chat-transcript.mjs";
@@ -2226,91 +2238,17 @@ export async function openWorkerTerminal(sessionId: unknown): Promise<void> {
 
 // ---- slash commands -----------------------------------------------------------------
 
-/** A slash command the worker's chat can run: a CLI built-in or one of the user's skills. */
-export interface WorkerCommand {
-    name: string;
-    aliases: string[];
-    description: string;
-    kind: "builtin" | "skill";
-    /** What the command takes after its name; empty when it takes nothing. */
-    hint: string;
-    required: boolean;
-    choices: Array<{ name: string; description: string }>;
-    /** It can run while the worker is mid-turn. */
-    duringTurn: boolean;
-}
+export type WorkerCommand = ChatCommand;
+export { stripAnsi, parseSlash, type CommandOutcome };
 
-/** What running a command did, for the chat to show. */
-export type CommandOutcome =
-    | { kind: "sent"; display: string; notice: string | null }
-    | { kind: "note"; text: string; markdown: boolean; url: string | null }
-    | {
-          kind: "choices";
-          title: string;
-          command: string;
-          options: Array<{ name: string; description: string; group: string | null }>;
-      };
-
-type CommandInfo = Awaited<ReturnType<CopilotSession["rpc"]["commands"]["list"]>>["commands"][number];
-type CommandResult = Awaited<ReturnType<CopilotSession["rpc"]["commands"]["invoke"]>>;
-
-/**
- * Built-ins that don't fit a worker's chat: they move the worker to another
- * folder or mode, or schedule work the app wouldn't see.
- */
-const CHAT_UNSUPPORTED: Record<string, string> = {
-    cwd: "A worker stays in its folder. Start another worker for a different folder.",
-    autopilot: "Autopilot mode isn't available in the worker chat.",
-    plan: "Plan mode isn't available in the worker chat.",
-    every: "Schedules aren't available in the worker chat.",
-    after: "Schedules aren't available in the worker chat.",
-    remote: "Remote control isn't available in the worker chat.",
-    sandbox: "Sandbox settings aren't available in the worker chat.",
-};
 const MODEL_ID = /^[\w.:/-]{1,100}$/;
-const NOTE_MAX = 20_000;
-
-/** The CLI's color and link escapes, which a chat can't show. */
-export function stripAnsi(text: string): string {
-    return text.replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, "").replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "");
-}
-
-/** "/name rest" into the command name and its input. */
-export function parseSlash(text: string): { name: string; input: string } | null {
-    const m = /^\/([\w.:-]{1,100})(?:\s+([\s\S]*))?$/.exec(text.trim());
-    return m ? { name: m[1].toLowerCase(), input: (m[2] || "").trim() } : null;
-}
-
-function toCommand(info: CommandInfo): WorkerCommand {
-    const command: WorkerCommand = {
-        name: info.name.toLowerCase(),
-        aliases: (info.aliases || []).map((a) => a.toLowerCase()),
-        description: info.description || "",
-        kind: info.kind === "skill" ? "skill" : "builtin",
-        hint: info.input?.hint?.trim() || "",
-        required: !!info.input?.required,
-        choices: (info.input?.choices || []).map((c) => ({ name: c.name, description: c.description || "" })),
-        duringTurn: !!info.allowDuringAgentExecution,
-    };
-    // The app switches the model itself, so the user's saved CLI default stays as it is.
-    if (command.name === "model") {
-        Object.assign(command, { description: "Switch this worker's model", hint: "model", required: false, choices: [], duringTurn: true });
-    }
-    return command;
-}
+const WORKER_CHAT = "worker chat";
 
 async function sessionCommands(sessionId: string): Promise<WorkerCommand[]> {
     const session = await attach(sessionId);
     const entry = live(sessionId);
     if (!entry.commands) {
-        const loading = session.rpc.commands
-            .list({ includeBuiltins: true, includeSkills: true, includeClientCommands: false })
-            .then(({ commands }) =>
-                commands
-                    .filter((c) => c.kind !== "client" && !CHAT_UNSUPPORTED[c.name.toLowerCase()])
-                    .map(toCommand)
-                    .sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === "builtin" ? -1 : 1)),
-            );
+        const loading = readSessionCommands(session, WORKER_CHAT);
         entry.commands = loading;
         loading.catch(() => {
             if (entry.commands === loading) entry.commands = null;
@@ -2333,13 +2271,6 @@ export async function listWorkerCommands(sessionId: unknown): Promise<WorkerComm
         if (!isWorkerBusy(worker.sessionId)) await detach(worker.sessionId).catch(() => undefined);
         throw failure(worker, "read the commands", error);
     }
-}
-
-function note(text: string, markdown = false, url: string | null = null): CommandOutcome {
-    // Keep the CLI's line layout; only the length is capped.
-    let body = stripAnsi(text).replace(/\r\n/g, "\n").replace(/[ \t]+$/gm, "").trim();
-    if (body.length > NOTE_MAX) body = body.slice(0, NOTE_MAX - 1).trimEnd() + "…";
-    return { kind: "note", text: body || "Done.", markdown, url };
 }
 
 async function currentWorkerModel(worker: JarvisWorker): Promise<string | null> {
@@ -2372,44 +2303,19 @@ async function switchWorkerModel(worker: JarvisWorker, value: string): Promise<C
     return note(result.deferred ? `${worker.label} switches to ${label} when this turn ends.` : `${worker.label} now uses ${label}.`);
 }
 
-async function applyCommandResult(worker: JarvisWorker, command: WorkerCommand, result: CommandResult): Promise<CommandOutcome> {
-    switch (result.kind) {
-        case "text":
-            return note(result.text, !!result.markdown);
-        case "completed":
-            return note(result.message || `/${command.name} done.`);
-        case "add-timeline-entry":
-            return note(result.entry.text, false, result.entry.url || null);
-        case "set-plan-model":
-            return note(result.message);
-        case "select-subcommand":
-            return {
-                kind: "choices",
-                title: result.title,
-                command: result.command,
-                options: result.options.map((o) => ({ name: o.name, description: o.description || "", group: o.group || null })),
-            };
-        case "set-model":
-            return switchWorkerModel(worker, result.model);
-        case "show-dialog":
-            if (result.dialog.kind === "model-picker") return switchWorkerModel(worker, "");
-            return note(`/${command.name} opens a picker the worker chat doesn't have. Run it from the Copilot CLI instead.`);
-        case "agent-prompt": {
-            if (result.mode && result.mode !== "interactive") {
-                return note(`/${command.name} needs ${result.mode} mode, which the worker chat doesn't have. Run it from the Copilot CLI instead.`);
-            }
+function workerHooks(worker: JarvisWorker): CommandHooks {
+    return {
+        chat: WORKER_CHAT,
+        switchModel: (value) => switchWorkerModel(worker, value),
+        async startTurn(prompt, display) {
             const task = await getTask(worker.taskId);
             if (task?.status === "done") throw new JarvisError("Reopen the task before sending its workers more work.", 409);
             if (isWorkerBusy(worker.sessionId)) {
                 throw new JarvisError(`${worker.label} is still working. Wait for its turn to end, or stop it.`, 409);
             }
-            const display = (result.displayPrompt || `/${command.name}`).trim();
-            runTurn(worker.sessionId, result.prompt, display);
-            return { kind: "sent", display, notice: result.notice ? stripAnsi(result.notice) : null };
-        }
-        default:
-            return note(`/${command.name} ran.`);
-    }
+            runTurn(worker.sessionId, prompt, display);
+        },
+    };
 }
 
 /**
@@ -2419,27 +2325,22 @@ async function applyCommandResult(worker: JarvisWorker, command: WorkerCommand, 
  */
 export async function runWorkerCommand(sessionId: unknown, text: unknown): Promise<CommandOutcome> {
     const worker = await requireWorker(sessionId);
-    const parsed = typeof text === "string" ? parseSlash(text) : null;
-    if (!parsed) throw new JarvisError("Type a command, like /usage.");
-    if (parsed.input.length > PROMPT_MAX) throw new JarvisError("The message is too long.");
-    const unsupported = CHAT_UNSUPPORTED[parsed.name];
-    if (unsupported) throw new JarvisError(unsupported);
-    const commands = await listWorkerCommands(worker.sessionId);
-    const command = commands.find((c) => c.name === parsed.name || c.aliases.includes(parsed.name));
-    if (!command) throw new JarvisError(`Unknown command /${parsed.name}. Type / to see what ${worker.label} can run.`, 404);
-    if (isWorkerBusy(worker.sessionId) && !command.duringTurn) {
-        throw new JarvisError(`${worker.label} is working. Wait for its turn to end, or stop it.`, 409);
-    }
-    if (command.required && !parsed.input) throw new JarvisError(`/${command.name} needs ${command.hint || "more input"}.`);
-    if (command.name === "model") return switchWorkerModel(worker, parsed.input);
+    const { command, input } = await pickCommand(text, {
+        chat: WORKER_CHAT,
+        who: worker.label,
+        maxInput: PROMPT_MAX,
+        load: () => listWorkerCommands(worker.sessionId),
+        busy: () => isWorkerBusy(worker.sessionId),
+    });
+    if (command.name === "model") return switchWorkerModel(worker, input);
     let result: CommandResult;
     try {
         const session = await attach(worker.sessionId);
-        result = await session.rpc.commands.invoke({ name: command.name, ...(parsed.input ? { input: parsed.input } : {}) });
+        result = await session.rpc.commands.invoke({ name: command.name, ...(input ? { input } : {}) });
     } catch (error) {
         throw failure(worker, `run /${command.name}`, error);
     }
-    return applyCommandResult(worker, command, result);
+    return applyCommandResult(command, result, workerHooks(worker));
 }
 
 /** The worker's conversation so far (top-level user and assistant messages). */

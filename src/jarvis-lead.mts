@@ -10,10 +10,11 @@ import { sharedMcpServers } from "./shared-playwright.mjs";
 import type { WorkItem } from "./service-files.mjs";
 import { runNotesAction } from "./jarvis-notes.mjs";
 import { readConfig } from "./config.mjs";
-import { effortProblem, getModelCatalog, sessionModelState, switchSessionModel, type ModelChoice, type ModelState } from "./models.mjs";
+import { effortProblem, carriedEffort, getModelCatalog, sessionModelState, switchSessionModel, type ModelChoice, type ModelState } from "./models.mjs";
 import { MessageQueue, sendMode, steer, type QueuedMessage } from "./chat-queue.mjs";
 import { imageAttachments, requestImages, type ChatImage } from "./chat-images.mjs";
 import { promptFor } from "./chat-transcript.mjs";
+import { applyCommandResult, note, pickCommand, readSessionCommands, type ChatCommand, type CommandOutcome, type CommandResult } from "./chat-commands.mjs";
 import { chatMessagesFromEvents, type ChatMessage } from "./reviewer-session.mjs";
 import {
     JarvisError,
@@ -718,11 +719,14 @@ export async function setLeadModel(value: unknown, effortValue?: unknown): Promi
     return { model, effort, currentModel: now.model, currentEffort: now.effort, deferred };
 }
 
+/** The longest message the Lead takes. */
+const LEAD_INPUT_MAX = 20_000;
+
 /** What the user typed, checked. It may be empty when images go with it. */
 function leadText(text: unknown, images: readonly ChatImage[]): string {
     const prompt = typeof text === "string" ? text.trim() : "";
     if (!prompt && !images.length) throw new JarvisError("Type a message.");
-    if (prompt.length > 20_000) throw new JarvisError("The message is too long.");
+    if (prompt.length > LEAD_INPUT_MAX) throw new JarvisError("The message is too long.");
     return prompt;
 }
 
@@ -765,7 +769,8 @@ async function steerLead(text: string, images: readonly ChatImage[] = []): Promi
     lead.version++;
 }
 
-function startLeadTurn(text: string, images: readonly ChatImage[] = []): void {
+/** `displayPrompt` is what the chat shows for the turn, like "/name" for a command's expanded prompt. */
+function startLeadTurn(text: string, images: readonly ChatImage[] = [], displayPrompt?: string): void {
     const prompt = promptFor(text, images);
     const attachments = imageAttachments(images);
     lead.busy = true;
@@ -787,7 +792,7 @@ function startLeadTurn(text: string, images: readonly ChatImage[] = []): void {
             // Stop can land while the session is still resuming; nothing to abort yet.
             if (lead.stopping) throw new TurnStoppedError();
             lead.live = true;
-            await sendAndSettle(session, attachments.length ? { prompt, attachments } : { prompt }, TURN_TIMEOUT_MS, {
+            await sendAndSettle(session, { prompt, ...(displayPrompt ? { displayPrompt } : {}), ...(attachments.length ? { attachments } : {}) }, TURN_TIMEOUT_MS, {
                 signal: stopTurn.signal,
                 onMissedIdle: () => console.warn("[jarvis] the Lead's turn ended without session.idle; picked up from the runtime"),
             });
@@ -816,6 +821,90 @@ function startLeadTurn(text: string, images: readonly ChatImage[] = []): void {
             if (next) startLeadTurn(next.text, next.images);
         }
     })();
+}
+
+// ---- slash commands -----------------------------------------------------------------
+
+const LEAD_CHAT = "chat";
+const leadCommandCache = new WeakMap<CopilotSession, Promise<ChatCommand[]>>();
+
+/** The Lead's session for commands, started when there isn't one yet. */
+async function commandSession(): Promise<CopilotSession> {
+    try {
+        return (await acquire(true))!;
+    } catch (error) {
+        if (error instanceof JarvisError) throw error;
+        throw new JarvisError(`Could not reach ${LEAD_NAME}: ${(error as Error).message}`, 502);
+    }
+}
+
+/** The slash commands the Lead's chat offers: the CLI's built-ins, then the user's skills. */
+export async function listLeadCommands(): Promise<ChatCommand[]> {
+    const session = await commandSession();
+    let loading = leadCommandCache.get(session);
+    if (!loading) {
+        loading = readSessionCommands(session, LEAD_CHAT);
+        leadCommandCache.set(session, loading);
+        loading.catch(() => leadCommandCache.delete(session));
+    }
+    try {
+        return await loading;
+    } catch (error) {
+        throw new JarvisError(`Could not read the commands: ${(error as Error).message}`, 502);
+    }
+}
+
+/** /model: a list to pick from, or a switch that keeps the conversation. */
+async function switchLeadModelCommand(value: string): Promise<CommandOutcome> {
+    const model = value.trim();
+    const catalog = await runtime.catalog().catch(() => null);
+    if (!model) {
+        if (!catalog?.length) throw new JarvisError("Couldn't read the models your Copilot can run.", 502);
+        const session = await acquire(false).catch(() => null);
+        const running = session ? (await currentModel(session).catch(() => null))?.model : null;
+        const current = running || (await savedModel()) || null;
+        return {
+            kind: "choices",
+            title: `Model for ${LEAD_NAME}`,
+            command: "model",
+            options: catalog.map((m) => ({ name: m.id, description: m.id === current ? "Current" : "", group: null })),
+        };
+    }
+    const effort = carriedEffort(model, await savedEffort(), catalog);
+    const result = await setLeadModel(model, effort);
+    const label = `${model}${effort ? ` (${effort})` : ""}`;
+    return note(result.deferred ? `${LEAD_NAME} switches to ${label} when this turn ends.` : `${LEAD_NAME} now uses ${label}.`);
+}
+
+/**
+ * Run "/name input" in the Lead's session, like a worker's command: skills and prompt
+ * commands start a turn; the rest answer with text or a list of choices.
+ */
+export async function runLeadCommand(text: unknown): Promise<CommandOutcome> {
+    const { command, input } = await pickCommand(text, {
+        chat: LEAD_CHAT,
+        who: LEAD_NAME,
+        maxInput: LEAD_INPUT_MAX,
+        load: listLeadCommands,
+        busy: () => lead.busy,
+    });
+    if (command.name === "model") return switchLeadModelCommand(input);
+    let result: CommandResult;
+    try {
+        const session = await commandSession();
+        result = await session.rpc.commands.invoke({ name: command.name, ...(input ? { input } : {}) });
+    } catch (error) {
+        if (error instanceof JarvisError) throw error;
+        throw new JarvisError(`Could not run /${command.name}: ${(error as Error).message}`, 502);
+    }
+    return applyCommandResult(command, result, {
+        chat: LEAD_CHAT,
+        switchModel: switchLeadModelCommand,
+        startTurn(prompt, display) {
+            if (lead.busy) throw new JarvisError(`${LEAD_NAME} is still answering. Wait for it to finish, or stop it.`, 409);
+            startLeadTurn(prompt, [], display);
+        },
+    });
 }
 
 /** Stop the Lead's turn. What's queued stays, held until the user sends again. */

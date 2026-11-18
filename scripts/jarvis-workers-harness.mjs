@@ -645,6 +645,7 @@ try {
     await assert.rejects(workers.runWorkerCommand(plain.sessionId, "/nope"), /Unknown command \/nope\. Type \/ to see/);
     await assert.rejects(workers.runWorkerCommand(plain.sessionId, "/cwd C:\\x"), /stays in its folder/);
     await assert.rejects(workers.runWorkerCommand(plain.sessionId, "/plan do it"), /Plan mode isn't available/);
+    await assert.rejects(workers.runWorkerCommand(plain.sessionId, "/every 1h check"), /Schedules aren't available in the worker chat\./);
     await assert.rejects(workers.runWorkerCommand(plain.sessionId, "/research"), /\/research needs topic/);
     const sentBefore = live.sent.length;
     assert.match((await workers.runWorkerCommand(plain.sessionId, "/blame")).text, /needs plan mode/);

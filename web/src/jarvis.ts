@@ -44,6 +44,8 @@ import {
   type NoticePart,
 } from "./needsChat.js";
 import { loadModelCatalog, modelCatalog } from "./modelCatalog.js";
+import { SlashList, commandHint } from "./chatSlash.js";
+import { NOTES_KEPT, composerIntent, noteFromOutcome, type ChatCommand, type ChatNote, type CommandOutcome } from "./taskChatModel.js";
 import { ImageDraft, paintTray, sameImages, trayNote, uploadWith, wireImages, type ChatImage } from "./chatImages.js";
 import { effortLabel, nextChoice, type PickerState } from "./modelChoice.js";
 import { MODEL_FIELDS, chosenModel, wireModelFields } from "./modelFields.js";
@@ -236,6 +238,12 @@ const uploadImage = uploadWith((path, body) => postJSON(path, body));
 /** Something sent to Devis is on its way or starting its turn. */
 const leadSending = (): boolean => !!leadSent || leadSentImages.length > 0;
 let leadNote = "";
+/** What slash commands answered in Devis's chat, kept in the thread after the message they followed. */
+let leadCommandNotes: Array<{ note: ChatNote; after: string }> = [];
+let leadNoteSeq = 0;
+let leadSlash: SlashList;
+/** The typed command's hint, shown under the box. */
+let leadSlashHint = "";
 let modelNote = "";
 let modelSwitching = false;
 let modelSig = "";
@@ -542,7 +550,8 @@ function mount(): void {
       <div class="jv-devis jv-update" role="status" hidden></div>
       ${chatPaneHtml({
         id: "lead",
-        inputLabel: "Message Devis",
+        inputLabel: "Message Devis. Type slash for commands and skills.",
+        commands: true,
         headHtml: `<button type="button" class="pn-grip" data-act="pn-move" aria-haspopup="menu" aria-label="Move Devis" title="Drag to move · Alt+arrows">${svg("grip")}</button>
           <span class="jv-who">${svg("sparkle")}<b>Devis</b><span class="jv-watch"></span></span>
           <button type="button" class="nt-count" data-act="notice-next" title="Go to the next thing that needs you" hidden></button>
@@ -594,6 +603,15 @@ function mount(): void {
   new ResizeObserver(paintNoticePill).observe(leadPane.log);
   leadPane.tools.addEventListener("change", onLeadPick);
   leadPane.steer.addEventListener("click", () => void sendToLead(leadPane.input.value, "now"));
+  leadSlash = new SlashList(
+    leadPane,
+    "lead",
+    () => getJSON("/api/jarvis/lead/commands").then((res: { commands: ChatCommand[] }) => res.commands || []),
+    () => {
+      autoSize(leadPane.input);
+      syncSlashHint();
+    }
+  );
   void loadModelCatalog().then(() => renderLeadPicker());
   overviewEl = el('<div class="jv-overview"></div>');
   leadPane.view.before(overviewEl);
@@ -914,6 +932,8 @@ function renderLead(): void {
     leadPosting,
     notices.map((n) => `${n.key}:${n.sig}`),
     leadAbout?.source,
+    leadCommandNotes.map((n) => n.note.id),
+    leadSlashHint,
   ]);
   if (sig === leadSig) return renderLeadPicker();
   leadSig = sig;
@@ -933,6 +953,18 @@ function renderLead(): void {
     "message" in x ? { type: "message", message: x.message } : { type: "html", key: x.extra.key, sig: x.extra.sig, html: x.extra.html }
   );
   if (!messages.length && notices.length) items.unshift({ type: "html", key: "welcome", sig: "1", html: welcome });
+  // Command answers follow the message that was last when they ran.
+  const placed = new Map<string, number>();
+  for (const { note, after } of leadCommandNotes) {
+    const at = after ? items.findIndex((x) => x.type === "message" && x.message.id === after) : -1;
+    if (at < 0 && after) {
+      items.push({ type: "note", note });
+      continue;
+    }
+    const n = placed.get(after) || 0;
+    placed.set(after, n + 1);
+    items.splice(at + 1 + n, 0, { type: "note", note });
+  }
   const spec: ChatLogSpec = {
     items,
     sending: shownSent ? leadSent : null,
@@ -955,7 +987,7 @@ function renderLead(): void {
       ? "Queue a message for after this turn, or send it now…"
       : leadAbout
         ? `Ask Devis about ${leadAbout.label}…`
-        : "Ask or direct Devis…",
+        : "Ask or direct Devis… Type / for commands and skills",
     disabled: false,
     busy: leadPosting,
     working,
@@ -965,7 +997,7 @@ function renderLead(): void {
   const note = error || modelNote;
   setHint(
     leadPane,
-    note || trayNote(leadDraft?.items || []) || (working ? "Enter queues it for after this turn · Ctrl+Enter sends it now" : "Enter to send · Shift+Enter for a new line"),
+    note || trayNote(leadDraft?.items || []) || leadSlashHint || (working ? "Enter queues it for after this turn · Ctrl+Enter sends it now · / commands still run" : "Enter to send · Shift+Enter for a new line · / for commands and skills"),
     !!error
   );
   // The hint isn't a live region; a failure or a model switch is announced here.
@@ -1041,13 +1073,67 @@ async function changeModel(model: string, effort: string): Promise<void> {
   }
 }
 
+/** Run "/name input" in Devis's session. A prompt command starts a turn; the rest answer with a note in the thread. */
+async function runLeadSlash(text: string): Promise<void> {
+  leadPosting = true;
+  leadPane.input.value = "";
+  autoSize(leadPane.input);
+  leadSlash.hide();
+  syncSlashHint();
+  leadSig = "";
+  renderLead();
+  const addNote = (note: ChatNote): void => {
+    const after = lead?.messages[lead.messages.length - 1]?.id || "";
+    leadCommandNotes = [...leadCommandNotes, { note, after }].slice(-NOTES_KEPT);
+  };
+  try {
+    const res: { outcome: CommandOutcome } = await postJSON("/api/jarvis/lead/command", { text });
+    // A prompt command started a turn: show it as sent, like a message, until the chat has it.
+    if (res.outcome.kind === "sent") {
+      leadSent = res.outcome.display;
+      leadSentImages = [];
+    }
+    const note = noteFromOutcome(res.outcome, text, `ln${++leadNoteSeq}`, new Date().toISOString());
+    if (note) addNote(note);
+    leadNote = "";
+  } catch (e) {
+    addNote({ id: `ln${++leadNoteSeq}`, at: new Date().toISOString(), kind: "error", command: text, text: (e as Error).message, markdown: false, url: null, choiceCommand: "", options: [] });
+    if (!leadPane.input.value) {
+      leadPane.input.value = text;
+      autoSize(leadPane.input);
+    }
+  } finally {
+    leadPosting = false;
+    leadSig = "";
+    renderLead();
+  }
+  void loadLead();
+}
+
+/** The line under the box for a command that's typed. */
+function syncSlashHint(): void {
+  const next = commandHint(leadSlash.list, leadPane.input.value) || "";
+  if (next === leadSlashHint) return;
+  leadSlashHint = next;
+  renderLead();
+}
+
 /**
  * Send what's typed. While Devis answers, it's queued for after the turn, or with "now"
  * (Ctrl+Enter, Send now) steered into it.
  */
 async function sendToLead(text: string, how: "send" | "now" = "send"): Promise<void> {
-  const typed = text.trim();
+  const intent = composerIntent(text);
+  const typed = intent.kind === "empty" ? "" : intent.text;
   if (leadPosting || (!typed && !leadDraft?.ready.length)) return;
+  if (intent.kind === "command") {
+    if (leadDraft?.items.length) {
+      leadNote = "Commands can't carry images. Remove them, or send them with a message.";
+      leadSig = "";
+      return renderLead();
+    }
+    return runLeadSlash(typed);
+  }
   if (leadDraft?.uploading) return toast("An image is still uploading. Send once it's in.", "err");
   // A notice the user asked about goes with the message: Devis reads its details, the bubble shows its name.
   const about = leadAbout;
@@ -2520,6 +2606,16 @@ function onClick(e: MouseEvent): void {
   if (target.closest("a[href]")) return;
   const starter = target.closest<HTMLElement>("[data-starter]");
   if (starter) return void sendToLead(starter.dataset.starter || "");
+  // The Lead's "/" list, and the choices a command's answer offers.
+  const slashPick = leadPane.popup.contains(target) ? target.closest<HTMLElement>("[data-pick]") : null;
+  if (slashPick) {
+    e.preventDefault();
+    if (leadSlash.pick(Number(slashPick.dataset.pick))) void sendToLead(leadPane.input.value);
+    leadPane.input.focus();
+    return;
+  }
+  const run = leadPane.log.contains(target) ? target.closest<HTMLElement>("[data-run]") : null;
+  if (run) return void sendToLead(run.dataset.run || "");
   // The Lead's queue: send a message now, or take it out.
   const queued = leadPane.log.contains(target) ? target.closest<HTMLElement>("[data-queue-send], [data-queue-remove]") : null;
   if (queued) {
@@ -2861,6 +2957,10 @@ function onInput(e: Event): void {
   }
   if (field.dataset.draft) drafts.set(field.dataset.draft, field.value);
   if (field instanceof HTMLTextAreaElement) autoSize(field);
+  if (field === leadPane.input) {
+    leadSlash.refresh();
+    syncSlashHint();
+  }
 }
 
 function onKeydown(e: KeyboardEvent): void {
@@ -2895,6 +2995,28 @@ function onKeydown(e: KeyboardEvent): void {
     const id = target.closest<HTMLElement>("[data-panel]")?.dataset.panel;
     if (isPanelId(id) && keyMove(id, e.key)) e.preventDefault();
     return;
+  }
+  // The Lead's box: the "/" list takes the arrows, Tab and Enter while it's open.
+  if (target === leadPane.input && !e.isComposing) {
+    const p = leadSlash.popup;
+    if (e.key === "Escape" && leadSlash.open) {
+      e.preventDefault();
+      return leadSlash.hide();
+    }
+    if (p && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+      e.preventDefault();
+      return leadSlash.move(e.key === "ArrowDown" ? 1 : -1);
+    }
+    if (p && e.key === "Tab") {
+      e.preventDefault();
+      leadSlash.pick(p.index);
+      return;
+    }
+    if (p && composerKey(e) === "send") {
+      e.preventDefault();
+      if (leadSlash.pick(p.index)) void sendToLead(leadPane.input.value);
+      return;
+    }
   }
   // The Lead's box: Ctrl+Enter sends it now, into the turn that's running.
   if (target === leadPane.input && composerKey(e) === "steer") {
@@ -2949,6 +3071,8 @@ function confirmNewLead(): void {
     confirmLabel: "Start over",
     onConfirm: async () => {
       await postJSON("/api/jarvis/lead/new", {});
+      leadCommandNotes = [];
+      leadSlash.reset();
       leadSig = "";
       await loadLead();
     },

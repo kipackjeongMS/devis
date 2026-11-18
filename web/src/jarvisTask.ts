@@ -28,6 +28,7 @@ import {
   type ChatLogSpec,
   type ChatPane,
 } from "./chatPane.js";
+import { slashPopupHtml, slashPopupLabel, type SlashPopup } from "./chatSlash.js";
 import { loadModelCatalog, modelCatalog } from "./modelCatalog.js";
 import { effortLabel, nextChoice, type PickerState } from "./modelChoice.js";
 import { toast } from "./toast.js";
@@ -379,9 +380,7 @@ interface Commands {
   error: string;
 }
 
-type Popup =
-  | { mode: "commands"; items: ChatCommand[]; index: number }
-  | { mode: "choices"; command: ChatCommand; items: Array<{ name: string; description: string }>; index: number };
+type Popup = SlashPopup;
 
 interface Modal {
   taskId: string;
@@ -1336,6 +1335,7 @@ function paintList(task: TodayTask): void {
   m.artsEl.innerHTML = `
     <div class="tm-art-bar">
       <p class="tm-art-intro">Shared by you and this task's workers.</p>
+      <button type="button" class="btn sm ghost" data-act="art-folder" title="Open the Artifacts folder in File Explorer">${svg("folder")}<span>Open folder</span></button>
       <button type="button" class="btn sm ghost" data-act="art-new">${svg("add")}<span>New note</span></button>
     </div>
     ${recapHtml}
@@ -1885,34 +1885,9 @@ function paintPopup(): void {
   const m = modal!;
   const p = m.popup;
   if (!p) return hidePopup();
-  let html = "";
-  if (p.mode === "commands") {
-    let kind = "";
-    p.items.forEach((c, i) => {
-      if (c.kind !== kind) {
-        kind = c.kind;
-        html += `<p class="chat-pop-group">${kind === "skill" ? "Skills" : "Commands"}</p>`;
-      }
-      // Every skill takes free text, so only built-ins show what they take.
-      const hint = c.kind === "builtin" ? c.hint : "";
-      html += `<div class="chat-pop-item${i === p.index ? " active" : ""}" role="option" id="tm-opt-${i}" aria-selected="${i === p.index}" data-pick="${i}">
-          <span class="chat-pop-name">/${esc(c.name)}</span>${hint ? `<span class="chat-pop-hint">${esc(hint)}</span>` : ""}
-          <span class="chat-pop-desc">${esc(c.description)}</span>
-        </div>`;
-    });
-  } else {
-    html += `<p class="chat-pop-group">/${esc(p.command.name)}</p>`;
-    p.items.forEach((c, i) => {
-      html += `<div class="chat-pop-item${i === p.index ? " active" : ""}" role="option" id="tm-opt-${i}" aria-selected="${i === p.index}" data-pick="${i}">
-          <span class="chat-pop-name">${esc(c.name)}</span><span class="chat-pop-desc">${esc(c.description)}</span>
-        </div>`;
-    });
-  }
-  m.popupEl.innerHTML = html;
+  m.popupEl.innerHTML = slashPopupHtml(p, "tm");
   m.popupEl.hidden = false;
-  const item = p.items[p.index];
-  const label = p.mode === "commands" ? `/${item.name}` : item.name;
-  announce(`${label}${item.description ? `, ${item.description}` : ""}. ${p.index + 1} of ${p.items.length}.`);
+  announce(slashPopupLabel(p));
   m.popupEl.querySelector<HTMLElement>(".chat-pop-item.active")?.scrollIntoView({ block: "nearest" });
 }
 
@@ -2225,6 +2200,10 @@ function onClick(e: MouseEvent): void {
       return cancelArtEdit();
     case "art-save":
       return void saveArt(node);
+    case "art-folder":
+      return void withButton(node, async () => {
+        await postJSON("/api/jarvis/artifacts/open-folder", { id: task.id });
+      });
     case "art-new":
       return startNewArt();
     case "art-new-cancel":

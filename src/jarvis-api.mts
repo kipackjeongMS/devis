@@ -52,6 +52,8 @@ import {
     removeLeadQueued,
     resetLead,
     sendLead,
+    listLeadCommands,
+    runLeadCommand,
     sendLeadQueuedNow,
     setLeadModel,
     stopLead,
@@ -62,6 +64,7 @@ import { ensureOverviewRunner, overviewState, refreshOverview } from "./jarvis-o
 import { ensurePrsRunner, linkFromUser, taskPrsView, unlinkPr } from "./jarvis-prs.mjs";
 import { addTodo, clearDoneTodos, deleteTodo, getQuickNote, listTodos, moveTodo, saveQuickNote, settleNeedTodos, updateTodo } from "./jarvis-notes.mjs";
 import { needKeys } from "./jarvis-needs.mjs";
+import { openFolder } from "./open-folder.mjs";
 import {
     addMeetingTodo,
     chatsDigest,
@@ -470,6 +473,13 @@ export async function handleJarvisApi(req: IncomingMessage, res: ServerResponse,
             const id = requireId(q.get("id"));
             return sendJson(res, 200, { artifacts: await listArtifacts(id), dir: artifactsDir(id) });
         }
+        if (p === "/api/jarvis/artifacts/open-folder" && post) {
+            const b = await readBody(req);
+            const id = requireId(b?.id);
+            if (!(await getTask(id))) throw new JarvisError("Task not found.", 404);
+            await openFolder(artifactsDir(id));
+            return sendJson(res, 200, { ok: true });
+        }
         if (p === "/api/jarvis/artifact" && get) {
             return sendJson(res, 200, { artifact: await readArtifact(requireId(q.get("id")), q.get("name") || "") });
         }
@@ -681,6 +691,14 @@ export async function handleJarvisApi(req: IncomingMessage, res: ServerResponse,
         if (p === "/api/jarvis/lead/model" && post) {
             const b = await readBody(req);
             return sendJson(res, 200, await setLeadModel(b?.model, b?.effort));
+        }
+
+        if (p === "/api/jarvis/lead/commands" && get) {
+            return sendJson(res, 200, { commands: await listLeadCommands() });
+        }
+        if (p === "/api/jarvis/lead/command" && post) {
+            const b = await readBody(req);
+            return sendJson(res, 200, { outcome: await runLeadCommand(b?.text) });
         }
 
         return sendJson(res, 404, { error: "no such endpoint" });

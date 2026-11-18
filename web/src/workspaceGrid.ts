@@ -2,7 +2,9 @@
 // user rearrange them.
 //   Columns     — side by side; the panels in a column share its height and scroll on their own.
 //                 Drag a panel by its grip to another place or column, or a whole column by the
-//                 grip on top of it. Drag the gap between two panels or two columns to resize
+//                 grip on top of it. Drag a panel to the gap between two columns (or a column
+//                 edge) and a ghosted new column opens there; drop to create it (four at most).
+//                 Drag the gap between two panels or two columns to resize
 //                 them; double-click it to even them out again. Alt+arrows on a panel's header
 //                 (or a column's grip) move it, and the grip's menu has the same moves.
 //   Edit layout — the titlebar button. The grips stay in view, a strip on the right takes a
@@ -31,6 +33,7 @@ import {
   minWidth,
   moveColumn,
   movePanel,
+  movePanelToNewColumn,
   pruneEmpty,
   readLayout,
   saveLayout,
@@ -63,6 +66,10 @@ export interface GridHost {
 const DRAG_PX = 4;
 /** One arrow key on a gap between panels or columns. */
 const KEY_STEP = 24;
+/** How near a column edge or the gap between two columns the pointer must be to offer a new column there. */
+const NEW_COL_ZONE = 28;
+/** The width of the ghosted new column. */
+const NEW_COL_W = 132;
 
 let host: GridHost;
 let layout: Layout = defaultLayout();
@@ -697,6 +704,7 @@ interface Target {
 function dragColumns(e: PointerEvent, grip: HTMLElement, box: HTMLElement, id: PanelId): void {
   let ghost: HTMLElement | null = null;
   let line: HTMLElement | null = null;
+  let newCol: HTMLElement | null = null;
   let target: Target | null = null;
   let hot: HTMLElement | null = null;
   const setHot = (node: HTMLElement | null): void => {
@@ -716,6 +724,21 @@ function dragColumns(e: PointerEvent, grip: HTMLElement, box: HTMLElement, id: P
       if (x >= r.left - MIN.sash && y >= r.top && y <= r.bottom) col = count;
     }
     const colEls = colPool.slice(0, count);
+    let gap = -1;
+    if (col < 0 && count < MAX_COLUMNS && colEls.length) {
+      const box = cols.getBoundingClientRect();
+      if (y >= box.top && y <= box.bottom) {
+        const edges = [colEls[0]!.getBoundingClientRect().left];
+        for (let i = 1; i < count; i++) edges.push((colEls[i - 1]!.getBoundingClientRect().right + colEls[i]!.getBoundingClientRect().left) / 2);
+        edges.push(colEls[count - 1]!.getBoundingClientRect().right);
+        let best = NEW_COL_ZONE + 1;
+        edges.forEach((edge, i) => {
+          const d = Math.abs(x - edge);
+          if (d < best) [best, gap] = [d, i];
+        });
+        if (gap >= 0) col = count;
+      }
+    }
     if (col < 0) {
       let best = Infinity;
       colEls.forEach((c, i) => {
@@ -740,15 +763,31 @@ function dragColumns(e: PointerEvent, grip: HTMLElement, box: HTMLElement, id: P
         setHot(null);
       } else setHot(slotPool[col] ?? null);
       line!.hidden = !others.length || (!crossing && row === from.row);
+      newCol!.hidden = true;
     } else {
-      setHot(addcol);
+      if (gap >= 0) {
+        const edge = gap === 0 ? colEls[0]!.getBoundingClientRect().left : gap === count ? colEls[count - 1]!.getBoundingClientRect().right : (colEls[gap - 1]!.getBoundingClientRect().right + colEls[gap]!.getBoundingClientRect().left) / 2;
+        const top = colEls[0]!.getBoundingClientRect();
+        const left = clamp(edge - box2.left - NEW_COL_W / 2, 0, Math.max(0, box2.width - NEW_COL_W));
+        newCol!.style.left = `${left}px`;
+        newCol!.style.top = `${top.top - box2.top}px`;
+        newCol!.style.width = `${NEW_COL_W}px`;
+        newCol!.style.height = `${top.height}px`;
+        newCol!.hidden = false;
+        setHot(null);
+      } else {
+        setHot(addcol);
+        newCol!.hidden = true;
+      }
       line!.hidden = true;
     }
-    const noop = !crossing && row === from.row;
-    let next = movePanel(layout, id, col, row);
+    const alone = layout.columns[from.col]!.panels.length === 1;
+    const noop = gap >= 0 ? alone && (gap === from.col || gap === from.col + 1) : !crossing && row === from.row;
+    let next = gap >= 0 ? movePanelToNewColumn(layout, id, gap) : movePanel(layout, id, col, row);
     if (!editing) next = pruneEmpty(next);
     const ok = noop || fits(next, id, crossing);
     line!.classList.toggle("no", !ok);
+    newCol?.classList.toggle("no", !ok);
     hot?.classList.toggle("no", !ok);
     target = { next, ok, noop };
   };
@@ -761,11 +800,14 @@ function dragColumns(e: PointerEvent, grip: HTMLElement, box: HTMLElement, id: P
       document.body.append(ghost);
       line = el('<div class="jv-drop" aria-hidden="true" hidden></div>');
       cols.append(line);
+      newCol = el(`<div class="jv-newcol" aria-hidden="true" hidden>${icon("add")}<span>New column</span></div>`);
+      cols.append(newCol);
     },
     move: aim,
     end: (commit) => {
       ghost?.remove();
       line?.remove();
+      newCol?.remove();
       hot?.classList.remove("hot", "no");
       box.classList.remove("pn-lifted");
       host.root.classList.remove("pn-sorting");

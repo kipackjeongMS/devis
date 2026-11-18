@@ -25,6 +25,19 @@ async function until(check, label, ms = 3000) {
 }
 
 // ---- a fake Lead session ------------------------------------------------------------
+const LEAD_COMMANDS = [
+    { name: "usage", description: "Show usage", kind: "builtin", allowDuringAgentExecution: true },
+    { name: "cwd", description: "Change directory", kind: "builtin", input: { hint: "directory" }, allowDuringAgentExecution: false },
+    { name: "plan", description: "Plan mode", kind: "builtin", input: { hint: "prompt" }, allowDuringAgentExecution: true },
+    { name: "every", description: "Schedule", kind: "builtin", input: { hint: "interval" }, allowDuringAgentExecution: false },
+    { name: "model", description: "Select model", kind: "builtin", input: { hint: "model" }, allowDuringAgentExecution: true },
+    { name: "no-ai-slop", description: "Edit writing", kind: "skill", input: { hint: "instructions for the skill" }, allowDuringAgentExecution: false },
+    { name: "ext-thing", description: "From an extension", kind: "client", allowDuringAgentExecution: true },
+];
+const LEAD_COMMAND_RESULTS = {
+    usage: { kind: "text", text: "\u001b[1mSession Usage\u001b[0m" },
+    "no-ai-slop": (input) => ({ kind: "agent-prompt", prompt: `SKILL BODY ${input}`, displayPrompt: `/no-ai-slop ${input}`.trim() }),
+};
 class FakeLead {
     constructor(sessionId, config) {
         this.sessionId = sessionId;
@@ -43,7 +56,21 @@ class FakeLead {
         this.attached = [];
         this.turn = 0;
         this.inTurn = false;
+        this.lists = 0;
+        this.invoked = [];
         this.rpc = {
+            commands: {
+                list: async () => {
+                    this.lists++;
+                    return { commands: LEAD_COMMANDS };
+                },
+                invoke: async ({ name, input }) => {
+                    this.invoked.push([name, input]);
+                    const result = LEAD_COMMAND_RESULTS[name];
+                    if (!result) throw new Error(`no command ${name}`);
+                    return typeof result === "function" ? result(input) : result;
+                },
+            },
             model: {
                 getCurrent: async () => ({ modelId: this.model, ...(this.effort ? { reasoningEffort: this.effort } : {}) }),
                 // Like the runtime: a switch during a turn waits for the turn to end.
@@ -78,9 +105,9 @@ class FakeLead {
         for (const handler of [...this.all]) handler({ type, data });
     }
     /** A turn ("enqueue", the default) or a message steered into the running one ("immediate"). */
-    async send({ prompt, mode, attachments }) {
-        // Like the runtime, the message keeps its attachments.
-        const data = { content: prompt, ...(attachments ? { attachments } : {}) };
+    async send({ prompt, mode, attachments, displayPrompt }) {
+        // Like the runtime, the message keeps its attachments, and the timeline shows its display text.
+        const data = { content: displayPrompt || prompt, ...(attachments ? { attachments } : {}) };
         this.attached.push(attachments || null);
         if (mode === "immediate") {
             this.steered.push(prompt);
@@ -616,6 +643,45 @@ try {
     release("done");
     await until(async () => !(await lead.getLeadChat()).pending && imgLead.prompts.at(-1) === "Take a look at the attached image.", "queued image ran");
     assert.deepEqual(imgLead.attached.at(-1), [{ type: "file", path: images.imagePath(shot.id), displayName: "shot.png" }], "and it went with its image");
+    await lead.resetLead();
+
+    // ---- slash commands, as in a worker's chat ----
+    const sessionsBefore = created.length + resumed.length;
+    await assert.rejects(lead.runLeadCommand("hello"), /Type a command/);
+    await assert.rejects(lead.runLeadCommand("/plan do it"), /Plan mode isn't available in the chat\./);
+    await assert.rejects(lead.runLeadCommand("/every 1h check"), /Schedules aren't available in the chat\./);
+    await assert.rejects(lead.runLeadCommand("/cwd C:\\x"), /stays in its own folder/);
+    await assert.rejects(lead.runLeadCommand(`/usage ${"a".repeat(20_001)}`), /too long/);
+    assert.equal(created.length + resumed.length, sessionsBefore, "a refused command never starts a session");
+    const leadCommands = await lead.listLeadCommands();
+    const cmdLead = created.at(-1);
+    assert.deepEqual(leadCommands.map((c) => c.name), ["model", "usage", "no-ai-slop"], "built-ins, then skills; folder, mode, schedule and extension commands are left out");
+    assert.match(leadCommands.find((c) => c.name === "model").description, /this chat's model/);
+    await lead.listLeadCommands();
+    assert.equal(cmdLead.lists, 1, "the list is read once per session");
+    assert.deepEqual(await lead.runLeadCommand("/usage"), { kind: "note", text: "Session Usage", markdown: false, url: null });
+    await assert.rejects(lead.runLeadCommand("/nope"), /Unknown command \/nope\. Type \/ to see what Devis can run/);
+    // A skill starts a turn, shown in the chat as the command rather than its instructions.
+    assert.deepEqual(await lead.runLeadCommand("/no-ai-slop tighten it"), { kind: "sent", display: "/no-ai-slop tighten it", notice: null });
+    await until(async () => !(await lead.getLeadChat()).pending && cmdLead.prompts.at(-1) === "SKILL BODY tighten it", "skill turn");
+    assert.deepEqual(cmdLead.invoked.at(-1), ["no-ai-slop", "tighten it"]);
+    assert.equal((await lead.getLeadChat()).messages.filter((m) => m.role === "user").at(-1).content, "/no-ai-slop tighten it");
+    // /model is the app's: Current is what the session runs, then a switch.
+    cmdLead.model = "claude-y";
+    const leadPicker = await lead.runLeadCommand("/model");
+    assert.equal(leadPicker.kind, "choices");
+    assert.deepEqual(leadPicker.options.map((o) => [o.name, o.description]), [["gpt-x", ""], ["claude-y", "Current"], ["cli-default", ""]]);
+    assert.match((await lead.runLeadCommand("/model claude-y")).text, /Devis now uses claude-y\./);
+    assert.equal(cmdLead.invoked.filter(([n]) => n === "model").length, 0, "the CLI's /model never runs");
+    // Mid-turn: what can run during a turn does; a prompt command waits.
+    let held;
+    cmdLead.reply = (prompt) => (prompt === "wait" ? new Promise((r) => (held = r)) : `You said: ${prompt}`);
+    await lead.sendLead("wait");
+    await until(() => held, "busy turn");
+    assert.equal((await lead.runLeadCommand("/usage")).kind, "note", "/usage runs mid-turn");
+    await assert.rejects(lead.runLeadCommand("/no-ai-slop x"), /Devis is working/);
+    held("ok");
+    await until(async () => !(await lead.getLeadChat()).pending, "busy turn done");
     await lead.resetLead();
 
     console.log("jarvis-lead harness: ok");

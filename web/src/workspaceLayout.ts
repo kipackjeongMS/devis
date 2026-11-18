@@ -247,6 +247,16 @@ export function moveColumn(l: Layout, from: number, to: number): Layout {
   return next;
 }
 
+/**
+ * Move a panel into a new column that ends up `at`th from the left (counted among the
+ * other columns, so 0 is the far left and the column count the far right).
+ */
+export function movePanelToNewColumn(l: Layout, id: PanelId, at: number): Layout {
+  const next = movePanel(l, id, l.columns.length, 0);
+  if (next.columns.length <= l.columns.length) return next;
+  return moveColumn(next, next.columns.length - 1, at);
+}
+
 /** An empty column on the right, for the user to drag panels into. */
 export function addColumn(l: Layout): Layout {
   const next = cloneLayout(l);
