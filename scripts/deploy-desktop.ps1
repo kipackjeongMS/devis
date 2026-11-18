@@ -15,7 +15,10 @@
   6. Mirror the package into the install folder
   7. Create/refresh the Start menu shortcut (the app removes the old ADO PR Ops one)
   8. Remove the old ADO PR Ops install folder, if there is one
-  9. Launch the app (unless -NoLaunch), which starts a fresh service
+  9. Launch the app (unless -NoLaunch), which starts a fresh service. It's launched
+     through Explorer, so it gets the user's own desktop environment rather than this
+     shell's (an agent's shell carries flags like TOOL_SEARCH that would change how
+     Copilot runs, until the service next restarts without them).
 
   User data (reviews, settings, the Workspace) stays in %APPDATA%\ADO PR Ops, untouched:
   the app kept that folder's name when it was renamed.
@@ -191,6 +194,7 @@ if ((Test-Path -LiteralPath $LegacyRoot) -and $legacyInstallRoot -ne $installRoo
 
 if (-not $NoLaunch) {
     Write-Host '>> Launching...'
-    Start-Process -FilePath $exe | Out-Null
+    # Explorer starts it with the desktop's environment, not this shell's.
+    Start-Process -FilePath (Join-Path $env:WINDIR 'explorer.exe') -ArgumentList "`"$exe`"" | Out-Null
 }
 Write-Host 'Deployed.'
