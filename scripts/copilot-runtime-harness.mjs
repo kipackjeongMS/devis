@@ -81,6 +81,9 @@ try {
     // ---- every MCP server on in every session, and callable ----
     const options = rt.prSessionOptions("msazure", "P");
     assert.equal("disabledMcpServers" in options, false, "no MCP server is turned off");
+    // ... found by tool search, so their definitions can't fill the prompt and block every turn.
+    assert.deepEqual(rt.withToolSearch({ model: "m" }), { model: "m", toolSearch: { enabled: true } }, "tool search is on by default");
+    assert.deepEqual(rt.withToolSearch({ toolSearch: { enabled: false } }), { toolSearch: { enabled: false } }, "a session's own choice stands");
     const allow = rt.reviewPermissionHandler;
     assert.deepEqual(allow({ kind: "mcp", serverName: "mail", toolName: "SendEmailWithAttachments", readOnly: false }), { kind: "approve-once" }, "writes included");
     assert.deepEqual(allow({ kind: "mcp", serverName: "ado", toolName: "repo_pull_request", readOnly: true }), { kind: "approve-once" });

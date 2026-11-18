@@ -12,6 +12,8 @@
 // To keep the machine responsive, the runtime and every MCP server under it run at
 // below-normal CPU priority (runtime-priority.mts), and sessions share one
 // Playwright MCP server over HTTP instead of each starting its own (shared-playwright.mts).
+// Every session has tool search on (withToolSearch), so the MCP servers' tool definitions
+// load only as the model looks them up instead of filling its prompt.
 
 import {
     CopilotClient,
@@ -20,6 +22,7 @@ import {
     type MCPServerConfig,
     type MessageOptions,
     type PermissionHandler,
+    type ToolSearchConfig,
 } from "@github/copilot-sdk";
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
@@ -197,6 +200,11 @@ export function getCopilotClient(): Promise<CopilotClient> {
                 // Agency gives the runtime access to the folder it starts in: start it in the empty one.
                 workingDirectory: sessionWorkingDirectory(),
             });
+            // Every session, made or resumed anywhere in the app, finds its MCP tools by search.
+            const create = client.createSession.bind(client);
+            const resume = client.resumeSession.bind(client);
+            client.createSession = (config) => create(withToolSearch(config));
+            client.resumeSession = (sessionId, config) => resume(sessionId, withToolSearch(config));
             startSharedPlaywright(sessionWorkingDirectory());
             await client.start();
             runningVersion = await client
@@ -224,6 +232,18 @@ function inheritedEnv(): Record<string, string> {
     const env: Record<string, string> = {};
     for (const [key, value] of Object.entries(process.env)) if (typeof value === "string") env[key] = value;
     return env;
+}
+
+/**
+ * A session's config with tool search on, unless it says otherwise. Through Agency every session
+ * gets every MCP server the user has, and their tool definitions alone can outgrow a model's
+ * prompt; the runtime then ends each turn without calling the model ("No response was returned").
+ * With tool search, MCP tools past the runtime's threshold load only when the model looks them up;
+ * the app's own tools are marked `defer: "never"` and stay loaded. The runtime leaves tool search
+ * off unless its environment turns it on, so Devis asks for it on every session.
+ */
+export function withToolSearch<T extends { toolSearch?: ToolSearchConfig }>(config: T): T {
+    return config.toolSearch ? config : { ...config, toolSearch: { enabled: true } };
 }
 
 const DEAD_RUNTIME = /not connected|connection (?:closed|failed)|server exited|EPIPE|ECONNRESET|disposed/i;
