@@ -238,6 +238,44 @@ assert.deepEqual(groups.done.map((t) => t.id), ["done-today"]);
     assert.equal(m.visibleNeeds(withComms, [todo(mailNeed.key)]).some((n) => n.source === mailNeed.key), false, "a to-do takes it out too");
     const base = { tasks: [], reviewed: [], folders: [], organizations: [], comms: { asks: [], needs: [chatNeed] } };
     assert.notEqual(m.todayFingerprint(base, ""), m.todayFingerprint({ ...base, comms: { asks: [], needs: [{ ...chatNeed, needsYou: "other" }] } }, ""), "a changed ask repaints");
+
+    // ---- S360 items waiting on the user ----
+    const s360Item = (key, over = {}) => ({
+        key, kpiId: "k1", itemId: "i1", targetType: "Person", targetId: "kj", title: "Rotate   the\nstorage keys", sla: "OutOfSla",
+        due: "2026-10-20T12:00:00.000Z", eta: "", status: "", statusBy: "", assignedTo: "kj", owner: "kj", service: "AppConfig", kind: "", severity: "",
+        url: "", adoUrl: "", link: "https://s360.msftcloudes.com/blades/security?s360ItemId=1", published: "", updated: "", roles: ["assigned"],
+        firstSeen: iso(-300), lastSeen: iso(-1), resolvedAt: null, need: true, dismissed: false, ...over,
+    });
+    const lateNeed = { key: "need:s360:0123456789abcdef", at: iso(-200), item: s360Item("0123456789abcdef") };
+    const newNeed = { key: "need:s360:fedcba9876543210", at: iso(-5), item: s360Item("fedcba9876543210", { sla: "InSla", title: "New one", due: "", link: "" }) };
+    const soonNeed = { key: "need:s360:00000000000000aa", at: iso(-50), item: s360Item("00000000000000aa", { sla: "ApproachingSla", title: "Soon one" }) };
+    const withS360 = m.needsItems(all, asks, [chatNeed], [newNeed, lateNeed, soonNeed]);
+    assert.deepEqual(
+        [...needKeys(all, asks, [chatNeed], [lateNeed, newNeed, soonNeed])].sort(),
+        withS360.map((n) => n.source).sort(),
+        "server and page agree on S360 items' keys"
+    );
+    assert.deepEqual(withS360.filter((n) => n.kind === "s360").map((n) => n.source), [lateNeed.key, soonNeed.key, newNeed.key], "the longest wait first");
+    assert.equal(m.needsItems(all, [], [], [lateNeed]).length, m.taskNeeds(all).length + 1, "never a task's");
+    const lateItem = withS360.find((n) => n.source === lateNeed.key);
+    const dueDay = new Date(Date.parse(lateNeed.item.due)).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+    assert.deepEqual(m.needTodo(lateItem), {
+        text: `Resolve the S360 item: Rotate the storage keys (out of SLA, due ${dueDay})`,
+        source: { key: lateNeed.key, taskId: "", taskTitle: "Rotate the storage keys", who: "S360", link: lateNeed.item.link },
+    });
+    assert.equal(m.needTodo(withS360.find((n) => n.source === soonNeed.key)).text, `Resolve the S360 item: Soon one (approaching its SLA, due ${dueDay})`);
+    assert.deepEqual(m.needTodo(withS360.find((n) => n.source === newNeed.key)), {
+        text: "Resolve the S360 item: New one",
+        source: { key: newNeed.key, taskId: "", taskTitle: "New one", who: "S360" },
+    }, "no due date or link, none said or kept");
+    assert.equal(m.needLine(lateItem), `S360: ${lateNeed.item.title} is out of SLA`);
+    assert.equal(m.needLine(withS360.find((n) => n.source === soonNeed.key)), "S360: Soon one is approaching its SLA");
+    assert.equal(m.needLine(withS360.find((n) => n.source === newNeed.key)), "S360: New one is new");
+    assert.equal(m.visibleNeeds(withS360, [todo(lateNeed.key)]).some((n) => n.source === lateNeed.key), false, "a to-do takes it out too");
+    assert.equal(m.visibleNeeds(withS360, [todo(lateNeed.key, true)]).some((n) => n.source === lateNeed.key), true, "a ticked to-do doesn't");
+    const s360Base = { ...base, s360: { needs: [lateNeed] } };
+    assert.notEqual(m.todayFingerprint(s360Base, ""), m.todayFingerprint({ ...s360Base, s360: { needs: [{ ...lateNeed, item: { ...lateNeed.item, sla: "ApproachingSla" } }] } }, ""), "a changed SLA repaints");
+    assert.notEqual(m.todayFingerprint(s360Base, ""), m.todayFingerprint(base, ""), "S360 needs count in the fingerprint");
 }
 
 function pr0(id) {

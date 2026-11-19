@@ -201,6 +201,7 @@ async function main(): Promise<void> {
     const { startPrCommentsRunner, stopPrCommentsRunner } = await import("./jarvis-pr-comments.mjs");
     const { startPrBuildsRunner, stopPrBuildsRunner } = await import("./jarvis-pr-builds.mjs");
     const { startCommsRunner, stopCommsRunner } = await import("./comms.mjs");
+    const { startS360Runner, stopS360Runner } = await import("./s360.mjs");
     const { startMaintenance, stopMaintenance } = await import("./maintenance.mjs");
     const { watchShips } = await import("./devis-self.mjs");
     const { startUpdates, stopUpdates, updatesActivity } = await import("./updates.mjs");
@@ -280,7 +281,7 @@ async function main(): Promise<void> {
         await Promise.race([
             (async () => {
                 const closing = running.close();
-                await Promise.all([stopReviewRunner(), stopPipelineRunner(), stopOverviewRunner(), stopPrsRunner(), stopCommsRunner(), stopMaintenance()]);
+                await Promise.all([stopReviewRunner(), stopPipelineRunner(), stopOverviewRunner(), stopPrsRunner(), stopCommsRunner(), stopS360Runner(), stopMaintenance()]);
                 stopValidationRunner();
                 stopPrCommentsRunner();
                 stopPrBuildsRunner();
@@ -307,6 +308,7 @@ async function main(): Promise<void> {
     startPrCommentsRunner();
     startPrBuildsRunner();
     startCommsRunner();
+    startS360Runner();
     startMaintenance();
     // A ship of Devis' own change that didn't go live goes back to the worker that made it.
     stopShipWatch = watchShips({

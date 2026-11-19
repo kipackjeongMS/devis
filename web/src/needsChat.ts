@@ -15,6 +15,7 @@ import {
   oneLine,
   type NeedItem,
 } from "./jarvisModel.js";
+import { s360Roles, s360Why } from "./s360Model.js";
 
 /** A notice's line in Devis's words: plain text, with names in bold and titles in italics. */
 export type NoticePart = string | { strong: string } | { em: string };
@@ -34,6 +35,14 @@ export function noticeLine(n: NeedItem): NoticePart[] {
     const who = { strong: commsNeedWho(c) };
     if (c.source === "mail") return [who, " is waiting on you by email about ", { em: c.title || "(no subject)" }, "."];
     return [who, ` is waiting on you ${commsNeedWhere(c)}.`];
+  }
+  if (n.kind === "s360") {
+    const item = n.need.item;
+    const why = s360Why(item);
+    const title = { em: item.title };
+    if (why === "late") return ["The S360 item ", title, " is ", { strong: "out of SLA" }, "."];
+    if (why === "soon") return ["The S360 item ", title, " is ", { strong: "approaching its SLA" }, "."];
+    return ["S360 has a new item for you: ", title, "."];
   }
   const title = { em: n.task.title };
   if (n.kind === "failed") return [{ strong: n.worker.label }, "'s turn failed on ", title, ". A message to it tries again."];
@@ -73,6 +82,7 @@ export function noticeLabel(n: NeedItem): string {
     if (c.source === "mail") return `the email “${oneLine(c.title || "(no subject)", 80)}”`;
     return c.kind === "oneOnOne" ? `your chat with ${c.title}` : oneLine(commsNeedTitle(c), 80);
   }
+  if (n.kind === "s360") return `the S360 item “${oneLine(n.need.item.title, 80)}”`;
   if (n.kind === "failed") return `${n.worker.label}'s failed turn`;
   if (n.kind === "validation") return n.task.validation?.attention === "proposal" ? `${n.who}'s validation plan` : "the failed validation run";
   if (n.kind === "prComments") return n.pr.attention === "proposal" ? `${n.who}'s plan for PR ${n.pr.prId}'s comments` : `the review comments on PR ${n.pr.prId}`;
@@ -213,6 +223,14 @@ export function noticeContext(n: NeedItem): string {
     const c = n.need;
     lines.push(`${commsNeedWho(c)} ${commsNeedWhere(c)} (${commsNeedTitle(c)}), last at ${c.lastAt}: ${oneLine(c.needsYou, 300)}`);
     if (c.summary) lines.push(`Summary: ${oneLine(c.summary, 400)}`);
+    return lines.join("\n");
+  }
+  if (n.kind === "s360") {
+    const i = n.need.item;
+    lines.push(`S360 action item "${oneLine(i.title, 200)}" (KPI ${i.kpiId}, item ${oneLine(i.itemId, 200)}), on ${i.targetType || "?"} ${i.service || i.targetId}.`);
+    lines.push(`SLA: ${i.sla || "unknown"}${i.due ? `, due ${i.due}` : ""}${i.eta ? `, ETA ${i.eta}` : ""}. ${s360Roles(i)}${i.owner ? `; action owner ${i.owner}` : ""}.`);
+    if (i.status) lines.push(`Latest status${i.statusBy ? ` (${i.statusBy})` : ""}: ${oneLine(i.status, 400)}`);
+    for (const [what, url] of [["In S360", i.link], ["Guidance", i.url], ["ADO work item", i.adoUrl]] as const) if (url) lines.push(`${what}: ${url}`);
     return lines.join("\n");
   }
   lines.push(`Task "${oneLine(n.task.title, 160)}" (id ${n.task.id}).`);

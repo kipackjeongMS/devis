@@ -87,6 +87,7 @@ import {
     type CommsNeed,
     type MeetingsDigest,
 } from "./comms.mjs";
+import { dismissS360Need, ensureS360Runner, listS360Items, s360Digest, s360Status, s360Today, scanS360, setS360Enabled } from "./s360.mjs";
 import {
     acceptProposal,
     acknowledgeRun,
@@ -157,10 +158,11 @@ export async function handleJarvisApi(req: IncomingMessage, res: ServerResponse,
             ensureOverviewRunner();
             ensurePrsRunner();
             ensureCommsRunner();
+            ensureS360Runner();
             resumeRemovals();
             resumeClones();
             const cfg = await readConfig();
-            const [snapshot, overview, note, comms, meetings, chats, mail] = await Promise.all([
+            const [snapshot, overview, note, comms, meetings, chats, mail, s360] = await Promise.all([
                 todaySnapshot(since(q.get("since"))),
                 overviewState(),
                 getQuickNote(),
@@ -177,21 +179,28 @@ export async function handleJarvisApi(req: IncomingMessage, res: ServerResponse,
                     console.warn(`[comms] mail: ${error.message}`);
                     return null;
                 }),
+                s360Today().catch((error: Error) => {
+                    console.warn(`[s360] today: ${error.message}`);
+                    return null;
+                }),
             ]);
             // Chats and email threads waiting on the user; a chat with an open PR ask is left to the ask.
             const needs = await commsNeeds(comms || []).catch((error: Error): CommsNeed[] | null => {
                 console.warn(`[comms] needs: ${error.message}`);
                 return null;
             });
-            // To-dos made from Needs you items tick themselves once the ask is gone.
+            // To-dos made from Needs you items tick themselves once the ask is gone. An S360 item's
+            // to-do waits for S360 to close the item, and is left alone while the watcher is off.
             const skip = [
                 ...(snapshot.validationFailed ? (["val"] as const) : []),
                 ...(snapshot.prCommentsFailed ? (["pr"] as const) : []),
                 ...(snapshot.prBuildsFailed ? (["ci"] as const) : []),
                 ...(comms ? [] : (["teams"] as const)),
                 ...(needs ? [] : (["chat", "mail"] as const)),
+                ...(s360?.digest.enabled ? [] : (["s360"] as const)),
             ];
-            await settleNeedTodos(needKeys(snapshot.tasks, comms || [], needs || []), skip);
+            const s360Open = (s360?.open || []).map((key) => ({ key }));
+            await settleNeedTodos(needKeys(snapshot.tasks, comms || [], needs || [], s360Open), skip);
             const todos = await listTodos();
             // The to-dos ride along with every poll; the quick note only says when it changed.
             return sendJson(res, 200, {
@@ -201,6 +210,7 @@ export async function handleJarvisApi(req: IncomingMessage, res: ServerResponse,
                 todos,
                 note: { version: note.version, updatedAt: note.updatedAt, updatedBy: note.updatedBy },
                 comms: { asks: comms || [], ...(comms ? {} : { failed: true }), ...(meetings ? { meetings } : {}), ...(chats ? { chats } : {}), ...(mail ? { mail } : {}), needs: needs || [], ...(needs ? {} : { needsFailed: true }) },
+                s360: s360 ? { ...s360.digest, needs: s360.needs } : { failed: true, needs: [] },
                 devis: devisBanner(),
                 update: await updateBanner().catch(() => null),
             });
@@ -243,6 +253,23 @@ export async function handleJarvisApi(req: IncomingMessage, res: ServerResponse,
             const b = await readBody(req);
             await dismissAsk(b?.id);
             return sendJson(res, 200, { asks: await openAsks() });
+        }
+
+        // ---- S360: the user's action items, read once a day (s360.mts) ----
+        if (p === "/api/jarvis/s360" && get) {
+            return sendJson(res, 200, { items: await listS360Items(), digest: await s360Digest(), status: await s360Status() });
+        }
+        if (p === "/api/jarvis/s360/scan" && post) {
+            const last = await scanS360("now");
+            return sendJson(res, 200, { items: await listS360Items(), digest: await s360Digest(), status: await s360Status(), last });
+        }
+        if (p === "/api/jarvis/s360/enabled" && post) {
+            const b = await readBody(req);
+            return sendJson(res, 200, { status: await setS360Enabled(b?.enabled), digest: await s360Digest() });
+        }
+        if (p === "/api/jarvis/s360/needs/dismiss" && post) {
+            const b = await readBody(req);
+            return sendJson(res, 200, { needs: await dismissS360Need(b?.key), digest: await s360Digest() });
         }
 
         // ---- the user's notes: to-dos and the quick note ----

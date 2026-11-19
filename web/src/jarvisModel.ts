@@ -5,6 +5,7 @@ import { feedLane, type ReviewPhase } from "./queueModel.js";
 import type { PR } from "./types.js";
 import type { ChatImage } from "./chatImages.js";
 import type { ChatsDigest, MeetingsDigest } from "./commsModel.js";
+import { s360NeedLine, s360Why, type S360Need, type S360Today } from "./s360Model.js";
 
 export type WorkerState = "working" | "needsInput" | "turnDone" | "idle" | "stopped" | "error";
 
@@ -805,12 +806,12 @@ export interface Todo {
 /** A Needs you item a to-do was made from: the ask's key, and enough to show and open it. */
 export interface TodoSource {
   key: string;
-  /** The task it's about; empty for a Teams ask. */
+  /** The task it's about; empty for a Teams ask, a chat, an email or an S360 item. */
   taskId: string;
-  /** The task's title, or the PR's for a Teams ask. */
+  /** The task's title, or the PR's for a Teams ask (the chat's, the email's, the S360 item's). */
   taskTitle: string;
   who: string;
-  /** The message in Teams, for a Teams ask. */
+  /** Where the ask is: the message in Teams, the email in Outlook, the item in S360. */
   link?: string;
 }
 
@@ -837,6 +838,8 @@ export interface TodayData {
    * threads waiting on the user (`needsFailed` likewise); the meetings', chats' and email's digests.
    */
   comms?: { asks: CommsAsk[]; failed?: boolean; meetings?: MeetingsDigest; chats?: ChatsDigest; mail?: ChatsDigest; needs?: CommsNeed[]; needsFailed?: boolean };
+  /** The S360 items waiting on the user, and the digest of them all (`failed` when they couldn't be read this time). */
+  s360?: S360Today;
   /** A Devis ship deploying, just live, or not live: the Workspace banner. */
   devis?: DevisBanner | null;
   /** A release ready, installing, just live, failed, or paused by your source: the other banner. */
@@ -1121,15 +1124,18 @@ export type NeedItem =
   /** A PR someone asked the user to review in Teams. No task: the PR is what it's about. */
   | { kind: "teams"; key: string; source: string; ask: CommsAsk; at: number }
   /** A chat or email thread someone waits on the user in. No task either. */
-  | { kind: "comms"; key: string; source: string; need: CommsNeed; at: number };
+  | { kind: "comms"; key: string; source: string; need: CommsNeed; at: number }
+  /** An S360 action item that's new, or approaching or past its SLA. No task either. */
+  | { kind: "s360"; key: string; source: string; need: S360Need; at: number };
 
 /** Needs you items that belong to a task. */
-export type TaskNeedItem = Exclude<NeedItem, { kind: "teams" | "comms" }>;
+export type TaskNeedItem = Exclude<NeedItem, { kind: "teams" | "comms" | "s360" }>;
 
 /** One ask in a line, for the warning on its task's card. */
 export function needLine(n: NeedItem): string {
   if (n.kind === "teams") return `${askersLine(n.ask.askers)} asked you to review PR ${n.ask.prId}`;
   if (n.kind === "comms") return `${commsNeedWho(n.need)}: ${n.need.needsYou}`;
+  if (n.kind === "s360") return s360NeedLine(n.need.item);
   if (n.kind === "validation" || n.kind === "prComments" || n.kind === "prBuilds") return n.text;
   if (n.kind === "failed") return `${n.worker.label} failed`;
   const r = n.worker.requests[0];
@@ -1140,12 +1146,14 @@ export function needLine(n: NeedItem): string {
 
 /**
  * Everything waiting on the user, the longest wait first. Exactly the asks that make a task
- * needsYou, the Teams PR asks, and the chats and email threads someone waits on the user in.
+ * needsYou, the Teams PR asks, the chats and email threads someone waits on the user in, and the
+ * S360 items that need them.
  */
-export function needsItems(tasks: TodayTask[], asks: CommsAsk[] = [], needs: CommsNeed[] = []): NeedItem[] {
+export function needsItems(tasks: TodayTask[], asks: CommsAsk[] = [], needs: CommsNeed[] = [], s360: S360Need[] = []): NeedItem[] {
   const items: NeedItem[] = taskNeeds(tasks);
   for (const ask of asks) items.push({ kind: "teams", key: `teams:${ask.id}`, source: `need:teams:${ask.id}`, ask, at: time(ask.openedAt) });
   for (const need of needs) items.push({ kind: "comms", key: `comms:${need.key}`, source: need.key, need, at: time(need.lastAt) });
+  for (const need of s360) items.push({ kind: "s360", key: `s360:${need.key}`, source: need.key, need, at: time(need.at) });
   return items.sort((a, b) => a.at - b.at || a.key.localeCompare(b.key));
 }
 
@@ -1199,6 +1207,17 @@ export const oneLine = (text: string, max = 200): string => {
 
 /** The to-do a Needs you item becomes: what to do, in a line, and where it came from. */
 export function needTodo(n: NeedItem): { text: string; source: TodoSource } {
+  if (n.kind === "s360") {
+    const item = n.need.item;
+    const why = s360Why(item);
+    const due = time(item.due) ? new Date(time(item.due)).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "";
+    const state = why === "late" ? "out of SLA" : why === "soon" ? "approaching its SLA" : "";
+    const tail = [state, due ? `due ${due}` : ""].filter(Boolean).join(", ");
+    return {
+      text: `Resolve the S360 item: ${oneLine(item.title, 200)}${tail ? ` (${tail})` : ""}`,
+      source: { key: n.source, taskId: "", taskTitle: oneLine(item.title, 140), who: "S360", ...(item.link ? { link: item.link } : {}) },
+    };
+  }
   if (n.kind === "comms") {
     const c = n.need;
     const ask = oneLine(c.needsYou, 300);
@@ -1417,6 +1436,7 @@ export function todayFingerprint(data: TodayData | null, extra: string): string 
     o ? [o.phase, o.text, o.at, o.stale, o.error] : null,
     data.comms?.asks.map((a) => [a.id, a.updatedAt, a.title, a.repoId]),
     data.comms?.needs?.map((n) => [n.key, n.day, n.needsYou, n.lastAt]),
+    data.s360?.needs.map((n) => [n.key, n.at, n.item.sla, n.item.title, n.item.due, n.item.link]),
     extra,
   ]);
 }

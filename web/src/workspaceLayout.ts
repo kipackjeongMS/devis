@@ -3,24 +3,24 @@
 //   Columns  — one to four, side by side. `w` is a column's share of the width (the default sets
 //              them, and dragging a border between columns changes them); null leaves the widths
 //              to CSS. A column moves as a whole, its panels and width going with it.
-//   Panels   — Devis (always there, exactly once) and the sections: seven with the Needs you
-//              panel, six when what needs you shows in Devis's chat instead (Settings > Workspace).
+//   Panels   — Devis (always there, exactly once) and the sections: eight with the Needs you
+//              panel, seven when what needs you shows in Devis's chat instead (Settings > Workspace).
 //              In a column, open panels share the height by `g` (a flex-grow, 1 when unset).
 //   Flat     — a window too narrow for the columns shows Devis alone and the sections in one
 //              list behind the Overview button. `flat` is that list's order once the user moves
 //              something there; until then it reads the columns left to right, top to bottom.
 // Kept per device in localStorage. The first read takes over the rail's order and the
 // Devis/rail split that step 1 saved, then drops those keys. A section new since the layout
-// was saved goes in under the section before it, so Pull Requests lands under Tasks; Needs you,
-// back after a layout saved without it, goes over To-dos (or first, in the flat list). With what
-// needs you in Devis's chat, a layout's Needs you panel is dropped on read.
+// was saved goes in under the section before it, so Pull Requests lands under Tasks and S360 under
+// Meetings; Needs you, back after a layout saved without it, goes over To-dos (or first, in the
+// flat list). With what needs you in Devis's chat, a layout's Needs you panel is dropped on read.
 import { savedShare } from "./splitter.js";
 
-export type Section = "needs" | "tasks" | "prs" | "comms" | "meetings" | "todos" | "note";
+export type Section = "needs" | "tasks" | "prs" | "comms" | "meetings" | "s360" | "todos" | "note";
 export type PanelId = "devis" | Section;
 
 /** Every section there can be, Needs you included. */
-export const ALL_SECTIONS: readonly Section[] = ["needs", "tasks", "prs", "comms", "meetings", "todos", "note"];
+export const ALL_SECTIONS: readonly Section[] = ["needs", "tasks", "prs", "comms", "meetings", "s360", "todos", "note"];
 const CHAT_SECTIONS: readonly Section[] = ALL_SECTIONS.filter((s) => s !== "needs");
 
 let needsPanel = true;
@@ -39,6 +39,7 @@ export const PANEL_NAME: Record<PanelId, string> = {
   prs: "Pull Requests",
   comms: "Communication",
   meetings: "Meetings",
+  s360: "S360",
   todos: "To-dos",
   note: "Note",
 };
@@ -92,7 +93,7 @@ const clampG = (g: number): number => Math.min(G_MAX, Math.max(G_MIN, g));
 /**
  * Three columns: what's yours to do on the left (Needs you, To-dos and Note; or To-dos and Note
  * when what needs you shows in Devis's chat), Devis in the middle, and the work you watch (Tasks,
- * Pull Requests, Meetings, Communication) on the right.
+ * Pull Requests, Meetings, Communication, S360) on the right.
  */
 export function defaultLayout(): Layout {
   return {
@@ -104,7 +105,7 @@ export function defaultLayout(): Layout {
           : [{ id: "todos", g: 1.4 }, { id: "note", g: 1 }],
       },
       { w: 0.54, panels: [{ id: "devis" }] },
-      { w: 0.21, panels: [{ id: "tasks", g: 1.1 }, { id: "prs", g: 0.9 }, { id: "meetings", g: 1 }, { id: "comms", g: 1 }] },
+      { w: 0.21, panels: [{ id: "tasks", g: 1.1 }, { id: "prs", g: 0.9 }, { id: "meetings", g: 1 }, { id: "comms", g: 1 }, { id: "s360", g: 0.8 }] },
     ],
   };
 }

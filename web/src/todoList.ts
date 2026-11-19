@@ -86,8 +86,11 @@ export function onTodosChanged(listener: () => void): () => void {
 
 const announce = (): void => channel?.postMessage({ type: "todos-changed" });
 
-/** Where a to-do from Teams, a meeting or an email came from, as a link to it. */
+/** Where a to-do from Teams, a meeting, an email or S360 came from, as a link to it. */
 export function todoLinkHtml(src: NonNullable<Todo["source"]>): string {
+  if (src.key.startsWith("need:s360:")) {
+    return `<a class="todo-src" data-key="src" href="${esc(src.link!)}" target="_blank" rel="noopener" title="Open the item in S360">${svg("shield")}<span>${esc(src.taskTitle || "S360")}${src.who ? ` · ${esc(src.who)}` : ""}</span></a>`;
+  }
   const mail = src.key.startsWith("need:mail:");
   const meet = src.key.startsWith("meet:");
   const title = mail ? "Open the email in Outlook" : meet ? "Open the meeting's chat in Teams" : src.key.startsWith("need:chat:") ? "Open the chat in Teams" : "Open the message in Teams";

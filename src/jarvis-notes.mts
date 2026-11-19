@@ -9,6 +9,7 @@
 import { JarvisError, asJarvisId, getTask, jarvisDb, onTaskDone } from "./jarvis-store.mjs";
 import { NEED_KEY, type NeedKind } from "./jarvis-needs.mjs";
 import { openableOutlookLink } from "./outlook-link.mjs";
+import { s360Link } from "./s360-link.mjs";
 
 export interface Todo {
     id: number;
@@ -74,10 +75,10 @@ const NOTE_KEY = "quickNote";
 const now = (): string => new Date().toISOString();
 
 type Row = Record<string, unknown>;
-/** Only a link into Teams, or into Outlook on the web, is kept as where an ask is. */
+/** Only a link into Teams, Outlook on the web, or the S360 portal is kept as where an ask is. */
 const TEAMS_LINK = /^https:\/\/teams\.microsoft\.com\/l\/[\w\-.~%/?=&:+@!$'()*,;]{1,2000}$/;
-/** Where an ask is: a Teams link, or an email's link in Outlook (an old one made one that opens). */
-const askLink = (link: unknown): string => (typeof link === "string" && TEAMS_LINK.test(link) ? link : openableOutlookLink(link));
+/** Where an ask is: a Teams link, an email's link in Outlook (an old one made one that opens), or an S360 item's link. */
+const askLink = (link: unknown): string => (typeof link === "string" && TEAMS_LINK.test(link) ? link : openableOutlookLink(link) || s360Link(link));
 /** A meeting's action item (comms.mts addMeetingTodo): meet:<meeting id>:<its index>. Not a Needs you item, so it never ticks itself. */
 export const MEET_KEY = /^meet:[0-9a-f]{24}:\d{1,2}$/;
 
@@ -114,7 +115,7 @@ const clipField = (value: unknown, max = 200): string => (typeof value === "stri
  * A Needs you item, as a request names it: its key must be one Needs you gives, and its task a real
  * id. A Teams ask has no task; it can name the message in Teams instead. A chat or email thread
  * waiting on the user names the chat in Teams or the email in Outlook; a meeting's action item
- * (meet:…) the meeting's chat.
+ * (meet:…) the meeting's chat; an S360 item the item in the S360 portal.
  */
 function cleanSource(value: unknown): TodoSource | null {
     if (value == null) return null;
@@ -127,6 +128,10 @@ function cleanSource(value: unknown): TodoSource | null {
     }
     if (key.startsWith("need:mail:")) {
         const link = openableOutlookLink(s.link);
+        return { key, taskId: "", taskTitle: clipField(s.taskTitle), who: clipField(s.who, 80), ...(link ? { link } : {}) };
+    }
+    if (key.startsWith("need:s360:")) {
+        const link = s360Link(s.link);
         return { key, taskId: "", taskTitle: clipField(s.taskTitle), who: clipField(s.who, 80), ...(link ? { link } : {}) };
     }
     const taskId = asJarvisId(s.taskId);
