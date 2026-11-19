@@ -5826,7 +5826,6 @@ select.jv-field { width: 100%; }
 .jt-changes-head svg.ic { color: var(--caution); }
 .jt-changes ul { margin: 6px 0 0; padding-left: 24px; }
 .jt-changes code { font-size: var(--fs-caption); overflow-wrap: anywhere; }
-.jv-note { min-height: 320px; font: var(--fs-caption)/19px var(--mono); }
 .ask-dialog.jh-dialog { width: min(640px, 100%); }
 .jh { max-height: 60vh; overflow-y: auto; }
 .jh-day { margin: 14px 0 6px; color: var(--text-3); font: 600 var(--fs-readout)/16px var(--mono); letter-spacing: .06em; text-transform: uppercase; }
@@ -6091,16 +6090,7 @@ select.jv-field { width: 100%; }
 .tm-muted,
 .chat-muted { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--text-3); font-size: var(--fs-label); line-height: 20px; }
 .tm-muted.err { color: var(--critical); }
-.tm-note-md { max-height: 380px; overflow: auto; color: var(--text-2); font-size: var(--fs-label); line-height: 20px; }
-.tm-note-md p { margin: 4px 0; }
-.tm-note-md h1,
-.tm-note-md h2,
-.tm-note-md h3,
-.tm-note-md h4 { margin: 12px 0 4px; color: var(--text-1); font: 600 var(--fs-label)/20px var(--font); }
-.tm-note-md h1 { font-size: var(--fs-body); }
-.tm-note-md > :first-child { margin-top: 0; }
 .tm-path { margin: 8px 0 0; overflow: hidden; color: var(--text-3); font: var(--fs-readout)/16px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
-.tm-note-text { width: 100%; min-height: 260px; }
 .tm-note-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
 
 /* Status opens on the task's facts (work item, service, folder, worktrees), then the timeline. */
@@ -6317,14 +6307,10 @@ button.tm-pr-title:hover { color: var(--accent-text); text-decoration: underline
 .tpc-part-h > .tv-sub { flex: 1 1 auto; margin: 0; }
 .tpb-fails { display: flex; flex-direction: column; gap: 4px; margin: 0; padding-left: 18px; color: var(--text-2); font-size: var(--fs-caption); line-height: var(--lh-caption); overflow-wrap: anywhere; }
 
-/* Artifacts: a list, one file at a time, or its editor. */
-.tm-arts .tm-note-md { max-height: none; }
+/* Artifacts: the list, or the new-note form. A file opens in the task's Artifacts window. */
 .tm-art-bar { display: flex; align-items: center; gap: 8px; min-height: 28px; margin-bottom: 10px; }
 .tm-art-intro { flex: 1 1 auto; min-width: 0; margin: 0; color: var(--text-3); font-size: var(--fs-caption); }
 .tm-art-bar .btn.sm svg.ic { width: 14px; height: 14px; }
-.tm-art-back { flex: none; padding-left: 6px; }
-.tm-art-crumb { flex: 1 1 auto; min-width: 0; overflow: hidden; color: var(--text-1); font: 600 var(--fs-label)/20px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
-.tm-art-actions { display: flex; flex: none; align-items: center; gap: 4px; }
 .tm-art-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; margin: 0; padding: 0; list-style: none; }
 .tm-art {
   display: grid;
@@ -6353,7 +6339,6 @@ button.tm-pr-title:hover { color: var(--accent-text); text-decoration: underline
   white-space: nowrap;
 }
 .tm-art-meta { grid-column: 4; justify-self: end; color: var(--text-3); font: var(--fs-readout)/18px var(--mono); white-space: nowrap; }
-.tm-art-pre { margin: 0; padding: 10px; overflow: auto; border-radius: var(--r-control); background: var(--well); color: var(--text-2); font: var(--fs-readout)/18px var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .tm-recap { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; padding: 6px 8px 6px 10px; border: 1px solid var(--stroke-card); border-radius: var(--r-control); background: var(--well); color: var(--text-2); font-size: var(--fs-caption); line-height: 18px; }
 .tm-recap svg.ic { flex: none; width: 14px; height: 14px; }
 .tm-recap .spinner { flex: none; width: 12px; height: 12px; }
@@ -7161,6 +7146,86 @@ html.lean .jv-layer.anim .jv-scrim { animation: fade-in var(--t-fast) linear; }
   padding: 10px 8px 8px;
   border-radius: 0 0 var(--r-control) var(--r-control);
   background: var(--glass-float);
+}
+
+/* ---------- Artifacts window (artifacts.html, artifacts.ts) ----------
+   The same pane as the code window: the task's files on the left, the open file on the right, read as
+   Markdown or edited in place. Under 760px the file column narrows and New note keeps only its icon. */
+.aw {
+  position: relative;
+  display: grid;
+  flex: 1;
+  grid-template-columns: 260px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  margin: 0 var(--gutter) var(--gutter);
+  overflow: hidden;
+  border: 1px solid var(--edge);
+  border-top-color: var(--edge-top);
+  border-radius: var(--r-pane);
+  background: var(--gloss), var(--glass);
+  box-shadow: var(--sheen), var(--shadow-pane);
+  font-size: var(--fs-caption);
+  line-height: var(--lh-caption);
+}
+.aw > .cw-gone { grid-column: 1 / -1; }
+.aw .btn.sm svg.ic { width: 14px; height: 14px; }
+.aw :is(.aw-side-head, .aw-head) .icon-btn { width: 28px; height: 28px; }
+.aw-side { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid var(--divider); background: rgba(0, 0, 0, .12); }
+.aw-side-head { display: flex; flex: none; align-items: center; gap: 4px; min-height: 44px; padding: 6px 8px 6px 12px; border-bottom: 1px solid var(--divider); }
+.aw-side-title { flex: 1 1 auto; min-width: 0; color: var(--text-2); font-size: var(--fs-label); font-weight: 600; }
+.aw-count { color: var(--text-3); font: 400 var(--fs-readout)/1 var(--mono); font-variant-numeric: tabular-nums; }
+.aw-files { display: grid; flex: 1 1 auto; grid-auto-rows: max-content; gap: 2px; min-height: 0; margin: 0; padding: 6px; overflow: auto; list-style: none; }
+.aw-files-note { display: flex; align-items: center; gap: 8px; padding: 6px; color: var(--text-3); }
+.aw-files-note.err { color: var(--critical); }
+.aw-file {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 8px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--text-2);
+  text-align: left;
+}
+.aw-file:hover { border-color: var(--stroke-card); background: var(--fill-hover); color: var(--text-1); }
+.aw-file[aria-current="true"] { background: var(--accent-tint); box-shadow: inset 2px 0 0 var(--accent); color: var(--text-1); }
+.aw-file-icon { display: grid; grid-row: 1 / span 2; place-items: center; color: var(--text-3); }
+.aw-file-icon svg.ic { width: 14px; height: 14px; }
+.aw-file-name { min-width: 0; overflow: hidden; font: 600 var(--fs-label)/18px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+.aw-file-meta { grid-column: 2; min-width: 0; overflow: hidden; color: var(--text-3); font: var(--fs-readout)/16px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+.aw-dir { flex: none; margin: 0; padding: 8px 12px; border-top: 1px solid var(--divider); }
+.aw-dir[hidden] { display: none; }
+.aw-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.aw-head { display: flex; flex: none; align-items: center; gap: 6px; min-height: 44px; padding: 6px 10px 6px 16px; border-bottom: 1px solid var(--divider); }
+.aw-crumb { flex: 1 1 auto; min-width: 0; overflow: hidden; color: var(--text-1); font: 600 var(--fs-label)/20px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+.aw-body { flex: 1 1 auto; min-height: 0; padding: 16px 20px 24px; overflow: auto; }
+.aw-body:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.aw-body > .cw-state { min-height: 100%; }
+.aw-md { max-width: 880px; color: var(--text-1); }
+.aw-md > :first-child { margin-top: 0; }
+.aw-pre { margin: 0; padding: 12px; border-radius: var(--r-control); background: var(--well); color: var(--text-2); font: var(--fs-caption)/19px var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.aw-muted { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--text-3); font-size: var(--fs-label); line-height: 20px; }
+.aw-path { flex: none; margin: 0; padding: 6px 16px 8px; border-top: 1px solid var(--divider); }
+.aw .ask-q.aw-text {
+  flex: 1 1 auto;
+  width: auto;
+  min-height: 0;
+  margin: 12px 16px 16px;
+  padding: 10px 12px;
+  resize: none;
+  font: var(--fs-caption)/19px var(--mono);
+}
+.aw-new { display: grid; align-content: start; gap: 8px; width: min(520px, 100%); padding: 20px; }
+.aw-new .aw-muted { font-size: var(--fs-caption); }
+@media (max-width: 759.98px) {
+  .aw { grid-template-columns: 200px minmax(0, 1fr); }
+  .aw-side-head .btn.sm > span { display: none; }
+  .aw-body { padding: 12px 14px 20px; }
 }
 
 /* ---------- Code window (code.html, workerChanges.ts) ----------

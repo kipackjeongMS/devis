@@ -17,6 +17,7 @@ import { APP_NAME, DATA_FOLDER, FORMER_APP_NAME } from "./brand.mjs";
 import { CODE_WINDOW_MIN, codeWindowUrl, codeWindowWorker, isFocusMainUrl, parsePlacement, placeCodeWindow, type SavedPlacement } from "./code-window.mjs";
 import { createPrWindowController, PR_WINDOW_MIN, PR_WINDOW_SIZE, prWindowTarget, type PrWindowHandle } from "./pr-window.mjs";
 import { createTodosWindowController, isTodosWindowUrl, TODOS_WINDOW_MIN, TODOS_WINDOW_SIZE, type TodosWindowHandle } from "./todos-window.mjs";
+import { ARTIFACTS_WINDOW_MIN, artifactsWindowTarget, createArtifactsWindowController, placeArtifactsWindow, type ArtifactsWindowHandle } from "./artifacts-window.mjs";
 import { nextZoom, titleBarHeight, zoomCommand, zoomLevelOf } from "./ui-zoom.mjs";
 import { folderPickedScript, loginItem, shellRequest } from "./shell-request.mjs";
 import { readSetupState, setupStatePath } from "./setup-state.mjs";
@@ -77,8 +78,9 @@ function openOutside(url: string): void {
 
 /**
  * Keep the window on the service's origin (it can change when the service restarts); everything else opens in the browser.
- * The page's own window.opens are a worker's code window, the one pull request window and the one to-dos window (the
- * shell builds each, not the page) and "back to the main window" (`/?focus=main`), which only brings that window forward.
+ * The page's own window.opens are a worker's code window, the one pull request window, the one to-dos window and a
+ * task's Artifacts window (the shell builds each, not the page) and "back to the main window" (`/?focus=main`), which
+ * only brings that window forward.
  */
 function confineToOrigin(contents: WebContents): void {
     contents.setWindowOpenHandler(({ url }) => {
@@ -90,8 +92,10 @@ function confineToOrigin(contents: WebContents): void {
         }
         const worker = codeWindowWorker(url, origin);
         const pr = worker ? null : prWindowTarget(url, origin);
+        const artifacts = worker || pr ? null : artifactsWindowTarget(url, origin);
         if (worker) openCodeWindow(worker);
         else if (pr) prWindow.open(pr);
+        else if (artifacts) artifactsWindow.open(artifacts);
         else if (isTodosWindowUrl(url, origin)) todosWindow.open();
         else if (isFocusMainUrl(url, origin)) focusMainWindow();
         else if (isWebUrl(url)) openOutside(url);
@@ -280,6 +284,7 @@ function createWindow(url: string): BrowserWindow {
         for (const code of codeWindows.values()) if (!code.isDestroyed()) code.close();
         for (const pr of prBrowserWindows) if (!pr.isDestroyed()) pr.close();
         for (const todos of todosBrowserWindows) if (!todos.isDestroyed()) todos.close();
+        for (const arts of artifactsBrowserWindows) if (!arts.isDestroyed()) arts.close();
     });
     void show(window, url);
     return window;
@@ -428,6 +433,58 @@ const todosWindow = createTodosWindowController({
     },
 });
 
+// ---- Artifacts windows ---------------------------------------------------------------
+
+/** A task's Artifacts, one window per task; opening a file from the task's Artifacts tab brings it forward on that file. */
+const artifactsBrowserWindows = new Set<BrowserWindow>();
+const artifactsWindow = createArtifactsWindowController({
+    origin: () => origin,
+    create: (task) => {
+        const mainArea = (mainWindow && !mainWindow.isDestroyed() ? screen.getDisplayMatching(mainWindow.getBounds()) : screen.getPrimaryDisplay()).workArea;
+        const open = [...artifactsBrowserWindows].filter((w) => !w.isDestroyed()).map((w) => w.getNormalBounds());
+        const window = new BrowserWindow({
+            ...chromeOptions(),
+            ...placeArtifactsWindow(mainArea, open),
+            minWidth: Math.min(ARTIFACTS_WINDOW_MIN.width, mainArea.width),
+            minHeight: Math.min(ARTIFACTS_WINDOW_MIN.height, mainArea.height),
+        });
+        artifactsBrowserWindows.add(window);
+        confineToOrigin(window.webContents);
+        followUiZoom(window);
+        window.once("ready-to-show", () => window.show());
+        const handle: ArtifactsWindowHandle = {
+            isDestroyed: () => window.isDestroyed(),
+            reveal: () => {
+                if (window.isMinimized()) window.restore();
+                window.show();
+                window.focus();
+            },
+            load: (url, current) => load(window, url, current),
+            select: (hash) => {
+                const contents = window.webContents;
+                // The page reads its hash on a hashchange; one still loading reads it at boot, then takes this one.
+                const run = () => {
+                    if (!window.isDestroyed()) void contents.executeJavaScript(`location.hash = ${JSON.stringify(hash)}`).catch(() => undefined);
+                };
+                if (contents.isLoading()) contents.once("did-finish-load", run);
+                else run();
+            },
+            hash: () => {
+                try {
+                    return new URL(window.webContents.getURL()).hash;
+                } catch {
+                    return "";
+                }
+            },
+        };
+        window.on("closed", () => {
+            artifactsBrowserWindows.delete(window);
+            artifactsWindow.closed(task, handle);
+        });
+        return handle;
+    },
+});
+
 /** The service came back on another port: move the code windows with it, keeping each one's open file (the page keeps it in the hash). */
 function moveCodeWindows(to: string): void {
     for (const [worker, window] of codeWindows) {
@@ -558,6 +615,7 @@ async function recover(): Promise<void> {
             moveCodeWindows(next);
             prWindow.moveTo(next);
             todosWindow.moveTo(next);
+            artifactsWindow.moveTo(next);
         }
         console.log(`[ado-pr-ops] reconnected to the service at ${status.url}`);
     } catch (error) {
