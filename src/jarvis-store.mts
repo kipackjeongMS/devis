@@ -241,6 +241,8 @@ export function jarvisDb(): Promise<DatabaseSync> {
             if (!taskCols.some((c) => c.name === "description")) db.exec("ALTER TABLE jarvis_tasks ADD COLUMN description TEXT NOT NULL DEFAULT ''");
             if (!taskCols.some((c) => c.name === "folder")) db.exec("ALTER TABLE jarvis_tasks ADD COLUMN folder TEXT");
             if (!taskCols.some((c) => c.name === "kind")) db.exec("ALTER TABLE jarvis_tasks ADD COLUMN kind TEXT");
+            // How many workers the task has started, removed ones too: the number in the next one's name.
+            if (!taskCols.some((c) => c.name === "workers_started")) db.exec("ALTER TABLE jarvis_tasks ADD COLUMN workers_started INTEGER NOT NULL DEFAULT 0");
             const workerCols = db.prepare("PRAGMA table_info(jarvis_workers)").all() as Array<{ name: string }>;
             if (!workerCols.some((c) => c.name === "effort")) db.exec("ALTER TABLE jarvis_workers ADD COLUMN effort TEXT");
             if (!workerCols.some((c) => c.name === "state_at")) {
@@ -1155,38 +1157,43 @@ export async function insertWorktree(w: Omit<Worktree, "createdAt">): Promise<Wo
     return { ...w, createdAt: at };
 }
 
-/** Names for the workers of tasks with a folder: the worker's folder and branch carry it. */
-const WORKER_NAMES = [
-    "atlas", "birch", "cedar", "dune", "ember", "fjord", "grove", "harbor", "iris", "juniper", "kestrel", "lumen",
-    "maple", "nova", "onyx", "pine", "quill", "river", "sage", "tide", "vale", "willow", "yarrow", "zephyr",
-];
+/** The longest task alias a worker's name carries: it's in the worker's folder, under the task's own. */
+export const WORKER_ALIAS_MAX = 30;
 
-/** A name no worker has, that `free` accepts (say, its folder isn't taken). */
-export async function nextWorkerName(free: (name: string) => boolean = () => true): Promise<string> {
-    const db = await jarvisDb();
-    const used = new Set((db.prepare("SELECT label FROM jarvis_workers").all() as Array<{ label: string }>).map((r) => r.label.toLowerCase()));
-    const ok = (name: string) => !used.has(name) && free(name);
-    for (const name of WORKER_NAMES) if (ok(name)) return name;
-    for (let n = 2; n < 1000; n++) for (const name of WORKER_NAMES) if (ok(`${name}-${n}`)) return `${name}-${n}`;
-    return `worker-${randomUUID().slice(0, 8)}`;
+/** The task part of a worker's name: the task's alias, cut at a dash to fit, else at the limit. */
+export function workerAlias(alias: string): string {
+    const slug = taskSlug(alias);
+    if (slug.length <= WORKER_ALIAS_MAX) return slug;
+    const dash = slug.lastIndexOf("-", WORKER_ALIAS_MAX);
+    const cut = dash >= WORKER_ALIAS_MAX / 2 ? slug.slice(0, dash) : slug.slice(0, WORKER_ALIAS_MAX);
+    return cut.replace(/[-.]+$/, "") || "task";
 }
 
-/** A short label for a new worker: the folder name, numbered when it repeats. */
-export async function nextWorkerLabel(cwd: string): Promise<string> {
-    const base =
-        cwd
-            .replace(/[\\/]+$/, "")
-            .split(/[\\/]/)
-            .pop()
-            ?.replace(/[^\w.-]+/g, "-")
-            .toLowerCase()
-            .slice(0, 40) || "worker";
+/**
+ * The next worker's name on a task: `<alias>-worker-<n>`, its folder and branch too. `alias` is
+ * the task folder's name, or the title of a task without one. `n` counts the workers the task
+ * has started, removed ones too, so a number is never used twice; a task from before the count
+ * counts the workers it has. A name another worker has, or that `free` refuses (say, its folder
+ * is there), is skipped.
+ */
+export async function nextWorkerName(taskId: string, alias: string, free: (name: string) => boolean = () => true): Promise<string> {
     const db = await jarvisDb();
-    const used = new Set(
-        (db.prepare("SELECT label FROM jarvis_workers").all() as Array<{ label: string }>).map((r) => r.label),
-    );
-    if (!used.has(base)) return base;
-    for (let n = 2; ; n++) if (!used.has(`${base}-${n}`)) return `${base}-${n}`;
+    const started = (db.prepare("SELECT workers_started AS n FROM jarvis_tasks WHERE id = ?").get(taskId) as { n: number } | undefined)?.n ?? 0;
+    const has = (db.prepare("SELECT COUNT(*) AS n FROM jarvis_workers WHERE task_id = ?").get(taskId) as { n: number }).n;
+    const used = new Set((db.prepare("SELECT label FROM jarvis_workers").all() as Array<{ label: string }>).map((r) => r.label.toLowerCase()));
+    const base = `${workerAlias(alias)}-worker-`;
+    let n = Math.max(started, has) + 1;
+    while (used.has(`${base}${n}`) || !free(`${base}${n}`)) n++;
+    db.prepare("UPDATE jarvis_tasks SET workers_started = ? WHERE id = ?").run(n, taskId);
+    return `${base}${n}`;
+}
+
+/** A worker that never started gives its number back, unless a later one took the next. */
+export async function releaseWorkerName(taskId: string, name: string): Promise<void> {
+    const n = Number(/-worker-(\d+)$/.exec(name)?.[1]);
+    if (!n) return;
+    const db = await jarvisDb();
+    db.prepare("UPDATE jarvis_tasks SET workers_started = ? WHERE id = ? AND workers_started = ?").run(n - 1, taskId, n);
 }
 
 /** Folders workers ran in, most recent first. */

@@ -158,17 +158,49 @@ try {
 
     // ---- workers ----
     const cwd = join(root, "repos", "AppConfig.Tests");
-    assert.equal(await store.nextWorkerLabel(cwd), "appconfig.tests");
+    assert.equal(store.workerAlias("AKS RBAC"), "aks-rbac");
+    assert.equal(store.workerAlias("aks-rbac-2"), "aks-rbac-2", "a numbered task folder keeps its number");
+    assert.equal(store.workerAlias("Investigate deployment failures in westus2"), "investigate-deployment", "a long alias is cut at a dash");
+    assert.equal(store.workerAlias("x".repeat(40)), "x".repeat(30), "with no dash near the limit, at the limit");
+    assert.equal(store.workerAlias("ab-" + "c".repeat(40)), "ab-" + "c".repeat(27), "a dash too early isn't used");
+    assert.equal(store.workerAlias("!!!"), "task");
+    const label = await store.nextWorkerName(first.task.id, "Canary scope");
+    assert.equal(label, "canary-scope-worker-1", "a task's first worker");
     await store.insertWorker({
         sessionId: "11111111-1111-4111-8111-111111111111",
         taskId: first.task.id,
-        label: await store.nextWorkerLabel(cwd),
+        label,
         cwd,
         model: null,
         state: "working",
         summary: "Starting",
     });
-    assert.equal(await store.nextWorkerLabel(cwd + "\\"), "appconfig.tests-2", "labels are numbered when the folder repeats");
+    {
+        const idle = (sessionId, taskId, name) => store.insertWorker({ sessionId, taskId, label: name, cwd, model: null, state: "idle", summary: "" });
+        const failed = await store.nextWorkerName(first.task.id, "Canary scope");
+        assert.equal(failed, "canary-scope-worker-2");
+        await store.releaseWorkerName(first.task.id, failed);
+        const second = await store.nextWorkerName(first.task.id, "Canary scope");
+        assert.equal(second, "canary-scope-worker-2", "a worker that never started gives its number back");
+        await idle("33333333-3333-4333-8333-333333333333", first.task.id, second);
+        await store.deleteWorker("33333333-3333-4333-8333-333333333333");
+        const third = await store.nextWorkerName(first.task.id, "Canary scope");
+        assert.equal(third, "canary-scope-worker-3", "a removed worker's number isn't used again");
+        await store.releaseWorkerName(first.task.id, second);
+        assert.equal(
+            await store.nextWorkerName(first.task.id, "Canary scope", (name) => name !== "canary-scope-worker-4"),
+            "canary-scope-worker-5",
+            "releasing an older number changes nothing; a name whose folder is taken is skipped",
+        );
+        // A task from before the count numbers after the workers it has.
+        await idle("44444444-4444-4444-8444-444444444444", old.id, "atlas");
+        await idle("55555555-5555-4555-8555-555555555555", old.id, "birch");
+        assert.equal(await store.nextWorkerName(old.id, old.title), "old-task-worker-3");
+        await store.deleteWorker("44444444-4444-4444-8444-444444444444");
+        await store.deleteWorker("55555555-5555-4555-8555-555555555555");
+        // Two folderless tasks with one title don't share a name.
+        assert.equal(await store.nextWorkerName(custom.id, "Canary scope"), "canary-scope-worker-2", "another task's worker has worker-1");
+    }
     await store.updateWorker("11111111-1111-4111-8111-111111111111", { state: "needsInput", autoApprove: true, summary: "x".repeat(900) });
     let worker = await store.getWorker("11111111-1111-4111-8111-111111111111");
     assert.equal(worker.state, "needsInput");

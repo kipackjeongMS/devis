@@ -257,7 +257,7 @@ try {
 
     // ---- a plain turn ----
     const plain = await workers.startWorker({ taskId: task.id, cwd: `"${repo}"`, prompt: "Add tests", model: "auto" });
-    assert.equal(plain.label, "appconfig");
+    assert.equal(plain.label, "parameter-editor-worker-1", "a task without a folder is named from its title");
     assert.equal(plain.cwd, repo, "quotes around a pasted path are dropped");
     const session = created.at(-1);
     assert.equal(session.config.sessionId, plain.sessionId, "the worker row and the session share one id");
@@ -284,7 +284,7 @@ try {
     assert.equal(session.config.tools.find((t) => t.name === "task_note"), undefined);
     const art = (args, sessionId = plain.sessionId) => artTool.handler(args, { sessionId });
     assert.equal(await art({ action: "append", content: "Picked option B." }), "Added to note.md.");
-    assert.match(await art({ action: "read" }), /· appconfig\n\nPicked option B\./);
+    assert.match(await art({ action: "read" }), /· parameter-editor-worker-1\n\nPicked option B\./);
     assert.equal(await art({ action: "write", name: "design.md", content: "# Design\n\nOption B." }), "Saved design.md.");
     assert.match(await art({ action: "list" }), /^note\.md · .+\ndesign\.md · .+\nFolder: .+artifacts$/);
     assert.equal(await art({ action: "read", name: "design.md" }), "# Design\n\nOption B.");
@@ -304,7 +304,7 @@ try {
     const userNotes = (args, sessionId = plain.sessionId) => notesTool.handler(args, { sessionId });
     const added = await userNotes({ action: "add_todo", text: "Ask about the rollout window" });
     assert.match(added, /^Added to-do \[\d+\]: Ask about the rollout window$/);
-    assert.match(await userNotes({ action: "read" }), /Ask about the rollout window \(added by appconfig\)/, "signed by the worker, not by what it passed");
+    assert.match(await userNotes({ action: "read" }), /Ask about the rollout window \(added by parameter-editor-worker-1\)/, "signed by the worker, not by what it passed");
     const askId = Number(/\[(\d+)\]/.exec(added)[1]);
     assert.equal(await userNotes({ action: "set_due", id: askId, due: "2026-03-02" }), `[${askId}] is due 2026-03-02.`, "workers can date a to-do");
     assert.match(await userNotes({ action: "complete_todo", id: 1 }), /^Use action read, add_todo, set_due\.$/, "workers can't check off the user's to-dos");
@@ -349,7 +349,7 @@ try {
     let statuses = await store.listStatuses({ taskId: task.id });
     assert.deepEqual(
         statuses.map((s) => [s.author, s.text, s.sessionId]),
-        [["appconfig", "Did: Add tests", plain.sessionId]],
+        [["parameter-editor-worker-1", "Did: Add tests", plain.sessionId]],
         "a turn that posted no status leaves its summary's first line",
     );
     const statusTool = session.config.tools.find((t) => t.name === "task_status");
@@ -499,7 +499,7 @@ try {
         return `Using ${free.answer}`;
     };
     const asker = await workers.startWorker({ taskId: second.id, cwd: repo, prompt: "Scope the canary" });
-    assert.equal(asker.label, "appconfig-2");
+    assert.equal(asker.label, "canary-test-scope-worker-1", "one folder, two tasks: each names its own");
     let q = await until(() => workers.workerLiveState(asker.sessionId).requests[0], "a question");
     assert.equal(q.kind, "question");
     assert.equal(q.title, "Which regions?");
@@ -763,12 +763,12 @@ try {
     const recap = await store.readArtifact(task.id, "recap.md");
     assert.match(
         recap.content,
-        /^# Recap: Parameter editor\n\n_Task done .+ · recap by appconfig_\n\n- Goal: an editor for block parameters\.\n- Decision: option B, for the simpler schema\.\n$/,
+        /^# Recap: Parameter editor\n\n_Task done .+ · recap by parameter-editor-worker-1_\n\n- Goal: an editor for block parameters\.\n- Decision: option B, for the simpler schema\.\n$/,
         "the lead-in goes; a byline is added under the heading",
     );
     assert.equal(relive.displayed.at(-1), "Write the task's recap (recap.md).");
     assert.match(relive.sent.at(-1), /^The task "Parameter editor" is done\. Write its recap\./);
-    assert.match(relive.sent.at(-1), /Status timeline over the task's life, oldest first:\n- .+ · appconfig: Did: Add tests\n- .+ · appconfig: Schema done; wiring the editor next\n/);
+    assert.match(relive.sent.at(-1), /Status timeline over the task's life, oldest first:\n- .+ · parameter-editor-worker-1: Did: Add tests\n- .+ · parameter-editor-worker-1: Schema done; wiring the editor next\n/);
     // A long task: the first and latest updates, with the gap between them named.
     const many = Array.from({ length: 260 }, (_, i) => ({ id: 260 - i, at: new Date(2026, 9, 1, 9, 0, 260 - i).toISOString(), author: "w", text: `u${260 - i}` }));
     const long = workers.recapPrompt({ title: "Long task" }, "done", many);
@@ -783,7 +783,7 @@ try {
     assert.equal((await store.listStatuses({ taskId: task.id })).length, statusCount, "the recap posts no status");
     assert.equal((await store.getWorker(plain.sessionId)).summary, "Wrote the task's recap (recap.md).");
     assert.equal(workers.recapState(task.id), null);
-    assert.match((await store.listEvents({ taskId: task.id, kinds: ["task.recap"] }))[0].text, /appconfig wrote the recap/);
+    assert.match((await store.listEvents({ taskId: task.id, kinds: ["task.recap"] }))[0].text, /parameter-editor-worker-1 wrote the recap/);
     relive.script = null;
 
     // ---- a done task takes no more work ----
@@ -807,7 +807,7 @@ try {
     assert.ok(!existsSync(join(store.artifactsDir(third.id), "recap.md")));
     held.resolve();
     await workers.recapIdle(third.id);
-    assert.match((await store.readArtifact(third.id, "recap.md")).content, /^# Recap: Folder moves\n\n_Task done .+ · recap by gone_/);
+    assert.match((await store.readArtifact(third.id, "recap.md")).content, /^# Recap: Folder moves\n\n_Task done .+ · recap by folder-moves-worker-1_/);
     assert.deepEqual(moverSession.sent.slice(-2).map((p) => p.slice(0, 16)), ["Move them", 'The task "Folder']);
 
     // ---- reopened while it waits: no recap, the work isn't over ----
@@ -832,12 +832,12 @@ try {
     moverSession.script = async () => "  ";
     assert.equal(await workers.writeRecap(third.id, "requested"), false);
     assert.equal(workers.recapState(third.id).state, "failed");
-    assert.equal(workers.recapState(third.id).by, "gone");
-    assert.match(workers.recapState(third.id).error, /gone: its reply had no recap/);
+    assert.equal(workers.recapState(third.id).by, "folder-moves-worker-1");
+    assert.match(workers.recapState(third.id).error, /folder-moves-worker-1: its reply had no recap/);
     assert.match((await store.getWorker(mover.sessionId)).summary, /^Recap not written/);
     moverSession.script = async () => "```markdown\n- Folders moved to the new layout.\n```";
     assert.equal(await workers.writeRecap(third.id, "requested"), true);
-    assert.match((await store.readArtifact(third.id, "recap.md")).content, /^# Recap: Folder moves\n\n_Written .+ · recap by gone_\n\n- Folders moved to the new layout\.\n$/);
+    assert.match((await store.readArtifact(third.id, "recap.md")).content, /^# Recap: Folder moves\n\n_Written .+ · recap by folder-moves-worker-1_\n\n- Folders moved to the new layout\.\n$/);
     assert.equal(workers.recapState(third.id), null);
     moverSession.script = null;
     const { task: lonely } = await store.createTask({ title: "No workers" });
@@ -877,7 +877,7 @@ try {
     assert.equal(await store.getTask(fourth.id), null);
     assert.ok(retirerSession.aborted >= 1, "its running turn was stopped first");
     assert.ok(removed.includes(retirer.sessionId), "its worker's Copilot session is deleted");
-    assert.match(readFileSync(join(store.artifactsDir(fourth.id), "recap.md"), "utf8"), /^# Recap: Retire the old API\n\n_Task removed .+ · recap by appconfig/);
+    assert.match(readFileSync(join(store.artifactsDir(fourth.id), "recap.md"), "utf8"), /^# Recap: Retire the old API\n\n_Task removed .+ · recap by retire-the-old-api-worker-1/);
     assert.ok(existsSync(store.notePath(fourth.id)), "the Artifacts folder stays");
     assert.ok(existsSync(join(store.taskDir(fourth.id), "task.json")));
 
@@ -1196,7 +1196,7 @@ try {
         const sibling = (await store.listWorkers(sib.id)).find((w) => w.label === label);
         assert.ok(sibling, "the new worker is on the asking worker's task, whatever the input said");
         assert.deepEqual(await store.listWorkers(other.id), []);
-        assert.notEqual(sibling.label, first.label);
+        assert.deepEqual([first.label, sibling.label], ["sibling-work-worker-1", "sibling-work-worker-2"]);
         assert.equal(sibling.cwd, repo, "on a task without a folder it works in the asking worker's folder");
         assert.equal(cwd, repo);
         const siblingSession = created.at(-1);

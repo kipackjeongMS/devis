@@ -185,8 +185,8 @@ try {
     assert.equal(task.description, "Make the API retry.\n\nDone when tests pass.");
     assert.ok(existsSync(task.folder));
     const worker = made.worker;
-    assert.equal(worker.label, "atlas");
-    assert.equal(worker.cwd, join(task.folder, "atlas"));
+    assert.equal(worker.label, "some-work-needed-worker-1", "named for its task, numbered in start order");
+    assert.equal(worker.cwd, join(task.folder, "some-work-needed-worker-1"));
     assert.ok(existsSync(worker.cwd));
     const session = sessions.at(-1);
     assert.match(session.config.systemMessage.content, /The task's description:\nMake the API retry\.\n\nDone when tests pass\./);
@@ -213,14 +213,14 @@ try {
     assert.match(session.result, /^The user confirmed\. Your worktrees:/);
     const trees = await store.listWorktrees({ sessionId: worker.sessionId });
     assert.deepEqual(trees.map((t) => [t.repo, basename(t.path), t.branch, t.base]), [
-        ["alpha", "alpha", "harness.user/some-work-needed/atlas", "origin/main"],
-        ["beta", "beta", "harness.user/some-work-needed/atlas", "origin/master"],
+        ["alpha", "alpha", "harness.user/some-work-needed/some-work-needed-worker-1", "origin/main"],
+        ["beta", "beta", "harness.user/some-work-needed/some-work-needed-worker-1", "origin/master"],
     ]);
     const alphaTree = trees[0];
     assert.equal(alphaTree.path, join(worker.cwd, "alpha"));
     assert.match(readFileSync(join(alphaTree.path, "README.md"), "utf8"), /^# alpha\r?\n$/);
-    assert.equal(git(alphaTree.path, "rev-parse", "--abbrev-ref", "HEAD"), "harness.user/some-work-needed/atlas");
-    assert.throws(() => git(alphaTree.path, "config", "--get", "branch.harness.user/some-work-needed/atlas.merge"), undefined, "no upstream: a plain push can't land on main");
+    assert.equal(git(alphaTree.path, "rev-parse", "--abbrev-ref", "HEAD"), "harness.user/some-work-needed/some-work-needed-worker-1");
+    assert.throws(() => git(alphaTree.path, "config", "--get", "branch.harness.user/some-work-needed/some-work-needed-worker-1.merge"), undefined, "no upstream: a plain push can't land on main");
     await until(async () => (await store.getWorker(worker.sessionId)).state === "turnDone", "the setup turn to end");
 
     // A resumed session's brief lists its worktrees, and its skills come from them.
@@ -230,7 +230,7 @@ try {
     const before = sessions.length;
     await workers.messageWorker(worker.sessionId, "keep going");
     const resumed = await until(() => sessions[before], "the resumed session");
-    assert.match(resumed.config.systemMessage.content, /- contoso\/Proj\/alpha: .*alpha \(branch harness\.user\/some-work-needed\/atlas, from origin\/main\)/);
+    assert.match(resumed.config.systemMessage.content, /- contoso\/Proj\/alpha: .*alpha \(branch harness\.user\/some-work-needed\/some-work-needed-worker-1, from origin\/main\)/);
     assert.equal(resumed.config.skillDirectories[0], join(alphaTree.path, ".github", "skills"));
     await until(async () => (await store.getWorker(worker.sessionId)).state === "turnDone", "the second turn");
 
@@ -245,8 +245,8 @@ try {
         return "Set up.";
     };
     const second = await workers.startWorker({ taskId: task.id, prompt: "Take the docs." });
-    assert.equal(second.label, "birch");
-    assert.equal(second.cwd, join(task.folder, "birch"));
+    assert.equal(second.label, "some-work-needed-worker-2");
+    assert.equal(second.cwd, join(task.folder, "some-work-needed-worker-2"));
     const secondSession = sessions.at(-1);
     await until(() => secondSession.sent.length, "the second worker's first turn");
     assert.match(secondSession.sent[0], /The user's instructions:\nTake the docs\./);
@@ -254,42 +254,49 @@ try {
     const req2 = await until(() => workers.workerLiveState(second.sessionId).requests[0], "the second repos request");
     await workers.confirmRepos(second.sessionId, req2.id, ["contoso/Proj/alpha"]);
     await until(() => secondSession.result, "the second worktree");
-    const birchTree = (await store.listWorktrees({ sessionId: second.sessionId }))[0];
-    assert.equal(birchTree.branch, "harness.user/some-work-needed/birch");
+    const secondTree = (await store.listWorktrees({ sessionId: second.sessionId }))[0];
+    assert.equal(secondTree.branch, "harness.user/some-work-needed/some-work-needed-worker-2");
 
     // Changes that removing would lose.
-    writeFileSync(join(birchTree.path, "notes.txt"), "draft\n");
-    assert.deepEqual(await codebase.worktreeChanges(birchTree), { path: birchTree.path, repo: "alpha", uncommitted: 1, unpushed: 0 });
-    git(birchTree.path, "-c", "user.email=h@c.com", "-c", "user.name=H", "add", ".");
-    git(birchTree.path, "-c", "user.email=h@c.com", "-c", "user.name=H", "commit", "-q", "-m", "wip");
-    assert.deepEqual(await codebase.worktreeChanges(birchTree), { path: birchTree.path, repo: "alpha", uncommitted: 0, unpushed: 1 });
+    writeFileSync(join(secondTree.path, "notes.txt"), "draft\n");
+    assert.deepEqual(await codebase.worktreeChanges(secondTree), { path: secondTree.path, repo: "alpha", uncommitted: 1, unpushed: 0 });
+    git(secondTree.path, "-c", "user.email=h@c.com", "-c", "user.name=H", "add", ".");
+    git(secondTree.path, "-c", "user.email=h@c.com", "-c", "user.name=H", "commit", "-q", "-m", "wip");
+    assert.deepEqual(await codebase.worktreeChanges(secondTree), { path: secondTree.path, repo: "alpha", uncommitted: 0, unpushed: 1 });
 
     // Removing a worker wipes its folder, worktree and branch, and leaves the other worker's alone.
     await workers.removeWorker(second.sessionId);
     const alphaClone = codebase.clonePath({ org: "contoso", project: "Proj", repo: "alpha" });
     assert.ok(!existsSync(second.cwd));
-    assert.equal(git(alphaClone, "branch", "--list", "harness.user/some-work-needed/birch"), "");
+    assert.equal(git(alphaClone, "branch", "--list", "harness.user/some-work-needed/some-work-needed-worker-2"), "");
     assert.ok(existsSync(alphaTree.path));
     assert.deepEqual(await store.listWorktrees({ sessionId: second.sessionId }), []);
+
+    // The next worker on the task doesn't reuse the removed one's number.
+    firstTurn = null;
+    const third = await workers.startWorker({ taskId: task.id });
+    assert.equal(third.label, "some-work-needed-worker-3", "a removed worker's number isn't used again");
+    await until(async () => (await store.getWorker(third.sessionId)).state === "turnDone", "the third worker's turn");
+    await workers.removeWorker(third.sessionId);
 
     // A second task with the same title gets a numbered folder.
     firstTurn = null;
     const twin = await today.createTaskFromInput({ title: "some work needed" }, ["contoso"], { taskRoot: cfg.taskRoot, requireFolder: true });
     assert.equal(twin.task.folder, join(taskRoot, "some-work-needed-2"));
-    assert.equal(twin.worker.label, "birch", "a removed worker's name is free again");
+    assert.equal(twin.worker.label, "some-work-needed-2-worker-1", "named for its own numbered folder");
 
     // A worker the user asks to start another: a folder beside its own, the same setup, its instructions passed on.
     const twinSession = sessions.find((s) => s.sessionId === twin.worker.sessionId);
     const asked = await twinSession.tool("task_start_worker")({ instructions: "Take the tests." });
     const sibling = sessions.at(-1);
     const sibRow = await store.getWorker(sibling.sessionId);
-    assert.notEqual(sibRow.label, "birch");
+    assert.equal(sibRow.label, "some-work-needed-2-worker-2");
     assert.equal(sibRow.cwd, join(twin.task.folder, sibRow.label));
     assert.equal(asked, `Started ${sibRow.label} in ${sibRow.cwd}. It works beside you on this task and reads note.md: add what it needs to know there.`);
     assert.equal(sibRow.taskId, twin.task.id);
     await until(() => sibling.sent.length, "the sibling's first turn");
     assert.match(sibling.sent[0], /^Set up your workspace/, "it gets the same setup as one the user starts");
-    assert.match(sibling.sent[0], /Instructions from birch, another worker on this task, passing on what the user asked:\nTake the tests\.$/);
+    assert.match(sibling.sent[0], /Instructions from some-work-needed-2-worker-1, another worker on this task, passing on what the user asked:\nTake the tests\.$/);
     assert.equal(sibling.displayed[0], "Take the tests.");
     await until(async () => (await store.getWorker(sibling.sessionId)).state === "turnDone", "the sibling's turn");
     await workers.removeWorker(sibling.sessionId);
@@ -336,6 +343,7 @@ try {
     assert.equal(legacy.task.folder, null);
     const old = await workers.startWorker({ taskId: legacy.task.id, cwd: legacyFolder, prompt: "Look around." });
     assert.equal(old.cwd, legacyFolder);
+    assert.equal(old.label, "old-style-worker-1", "a task without a folder is named from its title");
     assert.ok(!sessions.at(-1).config.tools.some((t) => t.name === "task_workspace"), "no repositories to set up");
     await until(async () => (await store.getWorker(old.sessionId)).state === "turnDone", "the legacy turn");
     await workers.removeWorker(old.sessionId);

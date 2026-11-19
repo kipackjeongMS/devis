@@ -60,12 +60,12 @@ import {
     listWorkers,
     listWorktrees,
     insertWorktree,
-    nextWorkerLabel,
     nextWorkerName,
     onTaskDone,
     pendingRemovals,
     readArtifact,
     recordEvent,
+    releaseWorkerName,
     updateWorker,
     writeArtifact,
     type JarvisTask,
@@ -1489,6 +1489,8 @@ export async function startWorker(input: StartWorker): Promise<JarvisWorker> {
     const devis = task.kind === "devis";
     if (devis && !task.folder) throw new JarvisError(`A task that changes ${APP_NAME} needs a folder: set the task folder under Settings > Workspace.`, 409);
     const source = devis ? await requireDevis() : null;
+    // A worker is named for its task: the folder's name, or the title of a task without one.
+    const alias = task.folder ? basename(task.folder) : task.title;
     if (task.folder) {
         // The worker gets its own folder in the task's folder, named for it; its worktrees go there.
         const instructions = typeof input.prompt === "string" ? input.prompt.trim() : "";
@@ -1499,7 +1501,7 @@ export async function startWorker(input: StartWorker): Promise<JarvisWorker> {
         } catch (error) {
             throw new JarvisError(`The task's folder ${root} can't be made: ${(error as Error).message}`, 409);
         }
-        label = await nextWorkerName((name) => !existsSync(join(root, name)));
+        label = await nextWorkerName(task.id, alias, (name) => !existsSync(join(root, name)));
         cwd = join(root, label);
         mkdirSync(cwd, { recursive: true });
         prompt = devis ? devisSetupPrompt(instructions, startedBy) : setupPrompt(instructions, startedBy);
@@ -1509,7 +1511,7 @@ export async function startWorker(input: StartWorker): Promise<JarvisWorker> {
         const instructions = cleanPrompt(input.prompt);
         prompt = startedBy ? instructionsFrom(instructions, startedBy) : instructions;
         if (startedBy) display = instructions;
-        label = await nextWorkerLabel(cwd);
+        label = await nextWorkerName(task.id, alias);
     }
     const sessionId = randomUUID();
     const worker = await insertWorker({ sessionId, taskId: task.id, label, cwd, model, effort: effort || null, state: "working", summary: "" });
@@ -1527,6 +1529,7 @@ export async function startWorker(input: StartWorker): Promise<JarvisWorker> {
     } catch (error) {
         lives.delete(sessionId);
         await deleteWorker(sessionId);
+        await releaseWorkerName(task.id, label);
         for (const w of worktrees) await removeWorktree(w).catch(() => undefined);
         if (task.folder && isInside(cwd, task.folder)) removeFolder(cwd);
         throw new JarvisError(`Could not start the worker: ${(error as Error).message}`, 502);
