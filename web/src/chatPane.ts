@@ -15,12 +15,15 @@ import { groupOptions, type ChatNote } from "./taskChatModel.js";
 import { pickerView, type PickerOption, type PickerState } from "./modelChoice.js";
 import { IMAGE_TYPES, messageImagesHtml, type ChatImage } from "./chatImages.js";
 import { aboutOf } from "./needsChat.js";
+import { dayStart } from "./jarvisModel.js";
 
 /** A message as the log shows it. One from the session's history carries its id. */
 export interface ChatLine {
   id?: string;
   role: "user" | "assistant";
   content: string;
+  /** When it was sent, from the session's events: the prompt index shows it. */
+  timestamp?: string;
   /** Images the user sent with it. */
   images?: ChatImage[];
 }
@@ -59,6 +62,8 @@ export function chatPaneHtml(o: ChatPaneOptions): string {
       <div class="chat-view">
         <div class="chat-log" role="log" aria-live="polite" tabindex="0"></div>
         <button type="button" class="chat-jump" title="${JUMP_LABEL}" aria-label="${JUMP_LABEL}">${icon("down")}</button>
+        <nav class="chat-index" aria-label="Your prompts" hidden></nav>
+        <div class="chat-index-card" aria-hidden="true" hidden></div>
       </div>
       <div class="chat-requests" hidden></div>
       <div class="chat-tools" hidden></div>
@@ -372,6 +377,109 @@ export function chatLogSig(spec: ChatLogSpec): string {
   ]);
 }
 
+// ---- the prompt index: what it shows -----------------------------------------------------
+//
+// A thin rail down the conversation's right edge with a tick per prompt the user sent, in order.
+// Hovering or focusing one shows its first line and when it was sent, and clicking it scrolls
+// there. The tick of the turn being read is brighter. Alt+↑ and Alt+↓ anywhere in the pane step
+// between prompts. The rail shows once there are INDEX_MIN prompts. These rules are pure; the
+// rail itself is painted with the log (see "the prompt index: the rail").
+
+/** One prompt on the rail: the key of its bubble in the log, its first line, and when it was sent. */
+export interface PromptMark {
+  key: string;
+  text: string;
+  /** When it was sent (ms since the epoch), or NaN when the transcript doesn't say. */
+  at: number;
+  /** Said instead of the time for one that isn't in the conversation yet. */
+  note?: string;
+}
+
+/** The rail shows from this many prompts. */
+export const INDEX_MIN = 2;
+/** A prompt scrolled to sits this far under the log's top edge. */
+export const PROMPT_PAD = 12;
+const PROMPT_TEXT_MAX = 200;
+
+/** A prompt's line for the rail: its words on one line, else the item it's about, else its images. */
+export function promptText(content: string, images = 0): string {
+  const about = aboutOf(content);
+  const line = (about ? about.text : content).replace(/\s+/g, " ").trim();
+  const text = line || about?.label || (images === 1 ? "An image" : images > 1 ? `${images} images` : "");
+  return text.length > PROMPT_TEXT_MAX ? text.slice(0, PROMPT_TEXT_MAX - 1).trimEnd() + "…" : text;
+}
+
+/** The prompts in the log, in its order: the conversation's, then the one being sent, then those sent mid-turn. */
+export function promptMarks(spec: Pick<ChatLogSpec, "items" | "sending" | "sendingImages" | "steered">): PromptMark[] {
+  const marks: PromptMark[] = [];
+  for (const item of spec.items) {
+    if (item.type !== "message" || item.message.role !== "user" || !item.message.id) continue;
+    const m = item.message;
+    marks.push({ key: `m:${m.id}`, text: promptText(m.content, m.images?.length), at: Date.parse(m.timestamp || "") });
+  }
+  if (isSending(spec)) marks.push({ key: "sending", text: promptText(spec.sending || "", spec.sendingImages?.length), at: NaN, note: "Just now" });
+  for (const m of spec.steered || []) marks.push({ key: `st:${m.id}`, text: promptText(m.text, m.images?.length), at: NaN, note: "Sent mid-turn" });
+  return marks;
+}
+
+/** When a prompt was sent, as the rail says it: "Today, 9:19 AM", "Yesterday, 9:19 AM", "Mon, 9:19 AM", "Nov 12, 9:19 AM". */
+export function promptTime(at: number, now: number): string {
+  if (!Number.isFinite(at)) return "";
+  const d = new Date(at);
+  const clock = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const today = dayStart(now);
+  if (at >= today) return `Today, ${clock}`;
+  if (at >= dayStart(today - 1)) return `Yesterday, ${clock}`;
+  if (at >= dayStart(today - 6 * 86_400_000)) return `${d.toLocaleDateString([], { weekday: "short" })}, ${clock}`;
+  const year = d.getFullYear() === new Date(now).getFullYear() ? {} : { year: "numeric" as const };
+  return `${d.toLocaleDateString([], { month: "short", day: "numeric", ...year })}, ${clock}`;
+}
+
+const promptWhen = (m: PromptMark, now: number): string => m.note || promptTime(m.at, now);
+
+/** The rail's ticks: a button per prompt, named for it. None below INDEX_MIN prompts. */
+export function promptIndexHtml(marks: readonly PromptMark[], now: number): string {
+  if (marks.length < INDEX_MIN) return "";
+  return marks
+    .map((m, i) => {
+      const when = promptWhen(m, now);
+      const label = `Prompt ${i + 1} of ${marks.length}: ${m.text}${when ? ` (${when})` : ""}`;
+      return `<button type="button" class="chat-index-tick" data-key="${esc(m.key)}" data-i="${i}" tabindex="-1" aria-label="${esc(label)}"></button>`;
+    })
+    .join("");
+}
+
+/**
+ * The prompt being read, from where each one starts in the log (`tops`, NaN for one not on the
+ * page) and how the log is scrolled: the last one that starts above a reading line near the top
+ * of the view. Over the last screen of the log the line slides down to the view's foot, since the
+ * log can't scroll further to bring the prompts there up; at the end, the last one in view is it.
+ */
+export function currentPrompt(tops: readonly number[], scrollTop: number, height: number, scrollHeight: number): number {
+  if (!tops.length) return -1;
+  const reading = scrollTop + PROMPT_PAD + 8;
+  const foot = scrollTop + height - 1;
+  const left = Math.max(0, scrollHeight - height - scrollTop);
+  const line = height > 0 && left < height ? reading + (foot - reading) * (1 - left / height) : reading;
+  let current = 0;
+  tops.forEach((top, i) => {
+    if (top <= line) current = i;
+  });
+  return current;
+}
+
+/**
+ * Where Alt+↑ (-1) or Alt+↓ (1) goes from the prompt being read: up goes back to that prompt's
+ * start first when it's scrolled past, then to the one before. -1 when there's nowhere to go.
+ */
+export function stepPrompt(tops: readonly number[], current: number, scrollTop: number, dir: -1 | 1): number {
+  if (!tops.length) return -1;
+  if (current < 0) return dir > 0 ? 0 : -1;
+  if (dir > 0) return current + 1 < tops.length ? current + 1 : -1;
+  if (tops[current]! < scrollTop + PROMPT_PAD - 4) return current;
+  return current - 1;
+}
+
 // ---- painting -----------------------------------------------------------------------
 
 /** How close to the bottom the log must be for new content to keep it there. */
@@ -467,8 +575,9 @@ const toBottom = (log: HTMLElement): void => {
 //
 // Only the user scrolling up unpins it, and reaching the bottom pins it again. The log's own
 // jumps to the bottom only ever scroll down, so they can't unpin it, however the scroll events
-// and the content's growth interleave. While unpinned, a button over the log jumps back down,
-// and marks when something new arrived below.
+// and the content's growth interleave. A jump up to a prompt (see "the prompt index: the rail")
+// unpins it too, and its smooth scroll passing the foot doesn't pin it again. While unpinned, a
+// button over the log jumps back down, and marks when something new arrived below.
 
 /** Where one log is in its conversation. */
 interface Follow {
@@ -525,13 +634,17 @@ function onScroll(log: HTMLElement, f: Follow): void {
   const top = log.scrollTop;
   const up = top < f.top;
   f.top = top;
-  if (nearBottom(log)) {
-    f.pinned = true;
-    f.unseen = false;
-  } else if (up) {
-    f.pinned = false;
+  // A jump to a prompt decided where the log is pinned; its smooth scroll passing the foot doesn't change that.
+  if (!promptJumping(log)) {
+    if (nearBottom(log)) {
+      f.pinned = true;
+      f.unseen = false;
+    } else if (up) {
+      f.pinned = false;
+    }
   }
   showJump(log, f);
+  indexScrolled(log);
 }
 
 function onResize(log: HTMLElement, f: Follow): void {
@@ -550,6 +663,7 @@ function onResize(log: HTMLElement, f: Follow): void {
   if (f.pinned) stick(log, f);
   else f.top = log.scrollTop;
   showJump(log, f);
+  scheduleIndex(log);
 }
 
 /**
@@ -592,10 +706,7 @@ function wireJump(log: HTMLElement, f: Follow, jump: HTMLButtonElement): void {
   jump.addEventListener(
     "wheel",
     (e) => {
-      if (e.ctrlKey) return;
-      e.preventDefault();
-      const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? log.clientHeight : 1;
-      log.scrollBy({ top: e.deltaY * unit, left: e.deltaX * unit });
+      if (!e.ctrlKey) wheelLog(log, e);
     },
     { passive: false }
   );
@@ -672,6 +783,387 @@ export function paintChatLog(log: HTMLElement, spec: ChatLogSpec): void {
     p.last = performance.now();
     p.frame = requestAnimationFrame((t) => revealFrame(log, p, t));
   }
+  paintIndex(log, spec);
+}
+
+/** The wheel over something floating on the log scrolls the log, as it would over the log itself. */
+function wheelLog(log: HTMLElement, e: WheelEvent): void {
+  e.preventDefault();
+  const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? log.clientHeight : 1;
+  log.scrollBy({ top: e.deltaY * unit, left: e.deltaX * unit });
+}
+
+// ---- the prompt index: the rail ------------------------------------------------------------
+//
+// Painted with the log, from the same spec (see "the prompt index: what it shows"). The ticks
+// are one tab stop: Tab reaches the current one, the arrows, Home and End move between them, and
+// Enter or a click jumps. A jump scrolls the prompt to the top of the view (or as far as the log
+// goes) and flashes it, and that prompt stays current until the log scrolls away from where the
+// jump landed. A jump up leaves the log unpinned; one to the foot keeps it pinned.
+
+interface PromptIndex {
+  view: HTMLElement;
+  nav: HTMLElement;
+  card: HTMLElement;
+  marks: PromptMark[];
+  /** The prompts' bubbles in the log, in the marks' order: null for one not on the page. */
+  els: (HTMLElement | null)[];
+  sig: string;
+  /** The tick marked current: -1 when the ticks need marking again. */
+  current: number;
+  /** Focus was in the rail when the ticks were marked. */
+  focused: boolean;
+  /** The prompt jumped to, or -1. */
+  picked: number;
+  /** Where that jump landed: NaN while it's on its way. */
+  pickedTop: number;
+  /** The bubble to flash when the jump lands. */
+  landing: HTMLElement | null;
+  settle: number;
+  flash: { el: HTMLElement; timer: number } | null;
+  /** The tick whose card shows, or -1. */
+  cardFor: number;
+  cardHtml: string;
+  frame: number;
+  session: string | undefined;
+}
+
+const indexes = new WeakMap<HTMLElement, PromptIndex>();
+/** A little longer than the flash's animation. */
+const FLASH_MS = 1300;
+/** A jump that hasn't reported its end by then has landed. */
+const SETTLE_MS = 1500;
+
+/** The log's prompt index, wired on first paint. None for a log outside a chat pane. */
+function promptIndex(log: HTMLElement): PromptIndex | null {
+  const known = indexes.get(log);
+  if (known) return known;
+  const view = log.parentElement;
+  const nav = view?.querySelector<HTMLElement>(":scope > .chat-index");
+  const card = view?.querySelector<HTMLElement>(":scope > .chat-index-card");
+  if (!view || !nav || !card) return null;
+  const x: PromptIndex = {
+    view,
+    nav,
+    card,
+    marks: [],
+    els: [],
+    sig: "",
+    current: -1,
+    focused: false,
+    picked: -1,
+    pickedTop: NaN,
+    landing: null,
+    settle: 0,
+    flash: null,
+    cardFor: -1,
+    cardHtml: "",
+    frame: 0,
+    session: undefined,
+  };
+  indexes.set(log, x);
+  wireIndex(log, x);
+  return x;
+}
+
+function paintIndex(log: HTMLElement, spec: ChatLogSpec): void {
+  const x = promptIndex(log);
+  if (!x) return;
+  if (spec.session !== x.session) {
+    x.session = spec.session;
+    dropPick(x);
+  }
+  const now = Date.now();
+  const marks = promptMarks(spec);
+  // The day is in it so "Today" turns into "Yesterday" overnight.
+  const sig = JSON.stringify([dayStart(now), marks]);
+  if (sig !== x.sig) {
+    x.sig = sig;
+    x.marks = marks;
+    const html = promptIndexHtml(marks, now);
+    // A rail going away with focus in it hands focus to the log, as the jump button does.
+    if (!html && x.nav.contains(document.activeElement)) log.focus({ preventScroll: true });
+    // Patching syncs each tick's attributes, so the marks go on again after.
+    patchHtml(x.nav, html);
+    x.nav.hidden = !html;
+    x.view.classList.toggle("has-index", !!html);
+    x.current = -1;
+    x.els = [];
+    if (x.picked >= marks.length) dropPick(x);
+    if (x.cardFor >= 0) showCard(x, x.cardFor);
+  }
+  markCurrent(log, x);
+}
+
+/** A jump to a prompt is on its way. */
+function promptJumping(log: HTMLElement): boolean {
+  const x = indexes.get(log);
+  return !!x && x.picked >= 0 && Number.isNaN(x.pickedTop);
+}
+
+function dropPick(x: PromptIndex): void {
+  clearTimeout(x.settle);
+  x.settle = 0;
+  x.picked = -1;
+  x.pickedTop = NaN;
+  x.landing = null;
+}
+
+/** The prompts' bubbles, found again when the log changed under them. */
+function promptEls(log: HTMLElement, x: PromptIndex): (HTMLElement | null)[] {
+  if (x.els.length !== x.marks.length || x.els.some((el) => !el?.isConnected)) {
+    x.els = x.marks.map((m) => log.querySelector<HTMLElement>(`.chat-msg[data-key="${CSS.escape(m.key)}"]`));
+  }
+  return x.els;
+}
+
+/** Where each bubble starts in the log's scrolled content. */
+function promptTops(log: HTMLElement, els: readonly (HTMLElement | null)[]): number[] {
+  const base = log.getBoundingClientRect().top + log.clientTop - log.scrollTop;
+  return els.map((el) => (el?.isConnected ? el.getBoundingClientRect().top - base : NaN));
+}
+
+/** Mark the tick of the prompt being read, and make it the rail's tab stop unless focus is moving along the rail. */
+function markCurrent(log: HTMLElement, x: PromptIndex, force = false): void {
+  if (x.nav.hidden || !log.clientHeight) return;
+  const current = x.picked >= 0 ? x.picked : currentPrompt(promptTops(log, promptEls(log, x)), log.scrollTop, log.clientHeight, log.scrollHeight);
+  const active = document.activeElement;
+  const focused = !!active && x.nav.contains(active);
+  if (!force && current === x.current && focused === x.focused) return;
+  const moved = current !== x.current;
+  x.current = current;
+  x.focused = focused;
+  const ticks = x.nav.children;
+  for (let i = 0; i < ticks.length; i++) {
+    const tick = ticks[i] as HTMLElement;
+    const on = i === current;
+    tick.classList.toggle("is-current", on);
+    if (on) tick.setAttribute("aria-current", "location");
+    else tick.removeAttribute("aria-current");
+    tick.tabIndex = (focused ? tick === active : on) ? 0 : -1;
+  }
+  if (moved && !focused) keepTickInView(x, current);
+}
+
+/** A rail too long for the view scrolls: keep tick `i` in sight. */
+function keepTickInView(x: PromptIndex, i: number): void {
+  const nav = x.nav;
+  const tick = nav.children[i] as HTMLElement | undefined;
+  if (!tick || nav.scrollHeight <= nav.clientHeight) return;
+  const top = tick.offsetTop;
+  const bottom = top + tick.offsetHeight;
+  if (top < nav.scrollTop) nav.scrollTop = top;
+  else if (bottom > nav.scrollTop + nav.clientHeight) nav.scrollTop = bottom - nav.clientHeight;
+}
+
+function focusTick(log: HTMLElement, x: PromptIndex, i: number): void {
+  const ticks = x.nav.children;
+  const tick = ticks[i] as HTMLElement | undefined;
+  if (!tick) return;
+  for (let j = 0; j < ticks.length; j++) (ticks[j] as HTMLElement).tabIndex = j === i ? 0 : -1;
+  tick.focus({ preventScroll: true });
+  keepTickInView(x, i);
+  markCurrent(log, x, true);
+}
+
+/** Scroll prompt `i` to the top of the view, or as far as the log goes, and flash it when it gets there. */
+function jumpToPrompt(log: HTMLElement, x: PromptIndex, i: number): void {
+  const el = promptEls(log, x)[i];
+  if (!el || !log.clientHeight) return;
+  const max = Math.max(0, log.scrollHeight - log.clientHeight);
+  const target = Math.round(Math.max(0, Math.min(max, promptTops(log, [el])[0]! - PROMPT_PAD)));
+  const f = follows.get(log);
+  if (f) {
+    // Up the conversation, the log stops following it; at its foot, it carries on.
+    f.pinned = max - target < STICKY_PX;
+    if (f.pinned) f.unseen = false;
+  }
+  dropPick(x);
+  x.picked = i;
+  x.landing = el;
+  markCurrent(log, x);
+  if (Math.abs(log.scrollTop - target) < 1) return settleJump(log, x);
+  const smooth = !reduceMotion();
+  log.scrollTo({ top: target, behavior: smooth ? "smooth" : "instant" });
+  if (!smooth) return settleJump(log, x);
+  x.settle = window.setTimeout(() => settleJump(log, x), SETTLE_MS);
+}
+
+/** The jump landed: remember where, so scrolling away from there lets the rail follow the log again. */
+function settleJump(log: HTMLElement, x: PromptIndex): void {
+  clearTimeout(x.settle);
+  x.settle = 0;
+  if (x.picked < 0 || !Number.isNaN(x.pickedTop)) return;
+  x.pickedTop = log.scrollTop;
+  const f = follows.get(log);
+  if (f) {
+    f.top = log.scrollTop;
+    if (nearBottom(log)) {
+      f.pinned = true;
+      f.unseen = false;
+    }
+    showJump(log, f);
+  }
+  const el = x.landing;
+  x.landing = null;
+  if (el?.isConnected) flashPrompt(x, el);
+  markCurrent(log, x, true);
+}
+
+function flashPrompt(x: PromptIndex, el: HTMLElement): void {
+  if (x.flash) {
+    clearTimeout(x.flash.timer);
+    x.flash.el.classList.remove("flash");
+  }
+  // Restart the animation on a bubble that's still flashing.
+  el.classList.remove("flash");
+  void el.offsetWidth;
+  el.classList.add("flash");
+  const timer = window.setTimeout(() => {
+    el.classList.remove("flash");
+    if (x.flash?.el === el) x.flash = null;
+  }, FLASH_MS);
+  x.flash = { el, timer };
+}
+
+/** Alt+↑ (-1) or Alt+↓ (1): the next prompt along from the one jumped to, or from the one being read. */
+function stepToPrompt(log: HTMLElement, x: PromptIndex, dir: -1 | 1): void {
+  let to: number;
+  if (x.picked >= 0) {
+    to = x.picked + dir;
+  } else {
+    const tops = promptTops(log, promptEls(log, x));
+    to = stepPrompt(tops, currentPrompt(tops, log.scrollTop, log.clientHeight, log.scrollHeight), log.scrollTop, dir);
+  }
+  if (to < 0 || to >= x.marks.length) return;
+  const inRail = x.nav.contains(document.activeElement);
+  jumpToPrompt(log, x, to);
+  if (inRail) focusTick(log, x, to);
+}
+
+/** The log scrolled: a landed jump lets go once the log moves away from it, and the ticks follow. */
+function indexScrolled(log: HTMLElement): void {
+  const x = indexes.get(log);
+  if (!x) return;
+  if (x.picked >= 0 && !Number.isNaN(x.pickedTop) && Math.abs(log.scrollTop - x.pickedTop) > 2) dropPick(x);
+  scheduleIndex(log);
+}
+
+/** Mark the current tick on the next frame: scrolling and resizing ask for it many times a frame. */
+function scheduleIndex(log: HTMLElement): void {
+  const x = indexes.get(log);
+  if (!x || x.frame || x.nav.hidden) return;
+  x.frame = requestAnimationFrame(() => {
+    x.frame = 0;
+    if (log.isConnected) markCurrent(log, x);
+  });
+}
+
+/** Show tick `i`'s card beside it: the prompt's first line, and when it was sent. */
+function showCard(x: PromptIndex, i: number): void {
+  const m = x.marks[i];
+  const tick = x.nav.children[i] as HTMLElement | undefined;
+  if (!m || !tick || x.nav.hidden) return hideCard(x);
+  x.cardFor = i;
+  const when = promptWhen(m, Date.now());
+  const html = `<p class="chat-index-text">${esc(m.text || `Prompt ${i + 1}`)}</p>${when ? `<p class="chat-index-when">${esc(when)}</p>` : ""}`;
+  if (html !== x.cardHtml) {
+    x.cardHtml = html;
+    x.card.innerHTML = html;
+  }
+  x.card.hidden = false;
+  const view = x.view.getBoundingClientRect();
+  const r = tick.getBoundingClientRect();
+  const h = x.card.offsetHeight;
+  const top = Math.max(8, Math.min(view.height - h - 8, r.top + r.height / 2 - view.top - h / 2));
+  x.card.style.top = `${Math.round(top)}px`;
+}
+
+function hideCard(x: PromptIndex): void {
+  x.cardFor = -1;
+  x.card.hidden = true;
+}
+
+function wireIndex(log: HTMLElement, x: PromptIndex): void {
+  const nav = x.nav;
+  const tickAt = (t: EventTarget | null): number => {
+    const tick = t instanceof Element ? t.closest<HTMLElement>(".chat-index-tick") : null;
+    return tick && nav.contains(tick) ? Number(tick.dataset.i) : -1;
+  };
+  // The user scrolling takes over from a jump on its way.
+  const takeOver = (): void => {
+    if (promptJumping(log)) dropPick(x);
+  };
+  // A click leaves focus where it was (such as the message box); Enter or Space on a focused tick jumps too.
+  nav.addEventListener("mousedown", (e) => e.preventDefault());
+  nav.addEventListener("click", (e) => {
+    const i = tickAt(e.target);
+    if (i >= 0) jumpToPrompt(log, x, i);
+  });
+  nav.addEventListener("pointerover", (e) => {
+    const i = tickAt(e.target);
+    if (i >= 0) showCard(x, i);
+  });
+  nav.addEventListener("pointerleave", () => {
+    const i = tickAt(document.activeElement);
+    if (i >= 0) showCard(x, i);
+    else hideCard(x);
+  });
+  nav.addEventListener("focusin", (e) => {
+    const i = tickAt(e.target);
+    if (i >= 0) showCard(x, i);
+    markCurrent(log, x, true);
+  });
+  nav.addEventListener("focusout", (e) => {
+    if (e.relatedTarget instanceof Node && nav.contains(e.relatedTarget)) return;
+    if (!nav.matches(":hover")) hideCard(x);
+    markCurrent(log, x, true);
+  });
+  nav.addEventListener("keydown", (e) => {
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    const at = tickAt(document.activeElement);
+    if (at < 0) return;
+    const last = nav.children.length - 1;
+    const to = e.key === "ArrowUp" ? at - 1 : e.key === "ArrowDown" ? at + 1 : e.key === "Home" ? 0 : e.key === "End" ? last : NaN;
+    if (Number.isNaN(to)) return;
+    e.preventDefault();
+    focusTick(log, x, Math.max(0, Math.min(last, to)));
+  });
+  nav.addEventListener(
+    "scroll",
+    () => {
+      if (x.cardFor >= 0) showCard(x, x.cardFor);
+    },
+    { passive: true }
+  );
+  // A rail that fits has nothing to scroll: the wheel over it scrolls the conversation.
+  nav.addEventListener(
+    "wheel",
+    (e) => {
+      if (e.ctrlKey || nav.scrollHeight > nav.clientHeight) return;
+      takeOver();
+      wheelLog(log, e);
+    },
+    { passive: false }
+  );
+  log.addEventListener("scrollend", () => {
+    if (promptJumping(log)) settleJump(log, x);
+  });
+  log.addEventListener("wheel", takeOver, { passive: true });
+  log.addEventListener("pointerdown", takeOver);
+  log.addEventListener("keydown", (e) => {
+    if (!e.altKey) takeOver();
+  });
+  // Alt+↑ and Alt+↓ step between prompts from anywhere in the pane, except while the "/" list has the arrows.
+  const pane = log.closest<HTMLElement>(".chat");
+  pane?.addEventListener("keydown", (e) => {
+    if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || (e.key !== "ArrowUp" && e.key !== "ArrowDown")) return;
+    if (e.defaultPrevented || e.isComposing || nav.hidden || !log.clientHeight) return;
+    const popup = pane.querySelector<HTMLElement>(":scope > .chat-compose > .chat-popup");
+    if (popup && !popup.hidden) return;
+    e.preventDefault();
+    stepToPrompt(log, x, e.key === "ArrowUp" ? -1 : 1);
+  });
 }
 
 export interface ComposerState {

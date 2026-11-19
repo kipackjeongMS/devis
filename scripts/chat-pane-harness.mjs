@@ -179,8 +179,8 @@ for (const part of ["chat-head", "chat-view", "chat-log", "chat-jump", "chat-req
 }
 assert.match(
     pane,
-    /<div class="chat-view">\s*<div class="chat-log"[^>]*><\/div>\s*<button type="button" class="chat-jump" title="Jump to the latest message" aria-label="Jump to the latest message">[\s\S]*?<\/button>\s*<\/div>\s*<div class="chat-requests"/,
-    "the jump button floats over the log's foot, after it in tab order and before the request cards"
+    /<div class="chat-view">\s*<div class="chat-log"[^>]*><\/div>\s*<button type="button" class="chat-jump" title="Jump to the latest message" aria-label="Jump to the latest message">[\s\S]*?<\/button>\s*<nav class="chat-index"[^>]*><\/nav>\s*<div class="chat-index-card"[^>]*><\/div>\s*<\/div>\s*<div class="chat-requests"/,
+    "the jump button floats over the log's foot, after it in tab order; then the prompt rail, before the request cards"
 );
 assert.match(pane, /<div class="chat-head" hidden>/, "a pane without head content hides it");
 assert.match(pane, /<div class="chat-tools" hidden><\/div>\s*<form class="chat-compose">/, "the model picker's row sits right over the composer, hidden until filled");
@@ -282,5 +282,91 @@ assert.equal(key({ metaKey: true }), "steer");
 assert.equal(key({ shiftKey: true }), null, "Shift+Enter is a new line");
 assert.equal(key({ isComposing: true }), null);
 assert.equal(key({ key: "a" }), null);
+
+// ---- the prompt index ----
+const railPane = c.chatPaneHtml({ id: "t", inputLabel: "Message" });
+assert.match(railPane, /<nav class="chat-index" aria-label="Your prompts" hidden><\/nav>/, "the rail starts hidden");
+assert.match(railPane, /<div class="chat-index-card" aria-hidden="true" hidden><\/div>/, "the card repeats the tick's name, so screen readers skip it");
+assert.ok(railPane.indexOf("chat-jump") < railPane.indexOf("chat-index"), "the rail is in the view, after the jump button");
+
+assert.equal(c.promptText("  fix the\n\n  build  "), "fix the build", "one line");
+assert.equal(c.promptText("", 1), "An image");
+assert.equal(c.promptText("  ", 3), "3 images");
+assert.equal(c.promptText(""), "");
+assert.equal(c.promptText("[Needs you: PR 12 is blocked]\nsome context\n---\nlook at this"), "look at this", "the words, not the attached item's details");
+assert.equal(c.promptText("[Needs you: PR 12 is blocked]\nsome context\n---\n"), "PR 12 is blocked", "just the item: its name");
+const longText = c.promptText("word ".repeat(80));
+assert.ok(longText.length <= 200 && longText.endsWith("…"), "a long prompt is clipped");
+
+const local = (d, h, m, y = 2026, mo = 4) => new Date(y, mo, d, h, m).getTime();
+const now = local(14, 15, 0);
+const clock = (t) => new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+assert.equal(c.promptTime(local(14, 9, 19), now), `Today, ${clock(local(14, 9, 19))}`);
+assert.equal(c.promptTime(local(14, 0, 0), now), `Today, ${clock(local(14, 0, 0))}`, "midnight is today");
+assert.equal(c.promptTime(local(13, 23, 59), now), `Yesterday, ${clock(local(13, 23, 59))}`);
+assert.equal(c.promptTime(local(8, 0, 0), now), `${new Date(local(8, 0, 0)).toLocaleDateString([], { weekday: "short" })}, ${clock(local(8, 0, 0))}`, "within the week: the weekday");
+assert.equal(c.promptTime(local(7, 23, 59), now), `${new Date(local(7, 23, 59)).toLocaleDateString([], { month: "short", day: "numeric" })}, ${clock(local(7, 23, 59))}`, "older: the date");
+const lastYear = local(12, 9, 19, 2025, 10);
+assert.equal(c.promptTime(lastYear, now), `${new Date(lastYear).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}, ${clock(lastYear)}`, "another year: with it");
+assert.equal(c.promptTime(NaN, now), "", "no time when the transcript has none");
+
+const sentAt = new Date(local(14, 9, 19)).toISOString();
+const promptSpec = {
+  items: [
+    { type: "message", message: { id: "a", role: "user", content: "first  prompt", timestamp: sentAt } },
+    { type: "message", message: { id: "b", role: "assistant", content: "reply" } },
+    { type: "note", note: note() },
+    { type: "message", message: { role: "user", content: "no id: not in the conversation" } },
+    { type: "html", key: "nt:1", sig: "1", html: "<div>notice</div>" },
+    { type: "message", message: { id: "c", role: "user", content: "", images: [{ id: "i1", name: "shot.png" }] } },
+  ],
+  sending: "now",
+  steered: [{ id: "s1", text: "and this" }],
+  busy: true,
+};
+const marks = c.promptMarks(promptSpec);
+assert.deepEqual(marks.map((m) => m.key), ["m:a", "m:c", "sending", "st:s1"], "the user's prompts, in the log's order");
+assert.equal(marks[0].text, "first prompt");
+assert.equal(marks[0].at, Date.parse(sentAt));
+assert.ok(Number.isNaN(marks[1].at), "no timestamp: no time");
+assert.equal(marks[1].text, "An image");
+assert.equal(marks[2].note, "Just now");
+assert.equal(marks[3].note, "Sent mid-turn");
+const promptLog = c.chatLogHtml(promptSpec);
+for (const m of marks) assert.ok(promptLog.includes(`class="chat-msg user`) && promptLog.includes(`data-key="${m.key}"`), `the log paints a bubble keyed ${m.key}`);
+assert.deepEqual(c.promptMarks({ items: [], sendingImages: [{ id: "i2", name: "x.png" }] }).map((m) => m.text), ["An image"], "images being sent count");
+assert.deepEqual(c.promptMarks({ items: [] }), []);
+
+assert.equal(c.promptIndexHtml(marks.slice(0, 1), now), "", "one prompt: no rail");
+const rail = c.promptIndexHtml(marks, now);
+assert.equal((rail.match(/<button type="button" class="chat-index-tick"/g) || []).length, 4, "a tick per prompt");
+assert.ok(rail.includes(`data-key="m:a" data-i="0" tabindex="-1" aria-label="Prompt 1 of 4: first prompt (Today, ${clock(local(14, 9, 19))})"`), "a tick names its prompt and when");
+assert.match(rail, /aria-label="Prompt 2 of 4: An image"/, "no time, no brackets");
+assert.match(rail, /aria-label="Prompt 3 of 4: now \(Just now\)"/);
+assert.match(rail, /data-key="st:s1" data-i="3" tabindex="-1" aria-label="Prompt 4 of 4: and this \(Sent mid-turn\)"/);
+const escaped = c.promptIndexHtml([{ key: "m:<x>", text: 'a "b" <c>', at: NaN }, { key: "m:y", text: "y", at: NaN }], now);
+assert.match(escaped, /data-key="m:&lt;x&gt;"/);
+assert.match(escaped, /aria-label="Prompt 1 of 2: a &quot;b&quot; &lt;c&gt;"/);
+
+// Prompts starting at 16, 500 and 2700 in a 3000px log, seen through 600px.
+const tops = [16, 500, 2700];
+assert.equal(c.currentPrompt([], 0, 600, 3000), -1);
+assert.equal(c.currentPrompt(tops, 0, 600, 3000), 0);
+assert.equal(c.currentPrompt(tops, 470, 600, 3000), 0, "a prompt below the reading line isn't current yet");
+assert.equal(c.currentPrompt(tops, 480, 600, 3000), 1, "it is once it reaches the line");
+assert.equal(c.currentPrompt(tops, 1800, 600, 3000), 1, "reading its reply");
+assert.equal(c.currentPrompt(tops, 2100, 600, 3000), 1, "over the last screen the line slides down…");
+assert.equal(c.currentPrompt(tops, 2400, 600, 3000), 2, "…so at the end the last prompt in view is current");
+assert.equal(c.currentPrompt([16, NaN, 900], 1000, 600, 3000), 2, "a prompt not on the page is skipped");
+assert.equal(c.currentPrompt([16, 300], 0, 600, 500), 1, "a log that doesn't scroll: the last prompt");
+
+const at = [16, 500, 1200, 2000];
+assert.equal(c.stepPrompt(at, 1, 488, 1), 2);
+assert.equal(c.stepPrompt(at, 3, 1988, 1), -1, "nothing after the last");
+assert.equal(c.stepPrompt(at, 1, 488, -1), 0, "at a prompt's start, up goes to the one before");
+assert.equal(c.stepPrompt(at, 1, 800, -1), 1, "scrolled past its start, up goes back to it first");
+assert.equal(c.stepPrompt(at, 0, 0, -1), -1, "nothing before the first");
+assert.equal(c.stepPrompt(at, -1, 0, 1), 0);
+assert.equal(c.stepPrompt([], 0, 0, 1), -1);
 
 console.log("chat-pane harness ok");

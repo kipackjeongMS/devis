@@ -6486,6 +6486,72 @@ button.tm-pr-title:hover { color: var(--accent-text); text-decoration: underline
 .chat-jump svg.ic { width: 16px; height: 16px; }
 /* Something new arrived below while you read further up. */
 .chat-jump.has-new { border-color: var(--accent); color: var(--accent-text); }
+/* The prompt index (chatPane.ts): a tick per prompt you sent, down the conversation's right edge,
+   brighter for the one being read. Hovering or focusing a tick shows its card beside the rail: the
+   prompt's first line and when it was sent. The log makes room for the rail, clear of its scrollbar. */
+.chat-view.has-index .chat-log { padding-right: 44px; }
+.chat-index {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  width: 22px;
+  max-height: calc(100% - 24px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+.chat-index[hidden] { display: none; }
+.chat-index::-webkit-scrollbar { display: none; }
+.chat-index-tick {
+  position: relative;
+  flex: 0 1 18px;
+  min-height: 6px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+.chat-index-tick::before {
+  position: absolute;
+  top: 50%;
+  right: 3px;
+  width: 12px;
+  height: 2px;
+  margin-top: -1px;
+  border-radius: 1px;
+  background-color: var(--text-3);
+  content: "";
+  opacity: .55;
+  transform-origin: right center;
+  transition: opacity var(--t-fast) var(--ease), background-color var(--t-fast) var(--ease), transform var(--t-normal) var(--ease);
+}
+.chat-index-tick:hover::before,
+.chat-index-tick:focus-visible::before { background-color: var(--text-1); opacity: 1; }
+.chat-index-tick.is-current::before { background-color: var(--text-1); opacity: 1; transform: scale(1.5); }
+/* The rail clips what sticks out of it, so the ring goes inside the tick. */
+.chat-index-tick:focus-visible { outline-offset: -2px; }
+.chat-index-card {
+  position: absolute;
+  right: 44px;
+  z-index: 3;
+  max-width: min(420px, calc(100% - 72px));
+  padding: 8px 12px;
+  border: 1px solid var(--edge);
+  border-radius: 10px;
+  background-color: var(--glass-float);
+  box-shadow: var(--shadow-flyout);
+  pointer-events: none;
+}
+.chat-index-card[hidden] { display: none; }
+.chat-index-text { margin: 0; overflow: hidden; color: var(--text-1); font-size: var(--fs-caption); line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
+.chat-index-when { margin: 2px 0 0; color: var(--text-3); font-size: var(--fs-caption); line-height: 16px; }
+/* The prompt a tick jumped to. */
+.chat-msg.user.flash { animation: card-flash 1.2s var(--ease); }
 /* Devis's notices (jarvis.ts, needsChat.ts): what needs you, written into the thread by the app, not
    the Lead's session. They read as Devis's messages, marked "Needs you", with the ask's card under
    an amber rule. A handled one shrinks to a one-line receipt where it was. */
