@@ -187,7 +187,11 @@ export interface Config {
   codebase?: CodebaseRepo[];
   /** The default folder new Jarvis tasks get their own folder in. */
   taskRoot?: string;
+  /** Where what needs the user shows in the Workspace: its own panel (the default) or Devis's chat. */
+  needsIn?: NeedsIn;
 }
+
+export type NeedsIn = "panel" | "chat";
 
 export interface CodebaseRepo {
   org: string;

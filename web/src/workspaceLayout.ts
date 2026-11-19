@@ -3,23 +3,38 @@
 //   Columns  — one to four, side by side. `w` is a column's share of the width (the default sets
 //              them, and dragging a border between columns changes them); null leaves the widths
 //              to CSS. A column moves as a whole, its panels and width going with it.
-//   Panels   — Devis (always there, exactly once) and the six sections. In a column, open panels
-//              share the height by `g` (a flex-grow, 1 when unset).
+//   Panels   — Devis (always there, exactly once) and the sections: seven with the Needs you
+//              panel, six when what needs you shows in Devis's chat instead (Settings > Workspace).
+//              In a column, open panels share the height by `g` (a flex-grow, 1 when unset).
 //   Flat     — a window too narrow for the columns shows Devis alone and the sections in one
 //              list behind the Overview button. `flat` is that list's order once the user moves
 //              something there; until then it reads the columns left to right, top to bottom.
 // Kept per device in localStorage. The first read takes over the rail's order and the
 // Devis/rail split that step 1 saved, then drops those keys. A section new since the layout
-// was saved goes in under the section before it, so Pull Requests lands under Tasks. One no longer
-// there (Needs you, now Devis's notices) is dropped on read.
+// was saved goes in under the section before it, so Pull Requests lands under Tasks; Needs you,
+// back after a layout saved without it, goes over To-dos (or first, in the flat list). With what
+// needs you in Devis's chat, a layout's Needs you panel is dropped on read.
 import { savedShare } from "./splitter.js";
 
-export type Section = "tasks" | "prs" | "comms" | "meetings" | "todos" | "note";
+export type Section = "needs" | "tasks" | "prs" | "comms" | "meetings" | "todos" | "note";
 export type PanelId = "devis" | Section;
 
-export const SECTIONS: readonly Section[] = ["tasks", "prs", "comms", "meetings", "todos", "note"];
+/** Every section there can be, Needs you included. */
+export const ALL_SECTIONS: readonly Section[] = ["needs", "tasks", "prs", "comms", "meetings", "todos", "note"];
+const CHAT_SECTIONS: readonly Section[] = ALL_SECTIONS.filter((s) => s !== "needs");
+
+let needsPanel = true;
+/** Whether Needs you is a panel of its own (true, the default) or Devis's notices. */
+export function setNeedsPanel(on: boolean): void {
+  needsPanel = on;
+}
+export const hasNeedsPanel = (): boolean => needsPanel;
+
+/** The sections the layout places now. */
+export const sections = (): readonly Section[] => (needsPanel ? ALL_SECTIONS : CHAT_SECTIONS);
 export const PANEL_NAME: Record<PanelId, string> = {
   devis: "Devis",
+  needs: "Needs you",
   tasks: "Tasks",
   prs: "Pull Requests",
   comms: "Communication",
@@ -28,7 +43,7 @@ export const PANEL_NAME: Record<PanelId, string> = {
   note: "Note",
 };
 
-export const isSection = (value: unknown): value is Section => SECTIONS.includes(value as Section);
+export const isSection = (value: unknown): value is Section => sections().includes(value as Section);
 export const isPanelId = (value: unknown): value is PanelId => value === "devis" || isSection(value);
 
 export interface PanelSlot {
@@ -75,13 +90,19 @@ const G_MAX = 20;
 const clampG = (g: number): number => Math.min(G_MAX, Math.max(G_MIN, g));
 
 /**
- * Three columns: what's yours to do (To-dos, Note) on the left, Devis in the middle with what needs
- * you, and the work you watch (Tasks, Pull Requests, Meetings, Communication) on the right.
+ * Three columns: what's yours to do on the left (Needs you, To-dos and Note; or To-dos and Note
+ * when what needs you shows in Devis's chat), Devis in the middle, and the work you watch (Tasks,
+ * Pull Requests, Meetings, Communication) on the right.
  */
 export function defaultLayout(): Layout {
   return {
     columns: [
-      { w: 0.25, panels: [{ id: "todos", g: 1.4 }, { id: "note", g: 1 }] },
+      {
+        w: 0.25,
+        panels: needsPanel
+          ? [{ id: "needs", g: 1 }, { id: "todos", g: 1 }, { id: "note", g: 1 }]
+          : [{ id: "todos", g: 1.4 }, { id: "note", g: 1 }],
+      },
       { w: 0.54, panels: [{ id: "devis" }] },
       { w: 0.21, panels: [{ id: "tasks", g: 1.1 }, { id: "prs", g: 0.9 }, { id: "meetings", g: 1 }, { id: "comms", g: 1 }] },
     ],
@@ -147,11 +168,18 @@ export function normalize(raw: unknown): Layout {
     columns = columns.slice(0, MAX_COLUMNS);
     columns[MAX_COLUMNS - 1]!.panels.push(...extra);
   }
-  const missing = SECTIONS.filter((s) => !seen.has(s));
-  // Under the nearest earlier section that's placed; with none, at the end of a column.
+  const order = sections();
+  const missing = order.filter((s) => !seen.has(s));
+  // Under the nearest earlier section that's placed (Needs you over To-dos); with none, at the end of a column.
   const loose: Section[] = [];
   for (const id of missing) {
-    const before = SECTIONS.slice(0, SECTIONS.indexOf(id)).reverse().find((s) => seen.has(s));
+    const todos = id === "needs" ? findPanel({ columns }, "todos") : null;
+    if (todos) {
+      columns[todos.col]!.panels.splice(todos.row, 0, { id });
+      seen.add(id);
+      continue;
+    }
+    const before = order.slice(0, order.indexOf(id)).reverse().find((s) => seen.has(s));
     const at = before ? findPanel({ columns }, before) : null;
     if (at) {
       columns[at.col]!.panels.splice(at.row + 1, 0, { id });
@@ -171,10 +199,11 @@ export function normalize(raw: unknown): Layout {
   const layout: Layout = { columns };
   if (Array.isArray(src.flat)) {
     const flat = [...new Set(src.flat.filter(isSection))];
-    for (const id of SECTIONS) {
+    for (const id of order) {
       if (flat.includes(id)) continue;
-      const before = SECTIONS.slice(0, SECTIONS.indexOf(id)).reverse().find((s) => flat.includes(s));
-      flat.splice(before ? flat.indexOf(before) + 1 : flat.length, 0, id);
+      const before = order.slice(0, order.indexOf(id)).reverse().find((s) => flat.includes(s));
+      // What needs you, back in the list, goes first.
+      flat.splice(before ? flat.indexOf(before) + 1 : id === "needs" ? 0 : flat.length, 0, id);
     }
     layout.flat = flat;
   }

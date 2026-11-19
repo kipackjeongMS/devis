@@ -227,6 +227,21 @@ try {
 
     // ---- the Lead's tools ----
     const tools = Object.fromEntries(lead.leadTools().map((t) => [t.name, t]));
+    assert.match(tools.devis_message_worker.description, /under Needs you/, "with the panel (the default), approvals are under Needs you");
+    assert.match(
+        Object.fromEntries(lead.leadTools("chat").map((t) => [t.name, t])).devis_message_worker.description,
+        /on their notice in your chat/,
+        "with Devis's chat, approvals are on their notice",
+    );
+    {
+        const panel = lead.leadBrief("panel");
+        const chat = lead.leadBrief("chat");
+        assert.equal(lead.leadBrief(), panel, "the panel is the default");
+        assert.match(panel, /Needs you \(what workers wait on\)/, "the panel brief names the Needs you panel");
+        assert.doesNotMatch(panel, /\[Needs you:/, "the panel brief says nothing of notices");
+        assert.match(chat, /\[Needs you: <its name>\]/, "the chat brief explains a message about a notice");
+        assert.match(chat, /on their notice in your chat/);
+    }
     assert.deepEqual(Object.keys(tools).sort(), [
         "devis_change_self", "devis_create_task", "devis_history", "devis_message_worker", "devis_notes", "devis_post_status", "devis_set_task_status",
         "devis_start_worker", "devis_stop_worker", "devis_task_artifacts", "devis_task_validation", "devis_today",

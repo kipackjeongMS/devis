@@ -1,5 +1,6 @@
 // Settings' Jarvis workspace section: the folder new tasks get their own folder
-// in, and the codebase, the repositories Jarvis workers can work in. Repos are
+// in, where what needs you shows (its own panel or Devis's chat), and the
+// codebase, the repositories Jarvis workers can work in. Repos are
 // picked from Azure DevOps live (organization, then project, then its repos);
 // the app clones each once under the Jarvis folder, and each worker gets its
 // own git worktree of the ones its task needs.
@@ -10,7 +11,7 @@ import { esc } from "./util.js";
 import { icon } from "./icons.js";
 import { teamsCard } from "./settingsTeams.js";
 import { devisCard } from "./settingsDevis.js";
-import type { CodebaseRepo, Config } from "./types.js";
+import type { CodebaseRepo, Config, NeedsIn } from "./types.js";
 
 type CardFactory = (name: Parameters<typeof icon>[0], title: string, descHtml: string, titleId: string, stacked?: boolean) => HTMLElement;
 
@@ -31,7 +32,7 @@ interface RepoInfo {
 export interface JarvisSettings {
   section: HTMLElement;
   /** What Save writes to the config. */
-  values(): { codebase: CodebaseRepo[]; taskRoot: string };
+  values(): { codebase: CodebaseRepo[]; taskRoot: string; needsIn: NeedsIn };
   /** After Save: clone what's new, and show it cloning. */
   saved(): Promise<void>;
 }
@@ -74,6 +75,25 @@ export function jarvisSettings(config: Config, orgs: () => string[], card: CardF
   rootInput.addEventListener("input", () => (taskRoot = rootInput.value));
   rootCard.querySelector<HTMLElement>(".settings-card-control")!.appendChild(rootInput);
   section.appendChild(rootCard);
+
+  // ---- where what needs you shows ----
+  let needsIn: NeedsIn = config.needsIn === "chat" ? "chat" : "panel";
+  const needsCard = card(
+    "warning",
+    "What needs you",
+    "Where workers' questions and approvals, failed turns, validation and PR plans, and the reviews and replies people wait on you for show up. <b>Needs you panel</b> lists them in a panel of their own in the Workspace. <b>Devis's chat</b> writes each one into Devis's chat as a notice, with <b>Ask Devis</b>.",
+    "settingsNeedsIn"
+  );
+  const needsSelect = el(
+    `<select class="filter-select" aria-labelledby="settingsNeedsIn">
+      <option value="panel">Needs you panel</option>
+      <option value="chat">Devis's chat</option>
+    </select>`
+  ) as HTMLSelectElement;
+  needsSelect.value = needsIn;
+  needsSelect.addEventListener("change", () => (needsIn = needsSelect.value === "chat" ? "chat" : "panel"));
+  needsCard.querySelector<HTMLElement>(".settings-card-control")!.appendChild(needsSelect);
+  section.appendChild(needsCard);
 
   // ---- the codebase ----
   const codebase: CodebaseRepo[] = (config.codebase || []).map((r) => ({ ...r }));
@@ -296,7 +316,7 @@ export function jarvisSettings(config: Config, orgs: () => string[], card: CardF
 
   return {
     section,
-    values: () => ({ codebase: codebase.map((r) => ({ ...r })), taskRoot: taskRoot.trim() }),
+    values: () => ({ codebase: codebase.map((r) => ({ ...r })), taskRoot: taskRoot.trim(), needsIn }),
     saved: async () => {
       try {
         const res: { repos: CodebaseEntry[]; dir: string } = await postJSON("/api/jarvis/codebase/sync", {});

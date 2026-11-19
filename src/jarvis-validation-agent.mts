@@ -710,7 +710,8 @@ export async function propose(taskIdValue: unknown, input: ProposalInput, by: st
     const proposal = await checkProposal(task, input, by, sessionId);
     await storeProposal(task.id, proposal);
     const warn = proposal.checks.filter((c) => c.tone === "warn").map((c) => c.text);
-    return `Proposed: ${proposal.blocks.map((b) => b.name).join(" → ")}. It waits for the user in Devis's chat; nothing runs until they accept and run it.${warn.length ? `\nNoted for them: ${warn.join("; ")}` : ""}`;
+    const where = (await readConfig()).needsIn === "chat" ? "in Devis's chat" : "under Needs you";
+    return `Proposed: ${proposal.blocks.map((b) => b.name).join(" → ")}. It waits for the user ${where}; nothing runs until they accept and run it.${warn.length ? `\nNoted for them: ${warn.join("; ")}` : ""}`;
 }
 
 // ---- status, for the tools --------------------------------------------------------------------------

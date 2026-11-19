@@ -3985,6 +3985,29 @@ body[data-feature="jarvis"]:not([data-page="settings"]) #btnLayout:not([hidden])
   color: var(--on-accent);
   font: 700 11px/18px var(--mono);
 }
+/* Needs you, when the rail is a sheet: one line over the chat. */
+.jv-banner {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  width: min(720px, calc(100% - 40px));
+  height: 36px;
+  margin: 4px auto 0;
+  padding: 0 12px;
+  border: 1px solid color-mix(in srgb, var(--caution) 28%, transparent);
+  border-radius: var(--r-surface);
+  background: var(--caution-tint);
+  color: var(--text-1);
+  font-size: var(--fs-caption);
+  text-align: left;
+  cursor: pointer;
+}
+.jv-banner svg.ic { flex: none; width: 14px; height: 14px; color: var(--caution); }
+.jv-banner > span:not(.jv-banner-go) { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jv-banner-go { flex: none; color: var(--accent-text); }
+.jv-banner:hover .jv-banner-go { text-decoration: underline; text-underline-offset: 3px; }
+.jv-banner:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 /* A ship to Devis itself: deploying, just live, or rolled back. Shown in every layout. */
 .jv-devis {
   --tone: var(--accent);
@@ -4021,7 +4044,7 @@ body[data-feature="jarvis"]:not([data-page="settings"]) #btnLayout:not([hidden])
   letter-spacing: .02em;
 }
 .jarvis-view:not(.flat) .jv-tools { position: absolute; top: 8px; right: 12px; z-index: 2; }
-.jarvis-view:not(.flat) :is(.jv-railbtn, .jv-sp) { display: none; }
+.jarvis-view:not(.flat) :is(.jv-railbtn, .jv-sp, .jv-banner) { display: none; }
 
 .jv-center > .chat > .chat-head {
   min-height: 48px;
@@ -4101,6 +4124,7 @@ body[data-feature="jarvis"]:not([data-page="settings"]) #btnLayout:not([hidden])
 .jarvis-view:not(.flat) .rs-t { color: var(--text-1); font: 600 12.5px/18px var(--font); }
 .jarvis-view:not(.flat) .rs-t:hover { color: #fff; }
 .rs-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rs.has-needs .rs-name { color: var(--caution); }
 .rs-n { color: var(--text-3); font: 400 12px/18px var(--mono); }
 .rs-n:empty { display: none; }
 .rs-new {
@@ -4139,6 +4163,7 @@ body[data-feature="jarvis"]:not([data-page="settings"]) #btnLayout:not([hidden])
 }
 .rs-more:hover { text-decoration: underline; text-underline-offset: 3px; }
 .rs-more:focus-visible { border-radius: 4px; outline: 2px solid var(--focus); outline-offset: 1px; }
+.jarvis-view .rs-b .need { margin: 0 0 6px; padding: 6px 10px 8px 8px; }
 .note-foot { display: flex; align-items: center; gap: 6px; margin: 4px 0 0; color: var(--text-3); font-size: 12px; line-height: 18px; }
 
 /* A rail row: dot, title, time. Its actions take the time's place on hover. */
@@ -4586,6 +4611,7 @@ button.rr-main { cursor: pointer; }
   .jv-center > .chat .chat-tools,
   .jv-center > .chat .chat-compose,
   .jv-overview,
+  .jv-banner,
   .jv-devis { width: calc(100% - 24px); }
   .jv-overview .ov-narrative { max-height: min(24vh, 160px); }
   .jv-drawer,
@@ -5264,6 +5290,66 @@ button.todo-chip:focus-visible { outline: 2px solid var(--focus); outline-offset
 .wname { color: var(--text-1); font-family: var(--mono); }
 .wstate { color: var(--tone-text); font-weight: 600; }
 
+/* Needs you: one compact item per ask. The task and who asks on one line, then the ask, answerable here. */
+.need {
+  margin: 0 0 8px;
+  padding: 8px 12px 10px 10px;
+  border: 1px solid rgba(255, 209, 102, .3);
+  border-left: 3px solid var(--caution);
+  border-radius: var(--r-surface);
+  background: var(--card);
+}
+.need.flash { animation: card-flash 1.2s var(--ease); }
+.need-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.need-icon { display: grid; flex: none; place-items: center; color: var(--caution); }
+.need-icon svg.ic { width: 14px; height: 14px; }
+.need-task {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-1);
+  font: 600 var(--fs-label)/20px var(--font);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.need-task:hover { color: var(--accent-text); }
+.need-who { flex: none; max-width: 40%; overflow: hidden; color: var(--text-3); font: var(--fs-readout)/18px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+.need-who::before { content: "·"; margin-right: 8px; }
+/* The item's age and its To-do button, at the end of its head. */
+.need-end { display: flex; flex: none; align-items: center; gap: 8px; margin-left: auto; }
+.need-end .need-age { margin-left: 0; }
+.need-todo {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--stroke-control);
+  border-radius: 999px;
+  background: var(--control);
+  color: var(--text-2);
+  font-size: var(--fs-readout);
+  cursor: pointer;
+}
+.need-todo svg.ic { width: 12px; height: 12px; }
+.need-todo:hover { border-color: var(--accent); color: var(--accent-text); }
+.need-todo:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.need-age { flex: none; margin-left: auto; color: var(--text-3); font: var(--fs-readout)/18px var(--mono); white-space: nowrap; }
+.need-body { margin-left: 22px; }
+.need-body .ask-card { margin-top: 6px; padding: 8px 10px; }
+.need-body .ask-card + .ask-card { margin-top: 6px; }
+/* A PR review asked for in Teams: who asked and where, what they wrote, then the PR and the message. */
+.need-teams .need-head { align-items: flex-start; }
+.need-teams .need-icon { height: 20px; }
+.need-teams .need-task { display: -webkit-box; overflow: hidden; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.need-dismiss { width: 22px; height: 22px; }
+.need-dismiss svg.ic { width: 12px; height: 12px; }
 .ask-card.ask-teams { border-color: var(--stroke-card); background: var(--well); }
 .ask-teams-line { margin: 0; color: var(--text-3); font: var(--fs-readout)/18px var(--mono); }
 .ask-teams-line + .ask-teams-line, .ask-teams-quote + .ask-teams-line { margin-top: 6px; }

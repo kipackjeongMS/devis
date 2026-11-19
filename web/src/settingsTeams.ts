@@ -5,7 +5,11 @@
 
 import { getJSON, postJSON } from "./api.js";
 import { icon } from "./icons.js";
+import { state } from "./state.js";
 import type { ChatsInfo, MeetingScanInfo } from "./commsModel.js";
+
+/** Where Teams asks show, as the setting has it (Settings > Workspace). */
+const asksWhere = (): string => (state.config?.needsIn === "chat" ? "in Devis's chat" : "under Needs you");
 
 type CardFactory = (name: Parameters<typeof icon>[0], title: string, descHtml: string, titleId: string, stacked?: boolean) => HTMLElement;
 
@@ -53,7 +57,7 @@ export const AGENCY_WAIT = "Waiting on Agency, which isn't installed. Install it
 /** What the last read of Teams chats did, in a line. */
 export function scanLine(s: CommsStatus | null, open: number | null): string {
   if (!s) return "Couldn't read what the last scan found.";
-  if (!s.enabled) return "Off. Turn it on to see PR review asks from Teams in Devis's chat.";
+  if (!s.enabled) return `Off. Turn it on to see PR review asks from Teams ${asksWhere()}.`;
   if (s.agency === false) return AGENCY_WAIT;
   if (s.scanning) return "Reading Teams…";
   const last = s.last;
@@ -118,7 +122,7 @@ export function teamsCard(card: CardFactory): HTMLElement {
   const node = card(
     "chat",
     "Teams and email",
-    "Finds pull requests people ask you to review in your Teams chats (1:1s, and group chats that ask the room) and shows them in Devis's chat. Sums up each Teams chat that moved, and each email thread people sent you (from Focused; not notifications or newsletters), in the Communication tab: a small model with no tools writes the line. Shows your Teams meetings in the Meetings tab, each with the recap Teams' Copilot wrote. Reads only what's new, every 30 minutes while the app runs. It never sends anything or marks anything read.",
+    `Finds pull requests people ask you to review in your Teams chats (1:1s, and group chats that ask the room) and shows them ${asksWhere()}. Sums up each Teams chat that moved, and each email thread people sent you (from Focused; not notifications or newsletters), in the Communication tab: a small model with no tools writes the line. Shows your Teams meetings in the Meetings tab, each with the recap Teams' Copilot wrote. Reads only what's new, every 30 minutes while the app runs. It never sends anything or marks anything read.`,
     "settingsTeams",
     true
   );

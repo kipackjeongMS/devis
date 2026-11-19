@@ -87,7 +87,9 @@ const hsashPool: HTMLElement[] = [];
 /** When a drag last ended: the click that follows it isn't a click on the grip. */
 let dragEndedAt = 0;
 
-const panelEl = (id: PanelId): HTMLElement => host.root.querySelector<HTMLElement>(`[data-panel="${id}"]`)!;
+/** Every panel, placed or not: one the layout leaves out (Needs you, with what needs you in Devis's chat) is out of the page. */
+const panels = new Map<PanelId, HTMLElement>();
+const panelEl = (id: PanelId): HTMLElement => panels.get(id) ?? host.root.querySelector<HTMLElement>(`[data-panel="${id}"]`)!;
 const isOpen = (id: PanelId): boolean => id === "devis" || !host.folded(id);
 const panelMin = (id: PanelId): number => (id === "devis" ? MIN.devis : MIN.panel);
 const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
@@ -97,6 +99,7 @@ export const isEditing = (): boolean => editing;
 
 export function initGrid(h: GridHost): void {
   host = h;
+  for (const p of host.root.querySelectorAll<HTMLElement>("[data-panel]")) panels.set(p.dataset.panel as PanelId, p);
   layout = readLayout();
   editbar = el(`<div class="jv-editbar" role="toolbar" aria-label="Edit layout" hidden>
       ${icon("layout")}<b>Editing layout</b>
@@ -535,6 +538,13 @@ export function panelMenu(id: PanelId, x: number, y: number, anchor: HTMLElement
 export function resetLayout(): void {
   commit(defaultLayout());
   announce("Layout reset.");
+}
+
+/** The sections changed (Needs you came or went): read the layout again for them. */
+export function relayout(): void {
+  if (!host) return;
+  layout = readLayout();
+  place();
 }
 
 /** The Workspace closed: leave edit mode, keeping what was done. */

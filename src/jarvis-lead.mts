@@ -9,7 +9,7 @@ import { CLIENT_NAME, explainCopilotError, sendAndSettle, TurnStoppedError, WEB_
 import { sharedMcpServers } from "./shared-playwright.mjs";
 import type { WorkItem } from "./service-files.mjs";
 import { runNotesAction } from "./jarvis-notes.mjs";
-import { readConfig } from "./config.mjs";
+import { onConfigChange, readConfig, type NeedsIn } from "./config.mjs";
 import { effortProblem, carriedEffort, getModelCatalog, sessionModelState, switchSessionModel, type ModelChoice, type ModelState } from "./models.mjs";
 import { MessageQueue, sendMode, steer, type QueuedMessage } from "./chat-queue.mjs";
 import { imageAttachments, requestImages, type ChatImage } from "./chat-images.mjs";
@@ -162,7 +162,7 @@ function tool<T>(name: string, description: string, properties: Record<string, u
 
 const str = { type: "string" };
 
-export function leadTools(): Tool<any>[] {
+export function leadTools(needsIn: NeedsIn = "panel"): Tool<any>[] {
     return [
         tool(
             "devis_today",
@@ -273,7 +273,7 @@ export function leadTools(): Tool<any>[] {
         ),
         tool<{ workerSessionId: string; text: string; requestId?: string }>(
             "devis_message_worker",
-            "Send a worker a new instruction, or answer its open question by passing that question's requestId. You cannot answer permission requests; the user approves those on their notice in your chat.",
+            `Send a worker a new instruction, or answer its open question by passing that question's requestId. You cannot answer permission requests; the user approves those ${needsIn === "chat" ? "on their notice in your chat" : "under Needs you"}.`,
             { workerSessionId: str, text: str, requestId: { ...str, description: "The open question this answers." } },
             ["workerSessionId", "text"],
             async ({ workerSessionId, text, requestId }) =>
@@ -324,22 +324,32 @@ export function leadTools(): Tool<any>[] {
 
 const LEAD_NOTE_ACTIONS: ReadonlySet<string> = new Set(["read", "add_todo", "complete_todo", "set_due", "append_note"]);
 
-const LEAD_BRIEF = [
-    `You are ${LEAD_NAME}, the user's lead agent in the ${APP_NAME} app.`,
-    `You used to be called ${FORMER_LEAD_NAME}, and your tools were named jarvis_*; they are devis_* now. Earlier messages may use the old names.`,
-    "Your main job is overseeing the user's Workspace and keeping track of its history: the tasks (ADO work items or custom tasks) on the Tasks board, the Copilot workers each task hosts, and the pull requests waiting for the user's review. The Workspace shows Today so far over your chat, and the user's own to-dos and quick note beside it.",
-    "What needs the user (workers' questions and approvals, failed turns, validation and PR plans, PR reviews asked for in Teams, chats and email waiting on them) shows in your chat as notices the app writes, not you. You don't see them. When the user asks about one, their message starts with \"[Needs you: <its name>]\", then its details, then a \"---\" line, then what they wrote: answer about that item.",
-    "Always read the current state with devis_today, and the past with devis_history, before you answer. Do not rely on memory for state; it changes.",
-    "Each task carries short status updates (latestUpdate in devis_today, task.status lines in devis_history). They are the best record of progress; use them for standups and recaps. devis_today also has the dashboard's current overview and each task's pull requests. A finished task's recap.md (devis_task_artifacts) sums up its design and decisions.",
-    "Lead with what needs the user: workers waiting on them, failed workers, and PRs to review. Then what is running, then what is done.",
-    "You may create tasks, mark them done, post status updates, add to a task's note.md, and start, message or stop workers, but only when the user asks. Permission requests from workers are the user's to approve on their notice in your chat; point them there.",
-    "The user also keeps their own to-do list and quick note, kept across days. Read them with devis_notes when the user asks about their notes or to-dos, or what to work on; add, check off or append only when they ask.",
-    "A task can have a validation chain: Azure DevOps pipelines run in order to prove its change. devis_today shows each task's validation; devis_task_validation reads it, finds candidates and proposes a chain when the user asks. The user accepts and runs it from the task.",
-    `When the user clearly asks to change ${APP_NAME} itself (a feature, a fix or a tweak to this app, the Workspace or you), start it with devis_change_self, passing on everything they said. Follow up through devis_message_worker. The worker asks the user to review the change before it ships, and only the user ships it. Never change ${APP_NAME}' source or deploy it yourself.`,
-    "You also have the user's MCP servers (Agency's ADO, Bluebird, WorkIQ, mail, calendar, Teams, Kusto, IcM and the rest) for anything outside the Workspace. Anything that changes something outside the app, like sending mail or updating a work item, only when the user asks.",
-    WEB_BRIEF,
-    "Answer briefly, in plain Markdown that reads well in a terminal: short lines, simple lists, ids in backticks.",
-].join("\n");
+/** The Lead's brief. Where what needs the user shows (Settings > Workspace) changes how it's described. */
+export function leadBrief(needsIn: NeedsIn = "panel"): string {
+    const chat = needsIn === "chat";
+    return [
+        `You are ${LEAD_NAME}, the user's lead agent in the ${APP_NAME} app.`,
+        `You used to be called ${FORMER_LEAD_NAME}, and your tools were named jarvis_*; they are devis_* now. Earlier messages may use the old names.`,
+        chat
+            ? "Your main job is overseeing the user's Workspace and keeping track of its history: the tasks (ADO work items or custom tasks) on the Tasks board, the Copilot workers each task hosts, and the pull requests waiting for the user's review. The Workspace shows Today so far over your chat, and the user's own to-dos and quick note beside it."
+            : "Your main job is overseeing the user's Workspace and keeping track of its history: the tasks (ADO work items or custom tasks) on the Tasks board, the Copilot workers each task hosts, and the pull requests waiting for the user's review. The Workspace's Today pane shows Today so far, Needs you (what workers wait on), and the user's own to-dos and quick note.",
+        ...(chat
+            ? [
+                  "What needs the user (workers' questions and approvals, failed turns, validation and PR plans, PR reviews asked for in Teams, chats and email waiting on them) shows in your chat as notices the app writes, not you. You don't see them. When the user asks about one, their message starts with \"[Needs you: <its name>]\", then its details, then a \"---\" line, then what they wrote: answer about that item.",
+              ]
+            : []),
+        "Always read the current state with devis_today, and the past with devis_history, before you answer. Do not rely on memory for state; it changes.",
+        "Each task carries short status updates (latestUpdate in devis_today, task.status lines in devis_history). They are the best record of progress; use them for standups and recaps. devis_today also has the dashboard's current overview and each task's pull requests. A finished task's recap.md (devis_task_artifacts) sums up its design and decisions.",
+        "Lead with what needs the user: workers waiting on them, failed workers, and PRs to review. Then what is running, then what is done.",
+        `You may create tasks, mark them done, post status updates, add to a task's note.md, and start, message or stop workers, but only when the user asks. Permission requests from workers are the user's to approve ${chat ? "on their notice in your chat" : "under Needs you in the Workspace"}; point them there.`,
+        "The user also keeps their own to-do list and quick note, kept across days. Read them with devis_notes when the user asks about their notes or to-dos, or what to work on; add, check off or append only when they ask.",
+        "A task can have a validation chain: Azure DevOps pipelines run in order to prove its change. devis_today shows each task's validation; devis_task_validation reads it, finds candidates and proposes a chain when the user asks. The user accepts and runs it from the task.",
+        `When the user clearly asks to change ${APP_NAME} itself (a feature, a fix or a tweak to this app, the Workspace or you), start it with devis_change_self, passing on everything they said. Follow up through devis_message_worker. The worker asks the user to review the change before it ships, and only the user ships it. Never change ${APP_NAME}' source or deploy it yourself.`,
+        "You also have the user's MCP servers (Agency's ADO, Bluebird, WorkIQ, mail, calendar, Teams, Kusto, IcM and the rest) for anything outside the Workspace. Anything that changes something outside the app, like sending mail or updating a work item, only when the user asks.",
+        WEB_BRIEF,
+        "Answer briefly, in plain Markdown that reads well in a terminal: short lines, simple lists, ids in backticks.",
+    ].join("\n");
+}
 
 // Reads, the app's tools, MCP tools and web pages (web_fetch) run without asking; shell commands and edits are a worker's job.
 const leadPermission = (request: PermissionRequest) =>
@@ -347,7 +357,7 @@ const leadPermission = (request: PermissionRequest) =>
         ? { kind: "approve-once" as const }
         : { kind: "reject" as const, feedback: `${LEAD_NAME} uses its devis_* tools, MCP tools and the web only. Ask the user, or direct a worker.` };
 
-function leadConfig(model: string, effort: string): ResumeSessionConfig {
+function leadConfig(model: string, effort: string, needsIn: NeedsIn = "panel"): ResumeSessionConfig {
     const cwd = jarvisDir();
     mkdirSync(cwd, { recursive: true });
     return {
@@ -359,8 +369,8 @@ function leadConfig(model: string, effort: string): ResumeSessionConfig {
         streaming: true,
         skipCustomInstructions: true,
         mcpServers: sharedMcpServers(),
-        tools: leadTools(),
-        systemMessage: { mode: "append", content: LEAD_BRIEF },
+        tools: leadTools(needsIn),
+        systemMessage: { mode: "append", content: leadBrief(needsIn) },
         onPermissionRequest: leadPermission,
     };
 }
@@ -465,6 +475,15 @@ function wire(session: CopilotSession): void {
 /** The tool call lead.activity names, so it clears when that call ends. */
 let activityCall: string | null = null;
 
+// The live session's brief describes where what needs the user shows. When Settings moves it,
+// the session is resumed with the new brief before its next turn.
+let briefNeedsIn: NeedsIn | null = null;
+let currentNeedsIn: NeedsIn | null = null;
+onConfigChange((cfg) => {
+    currentNeedsIn = cfg.needsIn;
+});
+const briefStale = (): boolean => briefNeedsIn !== null && currentNeedsIn !== null && briefNeedsIn !== currentNeedsIn;
+
 /** The Lead's session, resumed or created. `create` is false for reads, so opening the tab costs nothing. */
 async function acquire(create: boolean): Promise<CopilotSession | null> {
     try {
@@ -492,10 +511,12 @@ async function acquireOnce(create: boolean): Promise<CopilotSession | null> {
     const pending: Promise<CopilotSession> = (async () => {
         const model = await savedModel();
         const effort = await savedEffort();
+        const needsIn = (await readConfig()).needsIn;
+        currentNeedsIn = needsIn;
         let session: CopilotSession | null = null;
         if (saved) {
             try {
-                session = await runtime.resume(saved, leadConfig(model, effort));
+                session = await runtime.resume(saved, leadConfig(model, effort, needsIn));
             } catch (error) {
                 // Only a session the CLI confirms is gone gets replaced; anything
                 // else (CLI down, auth, timeout) keeps the saved conversation.
@@ -515,7 +536,7 @@ async function acquireOnce(create: boolean): Promise<CopilotSession | null> {
         }
         if (!session) {
             if (!create) throw new JarvisError("The Lead session is gone. Send a message to start a new one.", 410);
-            session = await runtime.create(leadConfig(model, effort));
+            session = await runtime.create(leadConfig(model, effort, needsIn));
             if (lead.generation === generation) await setMeta(LEAD_KEY, session.sessionId);
         }
         // Released (started over, closed) while this resumed: let it go rather than bring it back.
@@ -524,6 +545,7 @@ async function acquireOnce(create: boolean): Promise<CopilotSession | null> {
             throw new LeadReleased();
         }
         lead.sessionId = session.sessionId;
+        briefNeedsIn = needsIn;
         wire(session);
         // A resume that works again lifts the wait a failed one imposed on cold reads.
         warmFailedAt = 0;
@@ -788,6 +810,8 @@ function startLeadTurn(text: string, images: readonly ChatImage[] = [], displayP
     void (async () => {
         let ended: "done" | "stopped" | "failed" = "done";
         try {
+            // A brief written for the other Needs you setting: resume with the current one.
+            if (briefStale()) await release();
             const session = (await acquire(true))!;
             // Stop can land while the session is still resuming; nothing to abort yet.
             if (lead.stopping) throw new TurnStoppedError();

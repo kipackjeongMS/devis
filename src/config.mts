@@ -33,6 +33,24 @@ export interface Config {
     // The default folder new Jarvis tasks get their own folder in. A task can
     // name another one when it's created.
     taskRoot: string;
+    // Where what needs the user shows in the Workspace: its own Needs you panel
+    // (the default) or notices in Devis's chat. The Lead's brief follows it.
+    needsIn: NeedsIn;
+}
+
+export type NeedsIn = "panel" | "chat";
+
+export function normalizeNeedsIn(v: unknown): NeedsIn {
+    return v === "chat" ? "chat" : "panel";
+}
+
+type ConfigListener = (cfg: Config) => void;
+const listeners = new Set<ConfigListener>();
+
+/** Run `fn` after every saved config. Returns a function that stops it. */
+export function onConfigChange(fn: ConfigListener): () => void {
+    listeners.add(fn);
+    return () => listeners.delete(fn);
 }
 
 export interface CodebaseRepo {
@@ -132,10 +150,13 @@ export async function readConfig(): Promise<Config> {
         if (typeof c.reviewsDir !== "string") c.reviewsDir = "";
         c.codebase = normalizeCodebase(c.codebase);
         if (typeof c.taskRoot !== "string") c.taskRoot = "";
+        c.needsIn = normalizeNeedsIn(c.needsIn);
         return c as Config;
     } catch {
         // First run: seed with the primary org.
-        const seed: Config = { organizations: ["msazure"], projects: {}, repos: {}, reviewModel: "", reviewsDir: "", codebase: [], taskRoot: "" };
+        const seed: Config = {
+            organizations: ["msazure"], projects: {}, repos: {}, reviewModel: "", reviewsDir: "", codebase: [], taskRoot: "", needsIn: "panel",
+        };
         await writeConfig(seed).catch(() => {});
         return seed;
     }
@@ -149,12 +170,15 @@ export async function writeConfig(cfg: {
     reviewsDir?: unknown;
     codebase?: unknown;
     taskRoot?: unknown;
+    needsIn?: unknown;
 }): Promise<Config> {
     const arr = Array.isArray(cfg.organizations) ? cfg.organizations : [];
     const organizations = [...new Set(arr.map((s) => String(s).trim()).filter(Boolean))];
     // A save that leaves out the repo scopes or the Jarvis workspace settings keeps them.
     const keep =
-        cfg.repos === undefined || cfg.codebase === undefined || cfg.taskRoot === undefined ? await readStored() : null;
+        cfg.repos === undefined || cfg.codebase === undefined || cfg.taskRoot === undefined || cfg.needsIn === undefined
+            ? await readStored()
+            : null;
     const projects = normalizeProjects(organizations, cfg.projects);
     const clean: Config = {
         organizations,
@@ -164,8 +188,16 @@ export async function writeConfig(cfg: {
         reviewsDir: typeof cfg.reviewsDir === "string" ? cfg.reviewsDir.trim() : "",
         codebase: normalizeCodebase(cfg.codebase === undefined ? keep?.codebase : cfg.codebase),
         taskRoot: (typeof cfg.taskRoot === "string" ? cfg.taskRoot : typeof keep?.taskRoot === "string" ? keep.taskRoot : "").trim(),
+        needsIn: normalizeNeedsIn(cfg.needsIn === undefined ? keep?.needsIn : cfg.needsIn),
     };
     await writeFile(CONFIG_PATH, JSON.stringify(clean, null, 2), "utf8");
+    for (const fn of listeners) {
+        try {
+            fn(clean);
+        } catch {
+            // A listener's failure never fails the save.
+        }
+    }
     return clean;
 }
 

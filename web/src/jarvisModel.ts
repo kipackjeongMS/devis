@@ -1066,7 +1066,7 @@ export type BoardSection = Exclude<SectionId, "needs">;
 
 /**
  * Where a task's card sits on the board, or null once it was finished before `dayStart`.
- * Needing the user never moves a card: the ask shows in Devis's chat, and the card stays
+ * Needing the user never moves a card: the ask is listed under Needs you (or shows in Devis's chat), and the card stays
  * put with a warning (needsYou). A worker waiting on the user is mid-turn, so its task stays
  * under Running, even a task marked done.
  */

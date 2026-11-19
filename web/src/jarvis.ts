@@ -1,9 +1,11 @@
 // The Workspace: Devis and the day's sections in columns, and a drawer over Devis's column.
 //   Devis    — the Lead console, one persistent Copilot session that watches the Workspace and
-//              keeps its history. "Today so far" is pinned over its thread. What needs you shows
-//              in the thread too, as Devis's own notices written by this page (needsChat.ts).
-//   Sections — the day at a glance: Tasks, Pull Requests (yours and reviews), Communication,
-//              Meetings, the user's own to-dos and a quick note. Each folds. The
+//              keeps its history. "Today so far" is pinned over its thread. With what needs you
+//              set to Devis's chat (Settings > Workspace), it shows in the thread too, as Devis's
+//              own notices written by this page (needsChat.ts).
+//   Sections — the day at a glance: Needs you (by default, its own panel), Tasks, Pull Requests
+//              (yours and reviews), Communication, Meetings, the user's own to-dos and a quick
+//              note. Each folds. The
 //              to-dos and note belong to no day; Devis and the workers can read them when asked.
 //   Layout   — every panel, Devis too, moves by its grip (or Alt+arrows) to any place in any
 //              column, and the gaps drag to resize; workspaceGrid.ts does that. On a narrow
@@ -60,8 +62,8 @@ import { classifyQuery, type WorkItemOption } from "./workItemPickerModel.js";
 import { sendPrsToCopilot } from "./bridge.js";
 import { requestNotifyPermission } from "./notifyWatch.js";
 import { closeTaskModal, openTaskModal, pruneTaskModalState, reposFromCard, requestCardHtml, shipFromCard, updateTaskModal, warnUnsaved, type LeftTab, type TaskModalHost } from "./jarvisTask.js";
-import { PANEL_NAME, SECTIONS as PANEL_SECTIONS, isPanelId, isSection as isPanelSection, type PanelId, type Section as PanelSection } from "./workspaceLayout.js";
-import { afterFold, hideGrid, initGrid, isFlat, keyMove } from "./workspaceGrid.js";
+import { ALL_SECTIONS, PANEL_NAME, isPanelId, isSection as isPanelSection, setNeedsPanel, type PanelId, type Section as PanelSection } from "./workspaceLayout.js";
+import { afterFold, hideGrid, initGrid, isFlat, keyMove, relayout } from "./workspaceGrid.js";
 import { meetingDetailHtml, meetingsHtml, meetingsRail, meetingsSig, meetingsSub, pruneMeetingsState, selectMeeting, toggleDay, toggleNote, type MeetingsView } from "./meetingsView.js";
 import {
   communicationDetailHtml,
@@ -143,7 +145,7 @@ import {
 import { clearSearch, clearSelection, clickRow, contextIsSelectedRow, contextRow, initPrPanel, isSelecting, loadOlder, prAt, prPanelHtml, selectedPrs, selectionSize, setContextRow, setQuery, setSelecting, showMore, syncSelectionUi, toggleAll, toggleFilter, toggleFold, watchSentinel } from "./prPanel.js";
 import { inboxItems, markPrRead } from "./inboxPanel.js";
 import { matchNotificationPr } from "./inboxRoute.js";
-import type { PR } from "./types.js";
+import type { NeedsIn, PR } from "./types.js";
 
 interface ChatMessage {
   id: string;
@@ -183,11 +185,15 @@ export interface JarvisHooks {
   openSettings: () => void;
 }
 
-/** The day's sections (workspaceLayout.ts places them). */
+/** The day's sections (workspaceLayout.ts places them). Needs you is one only in the panel mode. */
 type RailSection = PanelSection;
-const RAIL_SECTIONS = PANEL_SECTIONS;
 const RAIL_NAME = PANEL_NAME;
 const isRailSection = isPanelSection;
+/** Where what needs you shows: its own panel (the default) or Devis's notices in its chat. Settings > Workspace. */
+let needsMode: NeedsIn = "panel";
+const needsPanelOn = (): boolean => needsMode === "panel";
+/** Where a worker's tool requests wait, in the words the start dialogs use. */
+const toolsWait = (): string => (needsPanelOn() ? "wait for you under Needs you" : "wait for your OK in Devis's chat");
 /** What opens in the drawer over Devis. */
 type Drawer = { kind: "task"; taskId: string; tab?: LeftTab } | { kind: "comms" } | { kind: "meetings" };
 
@@ -297,6 +303,8 @@ let rail: HTMLElement;
 /** The Overview button that opens the rail as a sheet on a narrow window, and its count of what's new. */
 let railButton: HTMLButtonElement;
 let railBadge: HTMLElement;
+/** The needs line over Devis on a narrow window, with the Needs you panel. */
+let needsBanner: HTMLElement;
 let devisBannerEl: HTMLElement;
 let updateBannerEl: HTMLElement;
 /** "Today so far", pinned over Devis's thread so it stays in view while the chat scrolls. */
@@ -315,6 +323,8 @@ let noticeLedger: NoticeLedger = readNoticeLedger();
 const noticeOutcomes = new Map<string, NoticeOutcome>();
 /** The notice attached to the next message to Devis: its name, and what Devis reads about it. */
 let leadAbout: { source: string; label: string; context: string } | null = null;
+let needsBody: HTMLElement;
+let needsCount: HTMLElement;
 let tasksBody: HTMLElement;
 let tasksCount: HTMLElement;
 let prsBody: HTMLElement;
@@ -383,11 +393,25 @@ function writePref(key: string, value: string): void {
 function readRailFolded(): Set<RailSection> {
   try {
     const list = JSON.parse(readPref(RAIL_FOLD_KEY, "[]"));
-    if (Array.isArray(list)) return new Set(list.filter(isRailSection));
+    // Needs you's fold is kept while it shows in Devis's chat instead.
+    if (Array.isArray(list)) return new Set(list.filter((s): s is RailSection => ALL_SECTIONS.includes(s)));
   } catch {
     /* unreadable: the default */
   }
   return new Set<RailSection>();
+}
+
+const configNeedsIn = (): NeedsIn => (state.config?.needsIn === "chat" ? "chat" : "panel");
+
+/** The setting moved: the Needs you panel comes back (or goes), and Devis's notices go (or come back). */
+function applyNeedsMode(): void {
+  needsMode = configNeedsIn();
+  setNeedsPanel(needsPanelOn());
+  relayout();
+  if (needsPanelOn()) leadAbout = null;
+  leadSig = "";
+  daySig = "";
+  renderToday(true);
 }
 
 function readNoticeLedger(): NoticeLedger {
@@ -405,6 +429,7 @@ const svg = (name: IconName): string => icon(name);
 export function showJarvis(h: JarvisHooks): void {
   hooks = h;
   if (!root) mount();
+  else if (configNeedsIn() !== needsMode) applyNeedsMode();
   visible = true;
   void loadToday();
   void loadLead();
@@ -546,6 +571,7 @@ function mount(): void {
         ${iconBtn("lead-new", "add", "New Lead session")}
         ${iconBtn("lead-terminal", "terminal", "Open the Lead in a terminal")}
       </div>
+      <button type="button" class="jv-banner" data-act="rail-open" hidden></button>
       <div class="jv-devis" role="status" hidden></div>
       <div class="jv-devis jv-update" role="status" hidden></div>
       ${chatPaneHtml({
@@ -575,7 +601,7 @@ function mount(): void {
     <aside class="jv-rail" aria-label="Overview" tabindex="-1">
       <div class="jv-rhead"><b>Overview</b>${iconBtn("rail-close", "dismiss", "Close the overview")}</div>
       <div class="jv-rscroll">
-        ${RAIL_SECTIONS.map((sec) => railSectionHtml(sec, railTools[sec])).join("")}
+        ${ALL_SECTIONS.map((sec) => railSectionHtml(sec, railTools[sec])).join("")}
       </div>
       <footer class="today-status"><span class="today-status-dot"></span><span class="today-status-text"></span></footer>
     </aside>
@@ -618,10 +644,13 @@ function mount(): void {
 
   railButton = q(".jv-railbtn");
   railBadge = q(".jv-badge");
+  needsBanner = q(".jv-banner");
   devisBannerEl = q(".jv-devis:not(.jv-update)");
   updateBannerEl = q(".jv-update");
   const body = (sec: RailSection): HTMLElement => q(`#rs-b-${sec}`);
   const count = (sec: RailSection): HTMLElement => q(`[data-rs="${sec}"] .rs-n`);
+  needsBody = body("needs");
+  needsCount = count("needs");
   tasksBody = body("tasks");
   tasksCount = count("tasks");
   prsBody = body("prs");
@@ -667,6 +696,8 @@ function mount(): void {
   drawerBackBtn = q('[data-act="drawer-back"]');
   drawerBody = q(".jv-dbody");
   wireGrip(q<HTMLElement>(".jv-grip"));
+  needsMode = configNeedsIn();
+  setNeedsPanel(needsPanelOn());
   // The panels go into their columns (or, on a narrow window, the overview sheet).
   initGrid({
     root,
@@ -842,12 +873,12 @@ function drawerGoBack(): void {
 
 /**
  * On a narrow window the sections are a sheet over the right edge, behind the Overview button.
- * With columns they're always in view: "open" takes the keyboard to Tasks.
+ * With columns they're always in view: "open" takes the keyboard to Needs you (or Tasks, without it).
  */
 function setSheet(open: boolean): void {
   if (!root) return;
   if (open && !isFlat()) {
-    root.querySelector<HTMLElement>('[data-rs="tasks"] .rs-t')?.focus({ preventScroll: true });
+    root.querySelector<HTMLElement>(`[data-rs="${needsPanelOn() ? "needs" : "tasks"}"] .rs-t`)?.focus({ preventScroll: true });
     return;
   }
   const was = root.classList.contains("sheet-open");
@@ -945,7 +976,7 @@ function renderLead(): void {
   const shownSent = leadSending() && !(last?.role === "user" && last.content === leadSent && sameImages(last.images, leadSentImages));
   const welcome = emptyHtml(
     "Ask Devis",
-    "I watch your Workspace and keep its history: tasks, the workers on them, the pull requests waiting for you, and your to-dos and quick note when you ask. What needs you shows up here too.",
+    `I watch your Workspace and keep its history: tasks, the workers on them, the pull requests waiting for you, and your to-dos and quick note when you ask.${needsPanelOn() ? "" : " What needs you shows up here too."}`,
     `<div class="chat-starters">${LEAD_STARTERS.map((s) => `<button type="button" class="chip-btn" data-starter="${esc(s)}">${esc(s)}</button>`).join("")}</div>`
   );
   // Devis's notices sit in the thread by time; with no conversation yet, the welcome stays over them.
@@ -1190,10 +1221,11 @@ async function leadQueueAct(button: HTMLElement, path: string, id: string): Prom
 }
 
 // ---- Devis's notices ----------------------------------------------------------------
-// What needs you, in Devis's thread (needsChat.ts). This page writes them from Today's data; the
+// What needs you, in Devis's thread (needsChat.ts), when the setting puts it there; else it's the
+// Needs you panel. This page writes them from Today's data; the
 // Lead's session never sees them unless the user asks about one, which attaches it to the message.
 
-/** Everything waiting on the user, across services, less what the to-dos took. */
+/** Everything waiting on the user, across services, less what the to-dos took. Both the notices and Needs you show it. */
 const openNotices = (): NeedItem[] => (data ? visibleNeeds(needsItems(data.tasks, teamsAsks(), commsNeedsNow()), data.todos) : []);
 
 /** A short, stable fingerprint of a notice's HTML: the thread repaints it when this moves. */
@@ -1203,9 +1235,9 @@ function strSig(s: string): string {
   return `${s.length}.${(h >>> 0).toString(36)}`;
 }
 
-/** The thread's notices: what needs you now, and today's receipts for what's gone, each with its time. */
+/** The thread's notices: what needs you now, and today's receipts for what's gone, each with its time. None with the Needs you panel. */
 function threadNotices(now: number): Array<{ key: string; at: number; sig: string; html: string }> {
-  if (!data) return [];
+  if (!data || needsPanelOn()) return [];
   const open = openNotices();
   const shown = new Set(open.map((n) => n.source));
   const out = open.map((n) => {
@@ -1601,10 +1633,10 @@ function loadMeetings(): Promise<void> {
 }
 
 /** What's new, by rail section; on a narrow window the Overview button's badge adds them up. */
-const railNew = { prs: 0, comms: 0, meetings: 0 };
+const railNew = { needs: 0, prs: 0, comms: 0, meetings: 0 };
 
 function paintRailBadge(): void {
-  const n = railNew.prs + railNew.comms + railNew.meetings;
+  const n = railNew.needs + railNew.prs + railNew.comms + railNew.meetings;
   railBadge.hidden = !n;
   railBadge.textContent = n ? String(n) : "";
   railButton.setAttribute("aria-label", n ? `Show the overview, ${n} new` : "Show the overview");
@@ -1736,6 +1768,116 @@ const loadingHtml = (what: string): string =>
     : `<div class="loading"><span class="spinner"></span> Loading ${what}…</div>`;
 const staleNote = (): string => (loadError ? `<div class="today-note err">Showing the last update. ${esc(loadError)}</div>` : "");
 
+/** An ask under Needs you: the task and who asks, then the ask itself to answer or act on. */
+function needHtml(n: NeedItem, now: number): string {
+  if (n.kind === "teams") return teamsNeedHtml(n, now);
+  if (n.kind === "comms") return commsNeedHtml(n, now);
+  const who = n.kind === "validation" || n.kind === "prComments" || n.kind === "prBuilds" ? n.who : n.worker.label;
+  const session = n.kind === "validation" || n.kind === "prComments" || n.kind === "prBuilds" ? "" : ` data-session="${esc(n.worker.sessionId)}"`;
+  const glyph = n.kind === "validation" ? "flow" : n.kind === "prComments" ? "pullRequest" : n.kind === "prBuilds" ? "pipeline" : "warning";
+  const ask = (text: string, button: string): string =>
+    `<div class="ask-card"><p class="ask-card-title">${svg(glyph)}<span>${esc(text)}</span></p><div class="ask-card-actions">${button}</div></div>`;
+  const body =
+    n.kind === "request"
+      ? n.worker.requests.map((r) => requestCardHtml(n.worker.label, r, drafts.get(`ans:${r.id}`) || "")).join("")
+      : n.kind === "failed"
+        ? ask(n.worker.summary ? `Its turn failed: ${n.worker.summary}` : "Its turn failed.", `<button type="button" class="btn sm accent" data-act="open-task">Open the chat</button>`)
+        : n.kind === "prComments"
+          ? ask(n.text, `<button type="button" class="btn sm accent" data-act="task-comments">${n.pr.attention === "proposal" ? "Review the plan" : "See what happened"}</button>`)
+          : n.kind === "prBuilds"
+            ? ask(n.text, `<button type="button" class="btn sm accent" data-act="task-comments">${n.pr.attention === "proposal" ? "Review the plan" : "See what happened"}</button>`)
+            : ask(
+              n.text,
+              `<button type="button" class="btn sm accent" data-act="task-validation">${n.task.validation?.attention === "proposal" ? "Review the proposal" : "See what failed"}</button>`
+            );
+  const age = n.at ? `<span class="need-age">${esc(ago(new Date(n.at).toISOString(), now))}</span>` : "";
+  // Taken on as a to-do, it leaves Needs you; the to-do ticks itself once the ask is gone.
+  const toTodo = `<button type="button" class="need-todo" data-act="need-todo" title="Move it to your to-dos" aria-label="Move to your to-dos: ${esc(n.task.title)}, ${esc(who)}">${svg("checklist")}<span>To-do</span></button>`;
+  return `
+    <article class="need" data-key="need:${esc(n.key)}" data-need="${esc(n.task.id)}" data-task="${esc(n.task.id)}" data-source="${esc(n.source)}"${session}>
+      <div class="need-head">
+        <span class="need-icon">${svg("warning")}</span>
+        <button type="button" class="need-task" data-act="open-task" title="Open the task">${esc(n.task.title)}</button>
+        <span class="need-who">${esc(who)}</span>
+        <span class="need-end">${age}${toTodo}</span>
+      </div>
+      <div class="need-body">${body}</div>
+    </article>`;
+}
+
+/**
+ * A PR someone asked the user to review in Teams: the PR and who asked on one line, then what they
+ * wrote and where, with the PR to open, the message in Teams, To-do and Dismiss.
+ */
+function teamsNeedHtml(n: Extract<NeedItem, { kind: "teams" }>, now: number): string {
+  const a = n.ask;
+  const latest = a.askers[0];
+  const who = askersLine(a.askers);
+  const pr = `PR ${a.prId}${a.title ? ` · ${a.title}` : ""}`;
+  // The PR's title says what it's about; who asked, where and when are on the line under it.
+  const title = a.title || `PR ${a.prId}`;
+  const toTodo = `<button type="button" class="need-todo" data-act="need-todo" title="Move it to your to-dos" aria-label="Move to your to-dos: ${esc(pr)}, asked by ${esc(who)}">${svg("checklist")}<span>To-do</span></button>`;
+  const dismiss = `<button type="button" class="icon-btn need-dismiss" data-act="need-dismiss" title="Dismiss" aria-label="Dismiss: ${esc(pr)}, asked by ${esc(who)}">${svg("dismiss")}</button>`;
+  const asked = (x: CommsAsk["askers"][number]): string =>
+    `<p class="ask-teams-line"><span class="ask-teams-who">${esc(x.name)}</span> ${esc(askerWhere(x))} · ${esc(agoPhrase(x.at, now))}</p>` +
+    (x.snippet ? `<p class="ask-teams-quote">${esc(x.snippet)}</p>` : "");
+  const others = a.askers.slice(1, 3).map(asked).join("");
+  const more = a.askers.length > 3 ? `<p class="ask-teams-line">and ${a.askers.length - 3} more</p>` : "";
+  const teams = latest?.link
+    ? `<a class="btn sm" href="${esc(latest.link)}" target="_blank" rel="noopener" data-act="need-teams">${svg("chat")}<span>Open in Teams</span></a>`
+    : "";
+  return `
+    <article class="need need-teams" data-key="need:${esc(n.key)}" data-ask="${a.id}" data-source="${esc(n.source)}">
+      <div class="need-head">
+        <span class="need-icon">${svg("chat")}</span>
+        <button type="button" class="need-task" data-act="need-pr" title="Open ${esc(pr)}">${esc(title)}</button>
+        <span class="need-end">${toTodo}${dismiss}</span>
+      </div>
+      <div class="need-body">
+        <div class="ask-card ask-teams">
+          ${latest ? asked(latest) : ""}${others}${more}
+          <div class="ask-card-actions">
+            <button type="button" class="btn sm accent" data-act="need-pr">${svg("pullRequest")}<span>Review PR</span></button>${teams}
+          </div>
+        </div>
+      </div>
+    </article>`;
+}
+
+/**
+ * A chat or email thread someone waits on you in: what it is on one line (it opens in the
+ * Communication tab), then who asked, where and when, and what they need, with the chat in Teams or
+ * the email in Outlook, To-do and Dismiss.
+ */
+function commsNeedHtml(n: Extract<NeedItem, { kind: "comms" }>, now: number): string {
+  const c = n.need;
+  const mail = c.source === "mail";
+  const who = commsNeedWho(c);
+  const title = commsNeedTitle(c);
+  const label = `${title}, ${who}`;
+  const ask = c.needsYou.charAt(0).toUpperCase() + c.needsYou.slice(1);
+  const toTodo = `<button type="button" class="need-todo" data-act="need-todo" title="Move it to your to-dos" aria-label="Move to your to-dos: ${esc(label)}">${svg("checklist")}<span>To-do</span></button>`;
+  const dismiss = `<button type="button" class="icon-btn need-dismiss" data-act="need-dismiss" title="Dismiss: nobody's waiting on you" aria-label="Dismiss: ${esc(label)}">${svg("dismiss")}</button>`;
+  const open = c.link && (mail ? isOutlookLink(c.link) : isTeamsLink(c.link))
+    ? `<a class="btn sm" href="${esc(c.link)}" target="_blank" rel="noopener" data-act="need-open">${svg(mail ? "mail" : "chat")}<span>${mail ? "Open in Outlook" : "Open in Teams"}</span></a>`
+    : "";
+  return `
+    <article class="need need-teams need-comms" data-key="need:${esc(n.key)}" data-comms-need="${esc(c.key)}" data-source="${esc(n.source)}">
+      <div class="need-head">
+        <span class="need-icon">${svg(mail ? "mail" : "chat")}</span>
+        <button type="button" class="need-task" data-act="need-comms" title="${esc(c.summary || "Show it in Communication")}">${esc(title)}</button>
+        <span class="need-end">${toTodo}${dismiss}</span>
+      </div>
+      <div class="need-body">
+        <div class="ask-card ask-teams">
+          <p class="ask-teams-line"><span class="ask-teams-who">${esc(who)}</span> ${esc(commsNeedWhere(c))} · ${esc(agoPhrase(c.lastAt, now))}</p>
+          <p class="ask-teams-quote">${esc(ask)}</p>
+          ${open ? `<div class="ask-card-actions">${open}</div>` : ""}
+        </div>
+      </div>
+    </article>`;
+}
+
 /** The chats and email threads someone waits on you in. */
 const commsNeedsNow = (): CommsNeed[] => data?.comms?.needs || [];
 
@@ -1754,7 +1896,7 @@ function showCommsNeed(key: string): void {
   if (!show()) void Promise.all([loadChats(), loadMail()]).then(() => void show());
 }
 
-/** Dismiss a chat's or thread's ask: its notice leaves at once, and it no longer shows as waiting in Communication. */
+/** Dismiss a chat's or thread's ask: it leaves Needs you (or its notice leaves) at once, and it no longer shows as waiting in Communication. */
 async function dismissCommsNeed(key: string): Promise<void> {
   if (!data?.comms) return;
   const before = data.comms.needs || [];
@@ -1797,7 +1939,7 @@ function openAskPr(ask: CommsAsk): void {
   window.open(url, "_blank", "noopener");
 }
 
-/** Dismiss a Teams ask: its notice leaves at once; a to-do made from it ticks on the next poll. */
+/** Dismiss a Teams ask: it leaves Needs you (or its notice leaves) at once; a to-do made from it ticks on the next poll. */
 async function dismissAsk(ask: CommsAsk): Promise<void> {
   if (!data?.comms) return;
   const before = data.comms.asks;
@@ -1893,7 +2035,7 @@ function renderTasks(force: boolean): void {
   patchPane(tasksBody, html.join(""));
 }
 
-// ---- The day: the overview, to-dos and the note ----------------------------------------
+// ---- The day: Needs you, the overview, to-dos and the note -----------------------------
 
 function renderDay(force: boolean): void {
   // The note can save before the Workspace is ever shown (an edit restored at startup).
@@ -1922,6 +2064,7 @@ function renderDay(force: boolean): void {
   // The count is of what's on the list: open top-level to-dos, not their subtasks.
   const openTodos = todos.filter((t) => !t.done && t.parentId === null).length;
   todosCount.textContent = openTodos ? String(openTodos) : "";
+  paintNeedsPanel(now);
   paintDevisBanner(data?.devis || null);
   paintUpdateBanner(data?.update || null);
 
@@ -1929,6 +2072,33 @@ function renderDay(force: boolean): void {
   patchPane(overviewEl, renderOverview(data.tasks, now));
   todoList.render(force);
   patchPane(noteBody, renderNote(now));
+}
+
+/**
+ * The Needs you panel, with the line over Devis that opens it on a narrow window. Covers every
+ * service: the filter belongs to the board in Tasks. With what needs you in Devis's chat, it's off.
+ */
+function paintNeedsPanel(now: number): void {
+  const needs = needsPanelOn() ? openNotices() : [];
+  needsCount.textContent = needs.length ? String(needs.length) : "";
+  needsBody.closest("[data-rs]")?.classList.toggle("has-needs", needs.length > 0);
+  railNew.needs = needs.length;
+  paintRailBadge();
+  const banner = needs.length ? `${needs.length} thing${needs.length === 1 ? "" : "s"} need${needs.length === 1 ? "s" : ""} you` : "";
+  needsBanner.hidden = !banner;
+  if (needsBanner.dataset.text !== banner) {
+    needsBanner.dataset.text = banner;
+    needsBanner.innerHTML = banner ? `${svg("warning")}<span>${esc(banner)}</span><span class="jv-banner-go">Show</span>` : "";
+  }
+  if (!needsPanelOn()) return;
+  if (!data) {
+    needsBody.innerHTML = loadingHtml("Today");
+    return;
+  }
+  patchPane(
+    needsBody,
+    staleNote() + (needs.length ? needs.map((n) => needHtml(n, now)).join("") : `<p class="rs-empty" data-key="none">${esc(SECTIONS[0].empty)}</p>`)
+  );
 }
 
 /** A ship to Devis itself: deploying, just live, or rolled back. Shown over the chat in every layout. */
@@ -1989,7 +2159,7 @@ function paintUpdateBanner(b: UpdateBanner | null): void {
 // The list itself (subtasks, due dates, priority, selection, starting a task) is todoList.ts.
 
 /**
- * Take a notice on as a to-do: it leaves Devis's thread at once (a receipt stays), and the to-do
+ * Take an ask on as a to-do: it leaves Needs you, or Devis's thread (a receipt stays), at once, and the to-do
  * it becomes remembers it, so it ticks itself once the ask is gone. Undo takes the to-do back out.
  */
 async function needToTodo(button: HTMLElement): Promise<void> {
@@ -1997,9 +2167,10 @@ async function needToTodo(button: HTMLElement): Promise<void> {
   const item = data ? needsItems(data.tasks, teamsAsks(), commsNeedsNow()).find((n) => n.source === source) : undefined;
   if (!item || !data) return;
   const { text, source: from } = needTodo(item);
-  // Where the keyboard goes once the notice is gone: the next one's To-do, else the new to-do.
-  const shown = openNoticeEls();
-  const mine = button.closest<HTMLElement>(".nt");
+  // Where the keyboard goes once the ask is gone: the next one's To-do, else the new to-do.
+  const panelItem = button.closest<HTMLElement>(".need");
+  const shown = panelItem ? [...needsBody.querySelectorAll<HTMLElement>(".need")] : openNoticeEls();
+  const mine = panelItem ?? button.closest<HTMLElement>(".nt");
   const next = mine ? shown[shown.indexOf(mine) + 1]?.dataset.source : undefined;
   const iso = new Date().toISOString();
   const placeholder: Todo = {
@@ -2025,7 +2196,7 @@ async function needToTodo(button: HTMLElement): Promise<void> {
   renderTasks(true);
   if (!ok) return;
   const added = data.todos?.find((t) => !t.done && t.source?.key === from.key);
-  if (next) root!.querySelector<HTMLElement>(`.nt[data-source="${CSS.escape(next)}"] [data-act='need-todo']`)?.focus({ preventScroll: true });
+  if (next) root!.querySelector<HTMLElement>(`:is(.nt, .need)[data-source="${CSS.escape(next)}"] [data-act='need-todo']`)?.focus({ preventScroll: true });
   else if (added) todoList.focusTodo(added.id);
   toast(
     "Moved to your to-dos",
@@ -2355,11 +2526,18 @@ function jumpToTask(taskId: string): void {
   openDrawer({ kind: "task", taskId });
 }
 
-/** Show the first thing a task waits on you for: its notice in Devis's thread. */
+/** Show the first thing a task waits on you for: under Needs you, or its notice in Devis's thread. */
 function jumpToNeed(taskId: string): void {
-  const item = leadPane.log.querySelector<HTMLElement>(`.nt:not(.done)[data-task="${CSS.escape(taskId)}"]`);
-  if (item) return goToNotice(item.dataset.source || "");
-  if (drawer) closeDrawer(false);
+  if (needsPanelOn()) {
+    if (drawer) closeDrawer(false);
+    revealRail("needs");
+    const need = needsBody.querySelector<HTMLElement>(`.need[data-need="${CSS.escape(taskId)}"]`);
+    if (need) return flashInView(need, need.querySelector<HTMLElement>(".need-body button, .need-body textarea, .need-body input"));
+  } else {
+    const item = leadPane.log.querySelector<HTMLElement>(`.nt:not(.done)[data-task="${CSS.escape(taskId)}"]`);
+    if (item) return goToNotice(item.dataset.source || "");
+    if (drawer) closeDrawer(false);
+  }
   // Taken on as a to-do: that's where it is now. Else the task itself.
   revealRail("todos");
   const todo = todosBody.querySelector<HTMLElement>(`.todo-src[data-src-task="${CSS.escape(taskId)}"]`)?.closest<HTMLElement>(".todo");
@@ -3281,7 +3459,7 @@ function openStartWorker(task: TodayTask): void {
         <textarea id="jw-prompt" class="ask-q" rows="5" placeholder="What should this worker do first?"></textarea>
         ${MODEL_FIELDS}
       </div>
-      <p class="pa-note">The worker is a Copilot session in that folder with your own Copilot setup. It can read freely. Shell commands, file edits and other tools wait for your OK in Devis's chat.</p>`,
+      <p class="pa-note">The worker is a Copilot session in that folder with your own Copilot setup. It can read freely. Shell commands, file edits and other tools ${toolsWait()}.</p>`,
     confirmLabel: "Start worker",
     onConfirm: async (node) => {
       const res = await postJSON("/api/jarvis/workers/start", {
@@ -3309,7 +3487,7 @@ function openStartTaskWorker(task: TodayTask, folder: string): void {
         <textarea id="jw-prompt" class="ask-q" rows="5" placeholder="What should this worker take on? Leave it empty to have it work from the task's description."></textarea>
         ${MODEL_FIELDS}
       </div>
-      <p class="pa-note">The worker gets its own folder in <code>${esc(folder)}</code>. Like the task's other workers, it proposes the repositories it needs for you to confirm, gets a worktree of each on its own branch, and settles the goal with you before it starts. Shell commands, file edits and other tools wait for your OK in Devis's chat.</p>`,
+      <p class="pa-note">The worker gets its own folder in <code>${esc(folder)}</code>. Like the task's other workers, it proposes the repositories it needs for you to confirm, gets a worktree of each on its own branch, and settles the goal with you before it starts. Shell commands, file edits and other tools ${toolsWait()}.</p>`,
     confirmLabel: "Start worker",
     onConfirm: async (node) => {
       const res = await postJSON("/api/jarvis/workers/start", {
