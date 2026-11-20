@@ -498,7 +498,10 @@ export async function handleJarvisApi(req: IncomingMessage, res: ServerResponse,
         // ---- artifacts ----
         if (p === "/api/jarvis/artifacts" && get) {
             const id = requireId(q.get("id"));
-            return sendJson(res, 200, { artifacts: await listArtifacts(id), dir: artifactsDir(id) });
+            const artifacts = await listArtifacts(id);
+            // The Artifacts window names its task in the title bar.
+            const title = (await getTask(id))?.title ?? "";
+            return sendJson(res, 200, { artifacts, dir: artifactsDir(id), title });
         }
         if (p === "/api/jarvis/artifacts/open-folder" && post) {
             const b = await readBody(req);

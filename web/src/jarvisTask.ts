@@ -33,8 +33,8 @@ import { loadModelCatalog, modelCatalog } from "./modelCatalog.js";
 import { effortLabel, nextChoice, type PickerState } from "./modelChoice.js";
 import { toast } from "./toast.js";
 import { openActionDialog } from "./prActions.js";
+import { onArtifactsChanged, openArtifactsWindow } from "./artifactsWindow.js";
 import {
-  NOTE_NAME,
   RECAP_NAME,
   WORKER_LABEL,
   WORKER_TONE,
@@ -42,7 +42,6 @@ import {
   agoPhrase,
   artifactRole,
   formatBytes,
-  isMarkdownName,
   mergeStatuses,
   newArtifactText,
   nextArtifactName,
@@ -354,15 +353,8 @@ interface Arts {
   /** What the list was last read for; a change reads it again. */
   sig: string;
   token: number;
-  /** The artifact being viewed, or null for the list. */
-  open: string | null;
-  file: Artifact | null;
-  fileError: string;
-  fileToken: number;
-  /** "edit" and "new" keep their form as typed: polls don't repaint it. */
-  mode: "view" | "edit" | "new";
-  /** The text the editor started from, so a worker's newer write isn't overwritten. */
-  editBase: string;
+  /** "new" keeps the new-note form as typed: polls don't repaint it. Files open in the task's Artifacts window. */
+  mode: "view" | "new";
 }
 
 interface Log {
@@ -450,6 +442,11 @@ let modal: Modal | null = null;
 let logToken = 0;
 
 const nowIso = (): string => new Date().toISOString();
+
+// A change made in the task's Artifacts window shows in the drawer's list at once.
+onArtifactsChanged((taskId) => {
+  if (modal && modal.taskId.toLowerCase() === taskId.toLowerCase()) void loadArtifacts();
+});
 
 export function isTaskModalOpen(): boolean {
   return !!modal;
@@ -543,12 +540,7 @@ export function openTaskModal(taskId: string, host: TaskModalHost, tab?: LeftTab
       error: "",
       sig: "",
       token: 0,
-      open: null,
-      file: null,
-      fileError: "",
-      fileToken: 0,
       mode: "view",
-      editBase: "",
     },
     tabs: q(".tm-tabs"),
     pane,
@@ -1240,17 +1232,6 @@ async function loadArtifacts(): Promise<void> {
     m.arts.list = res.artifacts;
     m.arts.dir = res.dir;
     m.arts.error = "";
-    const open = m.arts.open;
-    if (open && m.arts.mode !== "edit") {
-      const info = res.artifacts.find((i) => sameName(i.name, open));
-      if (!info && !sameName(open, NOTE_NAME)) {
-        // Deleted elsewhere: back to the list.
-        m.arts.open = null;
-        m.arts.file = null;
-      } else if (info && m.arts.file && info.modifiedAt !== m.arts.file.modifiedAt) {
-        void loadFile(open);
-      }
-    }
   } catch (e) {
     if (modal !== m || token !== m.arts.token) return;
     m.arts.error = (e as Error).message;
@@ -1260,25 +1241,7 @@ async function loadArtifacts(): Promise<void> {
   paintArts();
 }
 
-async function loadFile(name: string): Promise<void> {
-  const m = modal;
-  if (!m) return;
-  const token = ++m.arts.fileToken;
-  try {
-    const res: { artifact: Artifact } = await getJSON(
-      `/api/jarvis/artifact?id=${encodeURIComponent(m.taskId)}&name=${encodeURIComponent(name)}`
-    );
-    if (modal !== m || token !== m.arts.fileToken || !m.arts.open || !sameName(m.arts.open, name)) return;
-    m.arts.file = res.artifact;
-    m.arts.fileError = "";
-  } catch (e) {
-    if (modal !== m || token !== m.arts.fileToken) return;
-    m.arts.fileError = (e as Error).message;
-  }
-  paintArts();
-}
-
-/** Repaint the Artifacts panel when what it shows changed. An open editor or new-note form is left alone. */
+/** Repaint the Artifacts panel when what it shows changed. An open new-note form is left alone. */
 function paintArts(): void {
   const m = modal;
   const task = currentTask();
@@ -1286,19 +1249,8 @@ function paintArts(): void {
   const a = m.arts;
   m.artsCount.textContent = a.list ? ` ${a.list.length}` : "";
   if (a.mode !== "view") return;
-  const sig = JSON.stringify([
-    a.list,
-    a.dir,
-    a.error,
-    a.open,
-    a.file && [a.file.name, a.file.modifiedAt, a.file.content.length],
-    a.fileError,
-    task.recap,
-    task.status,
-    task.workers.length,
-    Math.floor(Date.now() / 60_000),
-  ]);
-  region("arts", sig, () => (a.open ? paintFile() : paintList(task)));
+  const sig = JSON.stringify([a.list, a.dir, a.error, task.recap, task.status, task.workers.length, Math.floor(Date.now() / 60_000)]);
+  region("arts", sig, () => paintList(task));
 }
 
 function paintList(task: TodayTask): void {
@@ -1323,7 +1275,7 @@ function paintList(task: TodayTask): void {
     body = `<ul class="tm-art-list">${a.list
       .map((i) => {
         const role = artifactRole(i.name);
-        return `<li><button type="button" class="tm-art" data-act="art-open" data-name="${esc(i.name)}">
+        return `<li><button type="button" class="tm-art" data-act="art-open" data-name="${esc(i.name)}" title="Open ${esc(i.name)} in the Artifacts window">
             <span class="tm-art-icon">${svg(sameName(i.name, RECAP_NAME) ? "sparkle" : "file")}</span>
             <span class="tm-art-name">${esc(i.name)}</span>
             ${role ? `<span class="tm-art-role">${esc(role)}</span>` : ""}
@@ -1343,127 +1295,12 @@ function paintList(task: TodayTask): void {
     ${a.dir ? `<p class="tm-path" title="${esc(a.dir)}">${esc(a.dir)}</p>` : ""}`;
 }
 
-function paintFile(): void {
-  const m = modal!;
-  const a = m.arts;
-  const name = a.file?.name || a.open || "";
-  const isNote = sameName(name, NOTE_NAME);
-  let content: string;
-  if (a.fileError && !a.file) content = `<p class="tm-muted err">Couldn't read ${esc(name)}: ${esc(a.fileError)}</p>`;
-  else if (!a.file) content = `<p class="tm-muted"><span class="spinner"></span> Loading ${esc(name)}…</p>`;
-  else if (!a.file.content.trim()) {
-    content = `<p class="tm-muted">${isNote ? "Empty. You and the task's workers share this note: decisions, findings, open questions." : "Empty."}</p>`;
-  } else if (isMarkdownName(name)) content = `<div class="md tm-note-md">${renderMarkdown(a.file.content)}</div>`;
-  else content = `<pre class="tm-art-pre">${esc(a.file.content)}</pre>`;
-  m.artsEl.innerHTML = `
-    <div class="tm-art-bar">
-      <button type="button" class="btn sm ghost tm-art-back" data-act="art-back" title="All artifacts">${svg("back")}<span>Artifacts</span></button>
-      <span class="tm-art-crumb" title="${esc(name)}">${esc(name)}</span>
-      <span class="tm-art-actions">
-        ${a.file ? `<button type="button" class="btn sm ghost" data-act="art-edit">Edit</button>` : ""}
-        ${
-          isNote
-            ? ""
-            : `<button type="button" class="icon-btn" data-act="art-delete" title="Delete ${esc(name)}" aria-label="Delete ${esc(name)}">${svg("trash")}</button>`
-        }
-      </span>
-    </div>
-    ${content}
-    ${a.file ? `<p class="tm-path" title="${esc(a.file.path)}">${esc(a.file.path)}</p>` : ""}`;
-}
-
-function openArtifact(name: string): void {
-  const m = modal!;
-  m.arts.open = name;
-  m.arts.file = null;
-  m.arts.fileError = "";
-  paintArts();
-  m.artsEl.querySelector<HTMLElement>("[data-act='art-back']")?.focus();
-  void loadFile(name);
-}
-
-function backToList(): void {
-  const m = modal!;
-  const was = m.arts.open;
-  m.arts.open = null;
-  m.arts.file = null;
-  m.arts.fileError = "";
-  m.arts.mode = "view";
-  paintArts();
-  const item = was ? [...m.artsEl.querySelectorAll<HTMLElement>("[data-act='art-open']")].find((n) => sameName(n.dataset.name || "", was)) : null;
-  (item || m.artsEl.querySelector<HTMLElement>("[data-act='art-new']") || m.dialog).focus();
-  void loadArtifacts();
-}
-
-/** Leave the editor or the new-note form for the normal view, repainting it. */
+/** Leave the new-note form for the list, repainting it. */
 function toView(): void {
   const m = modal!;
   m.arts.mode = "view";
   delete m.sigs.arts;
   paintArts();
-}
-
-function startArtEdit(): void {
-  const m = modal!;
-  const file = m.arts.file;
-  if (!file) return;
-  m.arts.mode = "edit";
-  m.arts.editBase = file.content;
-  m.artsEl.innerHTML = `
-    <div class="tm-art-bar"><span class="tm-art-crumb">Editing ${esc(file.name)}</span></div>
-    <textarea class="ask-q jv-note tm-note-text" rows="16" spellcheck="true" aria-label="Edit ${esc(file.name)}">
-${esc(file.content)}</textarea>
-    <div class="tm-note-actions">
-      <button type="button" class="btn sm ghost" data-act="art-cancel">Cancel</button>
-      <button type="button" class="btn sm accent" data-act="art-save">Save</button>
-    </div>`;
-  m.artsEl.querySelector<HTMLTextAreaElement>("textarea")!.focus();
-}
-
-function cancelArtEdit(): void {
-  const m = modal!;
-  toView();
-  m.artsEl.querySelector<HTMLElement>("[data-act='art-edit']")?.focus();
-  if (m.arts.open) void loadFile(m.arts.open);
-}
-
-async function saveArt(button: HTMLElement): Promise<void> {
-  const m = modal!;
-  const file = m.arts.file;
-  if (!file) return;
-  const text = m.artsEl.querySelector<HTMLTextAreaElement>("textarea")?.value ?? "";
-  if (button instanceof HTMLButtonElement) button.disabled = true;
-  try {
-    const res: { artifact: Artifact } = await postJSON("/api/jarvis/artifact", { id: m.taskId, name: file.name, content: text, base: m.arts.editBase });
-    if (modal !== m) return;
-    m.arts.file = res.artifact;
-    toView();
-    m.artsEl.querySelector<HTMLElement>("[data-act='art-edit']")?.focus();
-    toast(`Saved ${file.name}`, "ok");
-    void loadArtifacts();
-  } catch (e) {
-    const message = (e as Error).message;
-    if (/changed while you were editing/.test(message) && modal === m) {
-      // Keep the user's text; the next Save replaces the newer copy on purpose.
-      try {
-        const res: { artifact: Artifact } = await getJSON(
-          `/api/jarvis/artifact?id=${encodeURIComponent(m.taskId)}&name=${encodeURIComponent(file.name)}`
-        );
-        m.arts.editBase = res.artifact.content;
-      } catch {
-        /* the next Save reports it */
-      }
-      toast(`${file.name} changed while you edited it, likely a worker's entry. Your text is kept. Save again to replace it, or Cancel to see the new version.`, "err");
-    } else {
-      toast(message, "err");
-    }
-  } finally {
-    if (button instanceof HTMLButtonElement && button.isConnected) button.disabled = false;
-    // Disabling the focused Save dropped focus to the page; after a failed save, it goes back to the text.
-    if (modal === m && m.arts.mode === "edit" && !m.dialog.contains(document.activeElement)) {
-      m.artsEl.querySelector<HTMLTextAreaElement>("textarea")?.focus();
-    }
-  }
 }
 
 function startNewArt(): void {
@@ -1491,6 +1328,7 @@ function cancelNewArt(): void {
   m.artsEl.querySelector<HTMLElement>("[data-act='art-new']")?.focus();
 }
 
+/** Make the note, then write it in the task's Artifacts window. */
 async function createArt(form: HTMLFormElement): Promise<void> {
   const m = modal!;
   const name = form.querySelector<HTMLInputElement>("input")?.value.trim() || "";
@@ -1502,36 +1340,11 @@ async function createArt(form: HTMLFormElement): Promise<void> {
       content: newArtifactText(name),
       create: true,
     });
+    openArtifactsWindow(m.taskId, res.artifact.name, true);
     if (modal !== m) return;
-    m.arts.mode = "view";
-    m.arts.open = res.artifact.name;
-    m.arts.file = res.artifact;
-    m.arts.fileError = "";
-    startArtEdit();
+    toView();
+    m.artsEl.querySelector<HTMLElement>("[data-act='art-new']")?.focus();
     void loadArtifacts();
-  });
-}
-
-function confirmDeleteArt(name: string): void {
-  const m = modal!;
-  openActionDialog({
-    title: "Delete artifact",
-    loc: name,
-    body: `<p class="pa-note">Deletes <strong>${esc(name)}</strong> from this task's Artifacts. Workers won't see it anymore.</p>`,
-    confirmLabel: "Delete",
-    danger: true,
-    onConfirm: async () => {
-      await postJSON("/api/jarvis/artifact/delete", { id: m.taskId, name });
-      if (modal !== m) return;
-      toast(`Deleted ${name}`, "ok");
-      backToList();
-      // The dialog hands focus back to the trash button, which is gone; put it in the list instead.
-      window.setTimeout(() => {
-        if (modal === m && !m.dialog.contains(document.activeElement)) {
-          (m.artsEl.querySelector<HTMLElement>("[data-act='art-new']") || m.dialog).focus();
-        }
-      }, 0);
-    },
   });
 }
 
@@ -2191,15 +2004,7 @@ function onClick(e: MouseEvent): void {
     case "log-retry":
       return void (w && loadLog(w));
     case "art-open":
-      return openArtifact(node.dataset.name || "");
-    case "art-back":
-      return backToList();
-    case "art-edit":
-      return startArtEdit();
-    case "art-cancel":
-      return cancelArtEdit();
-    case "art-save":
-      return void saveArt(node);
+      return openArtifactsWindow(task.id, node.dataset.name || null);
     case "art-folder":
       return void withButton(node, async () => {
         await postJSON("/api/jarvis/artifacts/open-folder", { id: task.id });
@@ -2208,8 +2013,6 @@ function onClick(e: MouseEvent): void {
       return startNewArt();
     case "art-new-cancel":
       return cancelNewArt();
-    case "art-delete":
-      return void (m.arts.open && confirmDeleteArt(m.arts.file?.name || m.arts.open));
     case "art-recap":
       return void withButton(node, async () => {
         await postJSON("/api/jarvis/recap", { id: task.id });
@@ -2298,7 +2101,6 @@ function onKeydown(e: KeyboardEvent): void {
     e.stopPropagation();
     if (closeIdePicker(m.dialog, true)) return;
     if (m.popup || !m.popupEl.hidden) return hidePopup();
-    if (m.arts.mode === "edit" && m.artsEl.contains(target)) return cancelArtEdit();
     if (m.arts.mode === "new" && m.artsEl.contains(target)) return cancelNewArt();
     if (!m.dvLink.hidden && m.dvLink.contains(target)) return showLinkForm(false);
     if (m.validation?.escape(target)) return;
