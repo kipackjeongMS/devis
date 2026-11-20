@@ -7,14 +7,16 @@
 // A worker's proposal for new comments on its PR, or its trouble reviewing them, is
 // need:pr:<task>:<org>:<PR>:<when the proposal was made or the trouble started> (jarvis-pr-comments.mts).
 // The same for failed builds on the PR is need:ci:<task>:<org>:<PR>:<when> (jarvis-pr-builds.mts).
+// An S360 action item of the user's is need:s360:<a hash of the item> (s360.mts); every open one
+// counts here, dismissed or not, so a to-do made from one ticks itself only once S360 closes it.
 
 import type { TodayTask } from "./jarvis-today.mjs";
 
-/** A key Needs you gives an ask: need:req|fail|val|pr|ci|teams|chat|mail:<what identifies it>. */
-export const NEED_KEY = /^need:(req|fail|val|pr|ci|teams|chat|mail):[\w:.\-]{1,200}$/;
+/** A key Needs you gives an ask: need:req|fail|val|pr|ci|teams|chat|mail|s360:<what identifies it>. */
+export const NEED_KEY = /^need:(req|fail|val|pr|ci|teams|chat|mail|s360):[\w:.\-]{1,200}$/;
 
 /** The kinds of keys, as settleNeedTodos can be told to leave one alone. */
-export type NeedKind = "req" | "fail" | "val" | "pr" | "ci" | "teams" | "chat" | "mail";
+export type NeedKind = "req" | "fail" | "val" | "pr" | "ci" | "teams" | "chat" | "mail" | "s360";
 
 type Worker = TodayTask["workers"][number];
 
@@ -34,15 +36,17 @@ function liveState(w: Pick<Worker, "state" | "busy" | "requests">): string {
     return w.state === "needsInput" ? "working" : w.state;
 }
 
-/** The keys of everything Needs you shows for these tasks, Teams asks, and chats and email threads. */
+/** The keys of everything Needs you shows for these tasks, Teams asks, chats and email threads, and S360 items. */
 export function needKeys(
     tasks: ReadonlyArray<Pick<TodayTask, "id" | "status" | "workers" | "validation"> & Partial<Pick<TodayTask, "prComments" | "prBuilds">>>,
     asks: ReadonlyArray<{ id: number }> = [],
     comms: ReadonlyArray<{ key: string }> = [],
+    s360: ReadonlyArray<{ key: string }> = [],
 ): Set<string> {
     const keys = new Set<string>();
     for (const ask of asks) keys.add(`need:teams:${ask.id}`);
     for (const need of comms) keys.add(need.key);
+    for (const item of s360) keys.add(item.key);
     for (const task of tasks) {
         for (const worker of task.workers) {
             const request = oldestRequest(worker);

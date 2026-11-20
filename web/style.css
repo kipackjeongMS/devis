@@ -4539,7 +4539,12 @@ button.rr-main { cursor: pointer; }
 .ld-nt b { color: var(--text-1); font-weight: 500; }
 .ld-nt > span { color: var(--text-2); }
 .ld-nt .ld-pts { margin-top: 4px; font-size: 13px; line-height: 20px; }
+/* An S360 item's facts, a label and its value on each row (s360View.ts). */
+.ld-kv { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 6px 12px; max-width: 620px; margin: 0; font-size: 13px; line-height: 20px; }
+.ld-kv dt { color: var(--text-3); }
+.ld-kv dd { margin: 0; color: var(--text-2); overflow-wrap: anywhere; }
 .ld-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 22px; }
+.ld-acts a.btn { text-decoration: none; }
 .ld-foot { margin: 22px 0 0; color: var(--text-3); font-size: 12px; line-height: 18px; }
 .today-empty.ld-none { margin: 24px 32px; }
 /* A narrow drawer shows the list or the item, with Back between them (jarvis.ts sets data-pane). */

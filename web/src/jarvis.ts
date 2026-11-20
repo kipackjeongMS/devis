@@ -4,14 +4,15 @@
 //              set to Devis's chat (Settings > Workspace), it shows in the thread too, as Devis's
 //              own notices written by this page (needsChat.ts).
 //   Sections — the day at a glance: Needs you (by default, its own panel), Tasks, Pull Requests
-//              (yours and reviews), Communication, Meetings, the user's own to-dos and a quick
-//              note. Each folds. The
+//              (yours and reviews), Communication, Meetings, S360, the user's own to-dos and a
+//              quick note. Each folds. The
 //              to-dos and note belong to no day; Devis and the workers can read them when asked.
 //   Layout   — every panel, Devis too, moves by its grip (or Alt+arrows) to any place in any
 //              column, and the gaps drag to resize; workspaceGrid.ts does that. On a narrow
 //              window Devis stands alone and the sections are a sheet behind the Overview button.
 //   Drawer   — opens over Devis's column, the others staying in view: a task (its timeline and
-//              its Copilot workers), Communication (email and Teams chats) or Meetings (recaps).
+//              its Copilot workers), Communication (email and Teams chats), Meetings (recaps) or
+//              S360 (your action items).
 import { getJSON, postJSON, type ApiError } from "./api.js";
 import { el } from "./dom.js";
 import { esc } from "./util.js";
@@ -65,6 +66,8 @@ import { closeTaskModal, openTaskModal, pruneTaskModalState, reposFromCard, requ
 import { ALL_SECTIONS, PANEL_NAME, isPanelId, isSection as isPanelSection, setNeedsPanel, type PanelId, type Section as PanelSection } from "./workspaceLayout.js";
 import { afterFold, hideGrid, initGrid, isFlat, keyMove, relayout } from "./workspaceGrid.js";
 import { meetingDetailHtml, meetingsHtml, meetingsRail, meetingsSig, meetingsSub, pruneMeetingsState, selectMeeting, toggleDay, toggleNote, type MeetingsView } from "./meetingsView.js";
+import { pruneS360State, s360DetailHtml, s360ListHtml, s360Rail, s360Sig, s360Sub, selectS360, toggleS360Group, type S360View } from "./s360View.js";
+import { s360Date, s360Roles, slaChip, type S360Item, type S360Need, type S360Status } from "./s360Model.js";
 import {
   communicationDetailHtml,
   communicationHtml,
@@ -195,7 +198,7 @@ const needsPanelOn = (): boolean => needsMode === "panel";
 /** Where a worker's tool requests wait, in the words the start dialogs use. */
 const toolsWait = (): string => (needsPanelOn() ? "wait for you under Needs you" : "wait for your OK in Devis's chat");
 /** What opens in the drawer over Devis. */
-type Drawer = { kind: "task"; taskId: string; tab?: LeftTab } | { kind: "comms" } | { kind: "meetings" };
+type Drawer = { kind: "task"; taskId: string; tab?: LeftTab } | { kind: "comms" } | { kind: "meetings" } | { kind: "s360" };
 
 /** The rail's folded sections. */
 const RAIL_FOLD_KEY = "adoPrOps.workspace.railFolded";
@@ -335,6 +338,8 @@ let commsRailBody: HTMLElement;
 let commsRailCount: HTMLElement;
 let meetRailBody: HTMLElement;
 let meetRailCount: HTMLElement;
+let s360RailBody: HTMLElement;
+let s360RailCount: HTMLElement;
 let todosBody: HTMLElement;
 let todosCount: HTMLElement;
 let noteBody: HTMLElement;
@@ -372,6 +377,11 @@ let mailVersion: string | null = null;
 let mailLoading: Promise<void> | null = null;
 let chatsLoading: Promise<void> | null = null;
 let commsRendered = "";
+// S360 (the user's action items, s360View.ts): the open ones in the rail, all of them in the drawer.
+const s360View: S360View = { items: null, status: null, error: "", scanning: false };
+let s360Version: string | null = null;
+let s360Loading: Promise<void> | null = null;
+let s360Rendered = "";
 
 function readPref(key: string, fallback: string): string {
   try {
@@ -436,6 +446,7 @@ export function showJarvis(h: JarvisHooks): void {
   if (!note) void loadNote();
   void loadMeetings();
   loadCommunication();
+  void loadS360();
 }
 
 export function hideJarvis(): void {
@@ -561,6 +572,7 @@ function mount(): void {
     prs: `<button type="button" class="icon-btn" data-act="prs-select" aria-pressed="false" title="Select pull requests" aria-label="Select pull requests">${svg("check")}</button>${iconBtn("prs-refresh", "sync", "Refresh pull requests")}`,
     comms: iconBtn("comms-scan", "sync", "Read Teams and email now"),
     meetings: iconBtn("meetings-scan", "sync", "Read the calendar now"),
+    s360: iconBtn("s360-scan", "sync", "Read S360 now"),
     todos: `<button type="button" class="icon-btn" data-act="todos-select" aria-pressed="false" title="Select to-dos" aria-label="Select to-dos">${svg("check")}</button>${iconBtn("todos-window", "external", "Open the full to-dos view")}`,
   };
   root.innerHTML = `
@@ -662,6 +674,8 @@ function mount(): void {
   commsRailCount = count("comms");
   meetRailBody = body("meetings");
   meetRailCount = count("meetings");
+  s360RailBody = body("s360");
+  s360RailCount = count("s360");
   todosBody = body("todos");
   todosCount = count("todos");
   const todosSelect = q<HTMLElement>('[data-act="todos-select"]');
@@ -774,8 +788,8 @@ const sameDrawer = (a: Drawer, b: Drawer): boolean =>
   a.kind === b.kind && (a.kind !== "task" || (b.kind === "task" && a.taskId === b.taskId));
 
 /**
- * Open a task, Communication or Meetings over Devis. Opened from inside the drawer, Back
- * returns to what was there. `detail` shows the selected conversation or meeting at once
+ * Open a task, Communication, Meetings or S360 over Devis. Opened from inside the drawer, Back
+ * returns to what was there. `detail` shows the selected conversation, meeting or item at once
  * on a narrow window, where the list and the detail take turns.
  */
 function openDrawer(d: Drawer, detail = false): void {
@@ -818,27 +832,31 @@ function showDrawer(d: Drawer, detail: boolean): void {
     drawerEl.setAttribute("aria-label", `Task: ${data?.tasks.find((t) => t.id === d.taskId)?.title || ""}`);
     openTaskModal(d.taskId, modalHost, d.tab, drawerBody);
   } else {
-    const comms = d.kind === "comms";
+    const kind = d.kind;
     drawerHead.hidden = false;
     drawerEl.removeAttribute("aria-label");
     drawerEl.setAttribute("aria-labelledby", "jv-dtitle");
-    drawerTitle.textContent = comms ? "Communication" : "Meetings";
+    drawerTitle.textContent = kind === "comms" ? "Communication" : kind === "meetings" ? "Meetings" : "S360";
     drawerMeta.textContent = "";
-    drawerActs.innerHTML = comms
-      ? iconBtn("comms-scan", "sync", "Read Teams and email now") + iconBtn("comms-settings", "settings", "Communication settings")
-      : iconBtn("meetings-scan", "sync", "Read the calendar now") + iconBtn("meetings-settings", "settings", "Meetings settings");
+    drawerActs.innerHTML =
+      kind === "comms"
+        ? iconBtn("comms-scan", "sync", "Read Teams and email now") + iconBtn("comms-settings", "settings", "Communication settings")
+        : kind === "meetings"
+          ? iconBtn("meetings-scan", "sync", "Read the calendar now") + iconBtn("meetings-settings", "settings", "Meetings settings")
+          : iconBtn("s360-scan", "sync", "Read S360 now") + iconBtn("s360-settings", "settings", "S360 settings");
     drawerBody.innerHTML = `<div class="ld" data-pane="${detail ? "detail" : "list"}"><div class="ld-list" tabindex="-1"></div>    <div class="ld-detail" tabindex="-1"></div></div>`;
-        if (comms) {
+    if (kind === "comms") {
       writePref(COMMUNICATION_SEEN_KEY, String(Date.now()));
       loadCommunication();
-    } else {
+    } else if (kind === "meetings") {
       markMeetingsSeen();
       void loadMeetings();
-    }
+    } else void loadS360();
     drawerEl.focus({ preventScroll: true });
   }
   commsRendered = "";
   meetingsRendered = "";
+  s360Rendered = "";
   renderComms(true);
 }
 
@@ -860,6 +878,7 @@ function closeDrawer(restore = true): void {
   // The rail's "new" marks come back, now counted from this visit.
   commsRendered = "";
   meetingsRendered = "";
+  s360Rendered = "";
   renderComms(true);
 }
 
@@ -1226,7 +1245,7 @@ async function leadQueueAct(button: HTMLElement, path: string, id: string): Prom
 // Lead's session never sees them unless the user asks about one, which attaches it to the message.
 
 /** Everything waiting on the user, across services, less what the to-dos took. Both the notices and Needs you show it. */
-const openNotices = (): NeedItem[] => (data ? visibleNeeds(needsItems(data.tasks, teamsAsks(), commsNeedsNow()), data.todos) : []);
+const openNotices = (): NeedItem[] => (data ? visibleNeeds(needsItems(data.tasks, teamsAsks(), commsNeedsNow(), s360NeedsNow()), data.todos) : []);
 
 /** A short, stable fingerprint of a notice's HTML: the thread repaints it when this moves. */
 function strSig(s: string): string {
@@ -1260,15 +1279,16 @@ const timeHtml = (at: number, now: number): string =>
 
 /**
  * One ask as Devis's message: who needs you for what, the ask itself (answerable here), then
- * To-do, Ask Devis and, for Teams and email, Dismiss. It carries the ids the actions read.
+ * To-do, Ask Devis and, for Teams, email and S360, Dismiss. It carries the ids the actions read.
  */
 function noticeHtml(n: NeedItem, now: number): string {
   const label = noticeLabel(n);
   const attrs = [`data-key="nt:${esc(n.source)}"`, `data-source="${esc(n.source)}"`];
-  if (n.kind !== "teams" && n.kind !== "comms") attrs.push(`data-task="${esc(n.task.id)}"`);
+  if (n.kind !== "teams" && n.kind !== "comms" && n.kind !== "s360") attrs.push(`data-task="${esc(n.task.id)}"`);
   if (n.kind === "request" || n.kind === "failed") attrs.push(`data-session="${esc(n.worker.sessionId)}"`);
   if (n.kind === "teams") attrs.push(`data-ask="${n.ask.id}"`);
   if (n.kind === "comms") attrs.push(`data-comms-need="${esc(n.need.key)}"`);
+  if (n.kind === "s360") attrs.push(`data-s360-need="${esc(n.need.key)}"`);
   const tag = `<span class="nt-tag" title="From your Workspace, not from Devis's session. Devis sees it only when you ask about it.">${svg("warning")}<span>Needs you</span></span>`;
   const foot = [
     n.kind === "request" ? `<button type="button" class="btn sm ghost" data-act="open-task">Open the task</button>` : "",
@@ -1276,7 +1296,9 @@ function noticeHtml(n: NeedItem, now: number): string {
     `<button type="button" class="btn sm ghost" data-act="need-ask" title="Ask Devis about it: it goes with your next message">${svg("sparkle")}<span>Ask Devis</span></button>`,
     n.kind === "teams" || n.kind === "comms"
       ? `<button type="button" class="btn sm ghost" data-act="need-dismiss" title="Dismiss: nobody's waiting on you">${svg("dismiss")}<span>Dismiss</span></button>`
-      : "",
+      : n.kind === "s360"
+        ? `<button type="button" class="btn sm ghost" data-act="need-dismiss" title="${esc(S360_DISMISS)}">${svg("dismiss")}<span>Dismiss</span></button>`
+        : "",
   ].join("");
   return `<article class="nt" ${attrs.join(" ")} aria-label="${esc(`Devis: ${label} needs you`)}">
       <p class="nt-head">${svg("sparkle")}<b>Devis</b>${tag}${timeHtml(n.at, now)}</p>
@@ -1311,6 +1333,8 @@ function noticeBodyHtml(n: NeedItem, now: number): string {
       return teamsNoticeBody(n.ask, now);
     case "comms":
       return commsNoticeBody(n.need);
+    case "s360":
+      return s360NeedBody(n.need, now, true);
   }
 }
 
@@ -1358,8 +1382,16 @@ function trackThread(now: number): void {
   const open = openNotices().map((n) => ({ source: n.source, at: n.at, label: noticeLabel(n) }));
   const taken = new Set((data.todos || []).filter((t) => !t.done && t.source).map((t) => t.source!.key));
   const comms = data.comms;
+  const s360 = data.s360;
   const unsure = (source: string): boolean =>
-    source.startsWith("need:teams:") ? !!comms?.failed : source.startsWith("need:chat:") || source.startsWith("need:mail:") ? !!comms?.needsFailed : false;
+    source.startsWith("need:teams:")
+      ? !!comms?.failed
+      : source.startsWith("need:chat:") || source.startsWith("need:mail:")
+        ? !!comms?.needsFailed
+        : // S360 that couldn't be read, or was turned off, says nothing of whether an item still needs you.
+          source.startsWith("need:s360:")
+          ? !!s360?.failed || s360?.enabled === false
+          : false;
   const next = trackNotices(noticeLedger, open, now, { outcomes: noticeOutcomes, taken, unsure });
   for (const source of [...noticeOutcomes.keys()]) if (next[source]?.goneAt !== undefined || !next[source]) noticeOutcomes.delete(source);
   const json = JSON.stringify(next);
@@ -1480,6 +1512,9 @@ async function loadToday(): Promise<void> {
     if ((!commsView.chats && !commsView.error) || (chatsAt !== undefined && chatsAt !== chatsVersion)) void loadChats();
     const mailAt = next.comms?.mail?.version;
     if ((!commsView.mail && !commsView.error) || (mailAt !== undefined && mailAt !== mailVersion)) void loadMail();
+    // And S360's items, read once a day: the version moves with each read, dismissal and switch.
+    const s360At = next.s360?.version;
+    if ((!s360View.items && !s360View.error) || (s360At !== undefined && s360At !== s360Version)) void loadS360();
   } catch (e) {
     if (token !== todayToken) return;
     loadError = (e as Error).message;
@@ -1652,8 +1687,8 @@ function paintNew(sec: "prs" | "comms" | "meetings", n: number, label: string): 
 }
 
 /**
- * Repaint Communication and Meetings: the rail's rows and "new" pills, and, while the drawer
- * shows one of them, its list and the selected conversation or meeting.
+ * Repaint Communication, Meetings and S360: the rail's rows and "new" pills, and, while the drawer
+ * shows one of them, its list and the selected conversation, meeting or item.
  */
 function renderComms(force = false): void {
   if (!root) return;
@@ -1668,6 +1703,9 @@ function renderComms(force = false): void {
   paintRailBadge();
   patchPane(commsRailBody, communicationRail(commsView, now).html);
   patchPane(meetRailBody, meetingsRail(meetingsView, now));
+  const s360Open = s360View.status?.enabled === false ? 0 : (s360View.items || []).filter((i) => !i.resolvedAt).length;
+  s360RailCount.textContent = s360Open ? String(s360Open) : "";
+  patchPane(s360RailBody, s360Rail(s360View, data?.todos, now));
   if (!drawer || drawer.kind === "task") return;
   const ld = drawerBody.querySelector<HTMLElement>(".ld");
   if (!ld) return;
@@ -1681,6 +1719,15 @@ function renderComms(force = false): void {
     commsRendered = sig;
     patchPane(list, communicationHtml(commsView, now));
     patchPane(detail, communicationDetailHtml(commsView, now));
+    return;
+  }
+  if (drawer.kind === "s360") {
+    drawerMeta.textContent = s360Sub(s360View, now);
+    const sig = s360Sig(s360View, data?.todos, now);
+    if (!force && sig === s360Rendered) return;
+    s360Rendered = sig;
+    patchPane(list, s360ListHtml(s360View, data?.todos, now));
+    patchPane(detail, s360DetailHtml(s360View, data?.todos, now));
     return;
   }
   drawerMeta.textContent = meetingsSub(meetingsView, now);
@@ -1740,6 +1787,52 @@ async function meetingTodo(node: HTMLElement): Promise<void> {
   renderToday(true);
 }
 
+// ---- S360 ---------------------------------------------------------------------------
+
+/** Read the S360 items, unless a read is under way. */
+function loadS360(): Promise<void> {
+  s360Loading ??= (async () => {
+    try {
+      const res: { items: S360Item[]; digest: { version: string }; status: S360Status } = await getJSON("/api/jarvis/s360");
+      s360View.items = res.items || [];
+      s360View.status = res.status;
+      s360View.error = "";
+      s360Version = res.digest.version;
+      pruneS360State(s360View.items);
+    } catch (e) {
+      s360View.error = (e as Error).message;
+    } finally {
+      s360Loading = null;
+    }
+    renderComms(true);
+  })();
+  return s360Loading;
+}
+
+/** Read S360 now, from the rail or the drawer's head. The read itself says what went wrong, if anything. */
+async function scanS360Now(button: HTMLElement): Promise<void> {
+  if (s360View.scanning) return;
+  s360View.scanning = true;
+  if (button instanceof HTMLButtonElement) button.disabled = true;
+  renderComms(true);
+  try {
+    await postJSON("/api/jarvis/s360/scan", {});
+  } catch (e) {
+    toast(`Couldn't read S360: ${(e as Error).message}`, "err");
+  } finally {
+    s360View.scanning = false;
+    if (button instanceof HTMLButtonElement) button.disabled = false;
+  }
+  await loadS360();
+  void loadToday();
+}
+
+/** Dismiss the item the S360 drawer shows from Needs you. */
+function dismissS360Item(node: HTMLElement): void {
+  const key = node.closest<HTMLElement>("[data-s360]")?.dataset.s360;
+  if (key) void dismissS360Need(`need:s360:${key}`);
+}
+
 /**
  * Patch a pane's body, keeping focus and what the user is typing: polling must
  * not pull the user off an Allow button, out of an answer box, or out of the note.
@@ -1772,6 +1865,7 @@ const staleNote = (): string => (loadError ? `<div class="today-note err">Showin
 function needHtml(n: NeedItem, now: number): string {
   if (n.kind === "teams") return teamsNeedHtml(n, now);
   if (n.kind === "comms") return commsNeedHtml(n, now);
+  if (n.kind === "s360") return s360NeedHtml(n, now);
   const who = n.kind === "validation" || n.kind === "prComments" || n.kind === "prBuilds" ? n.who : n.worker.label;
   const session = n.kind === "validation" || n.kind === "prComments" || n.kind === "prBuilds" ? "" : ` data-session="${esc(n.worker.sessionId)}"`;
   const glyph = n.kind === "validation" ? "flow" : n.kind === "prComments" ? "pullRequest" : n.kind === "prBuilds" ? "pipeline" : "warning";
@@ -1880,6 +1974,84 @@ function commsNeedHtml(n: Extract<NeedItem, { kind: "comms" }>, now: number): st
 
 /** The chats and email threads someone waits on you in. */
 const commsNeedsNow = (): CommsNeed[] => data?.comms?.needs || [];
+
+/** What Dismiss does to an S360 item. */
+const S360_DISMISS = "Dismiss: it comes back only if it gets closer to its SLA or past it";
+
+/**
+ * An S360 item that needs you: its title (it opens in the S360 drawer), then where it stands with its
+ * SLA and when it's due, with the item in S360, To-do and Dismiss.
+ */
+function s360NeedHtml(n: Extract<NeedItem, { kind: "s360" }>, now: number): string {
+  const item = n.need.item;
+  const label = `${item.title}, S360`;
+  const toTodo = `<button type="button" class="need-todo" data-act="need-todo" title="Move it to your to-dos" aria-label="Move to your to-dos: ${esc(label)}">${svg("checklist")}<span>To-do</span></button>`;
+  const dismiss = `<button type="button" class="icon-btn need-dismiss" data-act="need-dismiss" title="${esc(S360_DISMISS)}" aria-label="Dismiss: ${esc(label)}">${svg("dismiss")}</button>`;
+  return `
+    <article class="need need-teams need-s360" data-key="need:${esc(n.key)}" data-s360-need="${esc(n.need.key)}" data-source="${esc(n.source)}">
+      <div class="need-head">
+        <span class="need-icon">${svg("shield")}</span>
+        <button type="button" class="need-task" data-act="need-s360" title="Show it in S360">${esc(item.title)}</button>
+        <span class="need-end">${toTodo}${dismiss}</span>
+      </div>
+      <div class="need-body">${s360NeedBody(n.need, now, false)}</div>
+    </article>`;
+}
+
+/** An S360 item's ask: its SLA, due date and service, and how it's yours; the item in S360, and in Devis's thread a way to the drawer. */
+function s360NeedBody(need: S360Need, now: number, notice: boolean): string {
+  const item = need.item;
+  const chip = slaChip(item, now);
+  const facts = [item.due ? `due ${s360Date(item.due, now)}` : "", item.service].filter(Boolean).join(" · ");
+  const link = /^https:\/\//i.test(item.link) ? item.link : "";
+  const open = link ? `<a class="btn sm" href="${esc(link)}" target="_blank" rel="noopener" data-act="need-open">${svg("external")}<span>Open in S360</span></a>` : "";
+  const show = notice ? `<button type="button" class="btn sm ghost" data-act="need-s360">Show in S360</button>` : "";
+  return `<div class="ask-card ask-teams">
+      <p class="ask-teams-line"><span class="ask-teams-who">${esc(chip.text)}</span>${facts ? ` · ${esc(facts)}` : ""}</p>
+      <p class="ask-teams-quote">${esc(s360Roles(item))}</p>
+      ${open || show ? `<div class="ask-card-actions">${open}${show}</div>` : ""}
+    </div>`;
+}
+
+/** The S360 items that wait on you. */
+const s360NeedsNow = (): S360Need[] => data?.s360?.needs || [];
+
+/** Open an S360 item that waits on you in the S360 drawer, selected and in view. */
+function showS360Need(key: string): void {
+  const need = s360NeedsNow().find((n) => n.key === key);
+  if (!need) return;
+  selectS360(need.item.key, s360View.items);
+  if (isFlat()) setSheet(false);
+  openDrawer({ kind: "s360" }, true);
+  const show = (): boolean => {
+    const row = drawerBody.querySelector<HTMLElement>(`.ld-list [data-s360="${CSS.escape(need.item.key)}"]`);
+    if (row) row.scrollIntoView({ block: "nearest" });
+    return !!row;
+  };
+  if (!show()) void loadS360().then(() => void show());
+}
+
+/** Dismiss an S360 item from Needs you: it leaves at once, and comes back only if it gets worse. */
+async function dismissS360Need(key: string): Promise<void> {
+  if (!data?.s360) return;
+  const before = data.s360.needs;
+  const need = before.find((n) => n.key === key);
+  if (need) noticeOutcomes.set(key, { text: `Dismissed ${noticeLabel({ kind: "s360", key: `s360:${key}`, source: key, need, at: 0 })}`, dropped: true });
+  data.s360.needs = before.filter((n) => n.key !== key);
+  renderToday(true);
+  try {
+    const res = await postJSON("/api/jarvis/s360/needs/dismiss", { key });
+    if (data?.s360 && Array.isArray(res?.needs)) data.s360.needs = res.needs;
+  } catch (e) {
+    if ((e as ApiError).status !== 404 && data?.s360) {
+      data.s360.needs = before;
+      noticeOutcomes.delete(key);
+      toast((e as Error).message, "err");
+    }
+  }
+  renderToday(true);
+  void loadS360();
+}
 
 /** Open a chat or thread that waits on you in Communication, selected and in view. */
 function showCommsNeed(key: string): void {
@@ -1995,7 +2167,7 @@ function renderTasks(force: boolean): void {
 
   const tasks = data.tasks.filter((t) => inService(t, service));
   const groups = groupTasks(tasks, dayStart(now));
-  const needs = visibleNeeds(needsItems(tasks, teamsAsks(service), commsNeedsNow()), data.todos);
+  const needs = visibleNeeds(needsItems(tasks, teamsAsks(service), commsNeedsNow(), s360NeedsNow()), data.todos);
   const reviewed = reviewedInService(data.reviewed);
   const counts: Partial<Record<SectionId, number>> = {
     needs: needs.length,
@@ -2164,7 +2336,7 @@ function paintUpdateBanner(b: UpdateBanner | null): void {
  */
 async function needToTodo(button: HTMLElement): Promise<void> {
   const source = button.closest<HTMLElement>("[data-source]")?.dataset.source;
-  const item = data ? needsItems(data.tasks, teamsAsks(), commsNeedsNow()).find((n) => n.source === source) : undefined;
+  const item = data ? needsItems(data.tasks, teamsAsks(), commsNeedsNow(), s360NeedsNow()).find((n) => n.source === source) : undefined;
   if (!item || !data) return;
   const { text, source: from } = needTodo(item);
   // Where the keyboard goes once the ask is gone: the next one's To-do, else the new to-do.
@@ -2557,10 +2729,10 @@ function flashInView(el: HTMLElement, focus: HTMLElement | null): void {
 /** A stable identity for a control across repaints: its owners' ids plus its own role. */
 function focusKey(node: HTMLElement): string | null {
   if (!node.matches('button, textarea, input, a[href], [role="button"][tabindex]')) return null;
-  const owners = ["data-task", "data-pr", "data-session", "data-request", "data-todo", "data-meet"].map(
+  const owners = ["data-task", "data-pr", "data-session", "data-request", "data-todo", "data-meet", "data-s360", "data-s360-need"].map(
     (attr) => node.closest<HTMLElement>(`[${attr}]`)?.getAttribute(attr) || ""
   );
-  const own = ["data-draft", "data-act", "data-decide", "data-choice", "data-repos", "data-ship", "data-ship-ack", "data-jump", "data-role", "data-day", "data-index"].map((attr) => node.getAttribute(attr) ?? "");
+  const own = ["data-draft", "data-act", "data-decide", "data-choice", "data-repos", "data-ship", "data-ship-ack", "data-jump", "data-role", "data-day", "data-group", "data-index"].map((attr) => node.getAttribute(attr) ?? "");
   return [...owners, ...own, node.tagName].join("|");
 }
 
@@ -2893,6 +3065,32 @@ function onClick(e: MouseEvent): void {
       renderComms(true);
       return focusDetail();
     }
+    case "s360-select": {
+      const key = node.closest<HTMLElement>("[data-s360]")?.dataset.s360;
+      if (!key) return;
+      selectS360(key, s360View.items);
+      ldDetail = true;
+      renderComms(true);
+      return focusDetail();
+    }
+    case "s360-group":
+      toggleS360Group(node.dataset.group || "");
+      return renderComms(true);
+    case "s360-open": {
+      const key = node.dataset.s360;
+      if (key) selectS360(key, s360View.items);
+      if (isFlat()) setSheet(false);
+      return openDrawer({ kind: "s360" }, !!key);
+    }
+    case "s360-scan":
+      return void scanS360Now(node);
+    case "s360-dismiss":
+      return dismissS360Item(node);
+    case "need-s360": {
+      const key = node.closest<HTMLElement>("[data-s360-need]")?.dataset.s360Need;
+      if (key) showS360Need(key);
+      return;
+    }
     case "comms-open":
     case "meet-open": {
       const comms = node.dataset.act === "comms-open";
@@ -2934,6 +3132,8 @@ function onClick(e: MouseEvent): void {
     case "need-dismiss": {
       const commsKey = node.closest<HTMLElement>("[data-comms-need]")?.dataset.commsNeed;
       if (commsKey) return void dismissCommsNeed(commsKey);
+      const s360Key = node.closest<HTMLElement>("[data-s360-need]")?.dataset.s360Need;
+      if (s360Key) return void dismissS360Need(s360Key);
       const ask = askOf(node);
       if (ask) void dismissAsk(ask);
       return;
@@ -2953,6 +3153,7 @@ function onClick(e: MouseEvent): void {
     case "devis-settings":
     case "meetings-settings":
     case "comms-settings":
+    case "s360-settings":
       closeDrawer(false);
       return hooks.openSettings();
     case "comms-scan":

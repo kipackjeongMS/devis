@@ -10,6 +10,7 @@ import { el } from "./dom.js";
 import { esc } from "./util.js";
 import { icon } from "./icons.js";
 import { teamsCard } from "./settingsTeams.js";
+import { s360Card } from "./settingsS360.js";
 import { devisCard } from "./settingsDevis.js";
 import type { CodebaseRepo, Config, NeedsIn } from "./types.js";
 
@@ -312,6 +313,7 @@ export function jarvisSettings(config: Config, orgs: () => string[], card: CardF
   paintList();
   void loadStatus();
   section.appendChild(teamsCard(card));
+  section.appendChild(s360Card(card));
   section.appendChild(devisCard(card));
 
   return {

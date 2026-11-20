@@ -103,6 +103,23 @@ const iso = (min) => new Date(NOW + min * 60_000).toISOString();
     const [chat] = m.needsItems([], [], [{ ...need, key: "need:chat:1", source: "chat", kind: "oneOnOne", title: "Priya Shah", people: ["Priya Shah"] }]);
     assert.equal(plain(n.noticeLine(chat)), "Priya Shah is waiting on you in a 1:1 chat.");
     assert.equal(n.noticeLabel(chat), "your chat with Priya Shah");
+
+    const item = {
+        key: "0123456789abcdef", kpiId: "kpi-1", itemId: "item-1", targetType: "Service", targetId: "svc", title: "Rotate keys", sla: "OutOfSla",
+        due: "2026-10-20T00:00:00.000Z", eta: "", status: "On it", statusBy: "kj", assignedTo: "dana", owner: "kj", service: "AppConfig", kind: "", severity: "",
+        url: "https://aka.ms/guide", adoUrl: "", link: "https://s360.msftcloudes.com/blades/security?x=1", published: "", updated: "", roles: ["owner"],
+        firstSeen: iso(-60), lastSeen: iso(-1), resolvedAt: null, need: true, dismissed: false,
+    };
+    const s360 = (over) => m.needsItems([], [], [], [{ key: "need:s360:0123456789abcdef", at: iso(-60), item: { ...item, ...over } }])[0];
+    assert.equal(plain(n.noticeLine(s360({}))), "The S360 item Rotate keys is out of SLA.");
+    assert.equal(plain(n.noticeLine(s360({ sla: "ApproachingSla" }))), "The S360 item Rotate keys is approaching its SLA.");
+    assert.equal(plain(n.noticeLine(s360({ sla: "InSla" }))), "S360 has a new item for you: Rotate keys.");
+    assert.equal(n.noticeLabel(s360({})), "the S360 item “Rotate keys”");
+    const s360Ctx = n.noticeContext(s360({}));
+    assert.match(s360Ctx, /S360 action item "Rotate keys" \(KPI kpi-1, item item-1\), on Service AppConfig\./, "Devis gets what and where");
+    assert.match(s360Ctx, /SLA: OutOfSla, due 2026-10-20T00:00:00.000Z\. You're the action owner \(assigned to dana\); action owner kj\./);
+    assert.match(s360Ctx, /Latest status \(kj\): On it/);
+    assert.match(s360Ctx, /In S360: https:\/\/s360\.msftcloudes\.com\/blades\/security\?x=1\nGuidance: https:\/\/aka\.ms\/guide$/, "and its links, none empty");
 }
 
 // ---- when ----
