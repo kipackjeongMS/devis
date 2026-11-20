@@ -5,9 +5,6 @@ colors:
   ink: "#050505"
   ink-2: "#101010"
   ink-3: "#1b1b1b"
-  pool-key: "rgba(255, 255, 255, .09)"
-  pool-rim: "rgba(255, 255, 255, .05)"
-  hud-line: "rgba(255, 255, 255, .035)"
   glass: "rgba(16, 16, 16, .6)"
   glass-2: "rgba(42, 42, 42, .48)"
   glass-3: "rgba(56, 56, 56, .56)"
@@ -195,8 +192,8 @@ In the desktop shell, a Windows 11 Mica backdrop (22H2 and later) tints the fiel
 The living reference is `web/design-system.html`. It renders the real `web/style.css`, so open it from the preview server to check any component. It is excluded from the packaged app.
 
 **Key Characteristics:**
-- Floating glass panes separated by 8px gutters of lit field, never edge-to-edge chrome.
-- A faint white light pool top-left and a dimmer one bottom-right, with a faint 32px HUD grid fading out from the top-left. The field, the glass and the text carry no hue.
+- Floating glass panes separated by 8px gutters of field, never edge-to-edge chrome.
+- A solid near-black field with no gradient or grid. The field, the glass and the text carry no hue.
 - Luminous hairline edges with a brighter top edge and an inner top sheen, so every pane catches light from above.
 - One emissive cyan, with glow reserved for selection, focus, running state and the primary command.
 - Cascadia Mono for every readout: IDs, branches, paths, build numbers and zoom levels.
@@ -210,7 +207,7 @@ The living reference is `web/design-system.html`. It renders the real `web/style
 
 ### Neutral
 
-- **The field.** `ink` is a neutral near-black base, lit by the white `pool-key` and `pool-rim` and overlaid with the `hud-line` grid. Over the Mica backdrop the ink turns 64% opaque so the wallpaper tint comes through it.
+- **The field.** `ink` is a solid neutral near-black, with no light pools or grid over it. Over the Mica backdrop the ink turns 64% opaque so the wallpaper tint comes through it.
 - **Glass.** Tints step up in light: `well` (recessed: diff bodies, code, diagram frames, the pipeline canvas) → `glass` (panes, 60%) → `glass-2` and `glass-3` (raised surfaces inside panes) → `glass-head` (frosted sticky heads, near-opaque so diagrams and code don't ghost through) → `glass-float` (flyouts, menus, toasts, dialogs; near-opaque so they stay legible over anything).
 - **Edges.** `edge` is the luminous hairline around glass; `edge-top` is its brighter top edge. `divider` separates content inside a pane. `gloss` is a faint white wash across the top of each pane, so black glass still catches light.
 - **Text.** Neutral whites: `text-1` for primary text, `text-2` for secondary, `text-3` for captions and meta, `text-off` for disabled.
@@ -257,7 +254,7 @@ Every font size comes from one ramp of role tokens in `web/style.css`: `--fs-dis
 
 ## Elevation & Depth
 
-Depth is a stack of light, not a stack of grays: the lit field → floating glass panes → raised glass inside panes → frosted heads → frosted floats → dialogs over smoke. Each tier is more opaque than the one below it. Panes read as glass through their tint, edge and sheen; blur is reserved for the small chrome that sits over content.
+Depth is a stack of light, not a stack of grays: the ink field → floating glass panes → raised glass inside panes → frosted heads → frosted floats → dialogs over smoke. Each tier is more opaque than the one below it. Panes read as glass through their tint, edge and sheen; blur is reserved for the small chrome that sits over content.
 
 - **Panes** are tinted, not blurred (`glass`), with the `edge` hairline, the `edge-top` top edge, an inner top sheen (`inset 0 1px 0 rgba(255,255,255,.08)`), the `gloss` wash and a soft drop shadow. A pane-sized blur re-blurs the field on every scroll frame and costs about half the frame rate.
 - **Heads** (the detail head and other sticky heads) frost the pane's own content as it scrolls under them (`blur(24px) saturate(160%)`).
@@ -283,7 +280,7 @@ Motion uses the decelerate curve `cubic-bezier(0,0,0,1)` at 83, 167, 250 and 333
 
 **The Near-Opaque Float Rule.** Anything that opens over content (heads, flyouts, menus, dialogs) is at least 84% opaque. Menus inside the frosted detail head can't blur the content under them, so their opacity is what keeps them legible.
 
-**The Fallback Rule.** Glass must degrade to something solid and clear. Under `prefers-reduced-transparency`, the glass tokens turn opaque, gloss and blur are off, the HUD grid is hidden and the field is plain ink. In forced-colors mode, blur, the field effects and pane shadows are removed and system colors take over. Without a window backdrop, the field renders on solid ink.
+**The Fallback Rule.** Glass must degrade to something solid and clear. Under `prefers-reduced-transparency`, the glass tokens turn opaque, gloss and blur are off and the field is plain ink. In forced-colors mode, blur, the field and pane shadows are removed and system colors take over. Without a window backdrop, the field renders on solid ink.
 
 **The Lean Rule.** Without GPU compositing (a virtual machine, a remote desktop) Chromium draws every frame on the CPU, so the app draws lean (`html.lean`): nothing frosts (heads and floats turn opaque instead of blurring), and dialogs and the task sheet fade in over 83ms instead of scaling, since a scaling sheet is redrawn whole every frame. The desktop shell picks it from the window's GPU status (`?render=lean`; `ADO_PR_OPS_RENDER=lean|full` overrides it); a browser asks WebGL whether it renders in software. Measured on such a machine, every view then holds the display's full rate, the task sheet included.
 
@@ -910,7 +907,7 @@ The app runs all day, so everything it holds has a limit.
 - Focus rings are a 2px `focus` (pale cyan) outline at a 1px offset, inset on full-width rows and tabs. They are never removed.
 - Every icon-only control has an `aria-label`.
 - The section tabs are buttons in a labelled `nav`, and the active one carries `aria-current`. The reviewers are a labelled `list`.
-- In forced-colors mode, blur, the field effects and pane shadows are removed; selection bars and tab underlines use `Highlight`; the selected block gets a `Highlight` outline; and the severity, unread and status dots keep their colors.
+- In forced-colors mode, blur, the field and pane shadows are removed; selection bars and tab underlines use `Highlight`; the selected block gets a `Highlight` outline; and the severity, unread and status dots keep their colors.
 - Under reduced transparency, every glass tier turns opaque and blur is off (see the Fallback Rule).
 
 ## Do's and Don'ts

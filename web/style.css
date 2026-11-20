@@ -1,7 +1,7 @@
 /* Devis — black glass review console (the "Jarvis" heads-up look).
-   Depth: black ink field (faint white light pools, faint HUD grid; the Windows
-   backdrop shows through it) -> floating glass panes (queue, reading pane, catalog,
-   chain) -> raised glass inside panes -> frosted flyouts and dialogs. Light is
+   Depth: solid black ink field (the Windows backdrop shows through it) ->
+   floating glass panes (queue, reading pane, catalog, chain) -> raised glass
+   inside panes -> frosted flyouts and dialogs. Light is
    the signal: one emissive cyan, spent on selection, focus, running state and
    the primary command. See DESIGN.md for the system and web/design-system.html
    for the living reference. */
@@ -9,14 +9,11 @@
 :root {
   color-scheme: dark;
 
-  /* Field: the lit ink every pane floats over */
+  /* Field: the solid ink every pane floats over */
   --ink: #050505;
   --ink-2: #101010;
   --ink-3: #1b1b1b;
   --field-base: var(--ink);
-  --pool-key: rgba(255, 255, 255, .09);
-  --pool-rim: rgba(255, 255, 255, .05);
-  --hud-line: rgba(255, 255, 255, .035);
 
   /* Glass: translucent tints. Panes tint only; blur (--blur*) is reserved for small sticky/floating chrome. */
   --glass: rgba(16, 16, 16, .6);
@@ -140,34 +137,21 @@ html, body {
 html { background: var(--ink); }
 body { display: flex; flex-direction: column; background: transparent; }
 
-/* The field: light pools over ink, plus a HUD grid that fades out from the top-left.
-   Under html.glass (Windows acrylic) the ink turns translucent so the desktop tints through. */
-body::before,
-body::after {
+/* The field: solid ink, no gradient or grid.
+   Under html.glass (Windows Mica or acrylic) the ink turns translucent so the desktop tints through. */
+body::before {
   content: "";
   position: fixed;
   inset: 0;
   z-index: -1;
   pointer-events: none;
-}
-body::before {
-  background:
-    radial-gradient(70vw 60vh at 6% -8%, var(--pool-key), transparent 70%),
-    radial-gradient(60vw 60vh at 102% 108%, var(--pool-rim), transparent 70%),
-    var(--field-base);
-}
-body::after {
-  background:
-    linear-gradient(var(--hud-line) 1px, transparent 1px) 0 0 / 32px 32px,
-    linear-gradient(90deg, var(--hud-line) 1px, transparent 1px) 0 0 / 32px 32px;
-  -webkit-mask-image: radial-gradient(90vw 80vh at 0 0, #000, transparent 85%);
-  mask-image: radial-gradient(90vw 80vh at 0 0, #000, transparent 85%);
+  background: var(--field-base);
 }
 html.glass { --field-base: rgba(0, 0, 0, .64); background: transparent; }
 
 /* One glass recipe for every floating pane. Tinted, not frosted: a full-pane
    backdrop-filter re-blurs the whole field on every scroll frame, and the field
-   behind the panes is a static gradient, so the blur bought nothing visible. */
+   behind the panes is a solid fill, so the blur bought nothing visible. */
 .glass-pane,
 .list-pane,
 .reading-pane,
@@ -6979,7 +6963,6 @@ body.layout-stacked { --pane-pad: 16px; }
 
 @media (forced-colors: active) {
   body::before,
-  body::after,
   .reading-empty-mark::before,
   .reading-empty-mark::after { display: none; }
   * { -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
@@ -7056,7 +7039,6 @@ html.lean .jv-layer.anim .jv-scrim { animation: fade-in var(--t-fast) linear; }
     --gloss: none;
   }
   html.glass { --field-base: var(--ink); background: var(--ink); }
-  body::after { display: none; }
   .chain-node,
   .chain-node:hover,
   .chain-node.dragging { background: #1c1c1c; -webkit-backdrop-filter: none; backdrop-filter: none; }
