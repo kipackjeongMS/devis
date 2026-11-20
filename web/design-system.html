@@ -53,15 +53,14 @@
 
   /* The composed app: panes sit on a field, never inside another pane. */
   .ds-app { display: flex; flex-direction: column; height: 620px; margin-top: 32px; overflow: hidden; border: 1px solid var(--edge); border-radius: var(--r-pane);
-    background: linear-gradient(var(--hud-line) 1px, transparent 1px) 0 0 / 32px 32px, linear-gradient(90deg, var(--hud-line) 1px, transparent 1px) 0 0 / 32px 32px,
-      radial-gradient(70% 60% at 6% -8%, var(--pool-key), transparent 70%), radial-gradient(60% 60% at 102% 108%, var(--pool-rim), transparent 70%), var(--ink);
+    background: var(--ink);
     box-shadow: var(--shadow-dialog); }
   .ds-app .titlebar { padding-right: 8px; }
   .ds-app .workspace { min-height: 0; }
 
   /* Foundations */
   .ds-depth { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; padding: 24px; border-radius: var(--r-pane);
-    background: repeating-linear-gradient(135deg, rgba(76, 214, 255, .1) 0 2px, transparent 2px 14px), radial-gradient(80% 90% at 0 0, var(--pool-key), transparent 70%), var(--ink); }
+    background: repeating-linear-gradient(135deg, rgba(76, 214, 255, .1) 0 2px, transparent 2px 14px), var(--ink); }
   .ds-tier { display: flex; min-height: 136px; flex-direction: column; justify-content: flex-end; gap: 2px; padding: 12px; border: 1px solid var(--edge); border-top-color: var(--edge-top); border-radius: var(--r-surface); }
   .ds-tier strong { font-size: var(--fs-label); line-height: 20px; }
   .ds-tier small { color: var(--text-3); font: var(--fs-caption)/var(--lh-caption) var(--mono); }
@@ -111,7 +110,7 @@
   .ds-float { position: relative !important; inset: auto !important; top: auto !important; left: auto !important; transform: none !important; animation: none !important; }
   .ds-floats { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 24px; }
   .ds-dialog-stage { position: relative; min-height: 480px; overflow: hidden; border: 1px solid var(--edge); border-radius: var(--r-pane);
-    background: repeating-linear-gradient(135deg, rgba(76, 214, 255, .08) 0 2px, transparent 2px 14px), radial-gradient(70% 70% at 0 0, var(--pool-key), transparent 70%), var(--ink); }
+    background: repeating-linear-gradient(135deg, rgba(76, 214, 255, .08) 0 2px, transparent 2px 14px), var(--ink); }
   .ds-dialog-stage .ask-overlay { position: relative; inset: auto; z-index: 1; min-height: 480px; animation: none; }
   .ds-dialog-stage .ds-ghost { position: absolute; inset: 0; }
   .ds-ghost { padding: 32px; color: var(--text-2); font-size: var(--fs-body); line-height: var(--lh-body); }
@@ -242,7 +241,7 @@
     <section class="ds-hero ds-chapter" id="overview">
       <h1>Devis design system</h1>
       <p class="ds-hero-sub">The Heads-Up Console</p>
-      <p class="ds-lede">Smoked glass panes hover over a lit ink field, and light marks what the machine is attending to: the open pull request, the focused control, a running pipeline. Every specimen on this page is built from the app's own stylesheet (<code>web/style.css</code>) and the markup the app renders, so it cannot drift. <code>DESIGN.md</code> is the written spec; this page is the rendered one.</p>
+      <p class="ds-lede">Smoked glass panes hover over a solid ink field, and light marks what the machine is attending to: the open pull request, the focused control, a running pipeline. Every specimen on this page is built from the app's own stylesheet (<code>web/style.css</code>) and the markup the app renders, so it cannot drift. <code>DESIGN.md</code> is the written spec; this page is the rendered one.</p>
       <dl class="ds-rules">
         <div><dt>One Light</dt><dd>Only cyan glows. If two unrelated things on screen are cyan, one of them is wrong.</dd></div>
         <div><dt>Color Is Evidence</dt><dd>Hue appears only where it carries meaning: a vote, a status, a severity or a diff line.</dd></div>
@@ -354,7 +353,7 @@
         <h3>Depth is a stack of light</h3>
         <p class="ds-text">Each tier is more opaque than the one below it. Panes are tinted, not blurred; blur is spent only on heads and floats. The striped backdrop shows how much of the field each tier lets through.</p>
         <div class="ds-depth">
-          <div class="ds-tier t-field"><strong>Field</strong><small>--ink + pools</small></div>
+          <div class="ds-tier t-field"><strong>Field</strong><small>--ink</small></div>
           <div class="ds-tier t-pane"><strong>Pane</strong><small>--glass</small></div>
           <div class="ds-tier t-raised"><strong>Raised</strong><small>--glass-2</small></div>
           <div class="ds-tier t-head"><strong>Head</strong><small>--glass-head</small></div>
@@ -376,7 +375,7 @@
         <h3>Color</h3>
         <p class="ds-text">One emissive cyan is the only brand color. Glass, edges and text stay neutral black, gray and white; hue is evidence. Chips sit over a checkerboard so translucent tokens show their alpha.</p>
         <div class="glass-pane ds-stage">
-          <div class="ds-block"><p class="ds-cap">Field and glass</p><div class="ds-swatches" data-swatches="ink ink-2 ink-3 pool-key pool-rim hud-line well glass glass-2 glass-3 glass-head glass-float card card-2"></div></div>
+          <div class="ds-block"><p class="ds-cap">Field and glass</p><div class="ds-swatches" data-swatches="ink ink-2 ink-3 well glass glass-2 glass-3 glass-head glass-float card card-2"></div></div>
           <div class="ds-block"><p class="ds-cap">Fills and strokes</p><div class="ds-swatches" data-swatches="fill-hover fill-press fill-selected control control-hover control-press input-active edge edge-top divider stroke-card stroke-control stroke-control-2 stroke-input"></div></div>
           <div class="ds-block"><p class="ds-cap">Text</p><div class="ds-swatches" data-swatches="text-1 text-2 text-3 text-off"></div></div>
           <div class="ds-block"><p class="ds-cap">Accent</p><div class="ds-swatches" data-swatches="accent accent-hover accent-press accent-text accent-tint accent-tint-2 accent-glow on-accent focus"></div></div>
@@ -1551,7 +1550,7 @@
               <tr><td>Navigation states are exposed</td><td>Section tabs are buttons in a labelled <code>nav</code> with <code>aria-current</code>; folds use <code>aria-expanded</code>, toggles use <code>aria-pressed</code>.</td></tr>
               <tr><td>Status is written out</td><td>Blocks, run chips, badges and the inspector always say the status. Tone alone never carries meaning.</td></tr>
               <tr><td>Progress is announced</td><td>A visually hidden live region announces chain run progress.</td></tr>
-              <tr><td>Forced colors</td><td>Blur, field effects and pane shadows drop; selection bars, tab underlines and the selected block use <code>Highlight</code>; status dots keep their colors.</td></tr>
+              <tr><td>Forced colors</td><td>Blur, the field and pane shadows drop; selection bars, tab underlines and the selected block use <code>Highlight</code>; status dots keep their colors.</td></tr>
               <tr><td>Reduced transparency</td><td>Every glass tier turns opaque and blur is off.</td></tr>
               <tr><td>Reduced motion</td><td>Flowing arrows freeze and the running bar becomes a static full-width line.</td></tr>
             </tbody>
