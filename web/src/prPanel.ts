@@ -10,7 +10,7 @@ import { reviewPhase } from "./prReview.js";
 import { reviewStateKey } from "./reviewKey.js";
 import { loadPrRecency } from "./prRecency.js";
 import { inboxItems } from "./inboxPanel.js";
-import { ago, agoPhrase, askFor, askerWhere, askersLine, copilotReviewControl, inService, type CommsAsk } from "./jarvisModel.js";
+import { ago, agoPhrase, askFor, askerWhere, askersLine, copilotReviewControl, inService, prTodoKey, type CommsAsk } from "./jarvisModel.js";
 import {
   PR_FILTERS,
   REVIEW_PAGE,
@@ -48,6 +48,8 @@ export interface PrPanelContext {
   asks: CommsAsk[] | undefined;
   /** PRs whose Copilot review is being queued, by identity. */
   queuing: ReadonlySet<string>;
+  /** The keys of the open to-dos made from something (openTodoKeys): a PR's marks its row. */
+  todoKeys: ReadonlySet<string>;
 }
 
 export interface PrPanelView {
@@ -330,6 +332,9 @@ function askLink(ask: CommsAsk | undefined): string {
 
 const chip = (label: string, tone: string): string => `<span class="rr-st tone-${tone}">${esc(label)}</span>`;
 const prId = (pr: PR): string => `<span class="pp-id"><span class="pp-num">#${esc(String(pr.id))}</span> · ${esc(pr.repo)}</span>`;
+/** "In to-dos" on a PR that has an open to-do made from it. */
+const todoChip = (pr: PR, ctx: PrPanelContext): string =>
+  ctx.todoKeys.has(prTodoKey(pr)) ? `<span class="rr-st tone-idle" title="In your to-dos. It ticks itself once the PR is completed or abandoned.">In to-dos</span>` : "";
 
 function row(pr: PR, ctx: PrPanelContext, dot: string, at: string, line: string): string {
   const id = prIdentity(pr);
@@ -357,6 +362,7 @@ function mineRowHtml(r: MineRow, ctx: PrPanelContext): string {
   const parts = [
     r.attention ? chip(r.label, ATTENTION_TONE[r.tone] || "idle") : r.pr.isDraft ? chip("Draft", "off") : "",
     control.chip ? chip(control.chip.label, control.chip.tone) : "",
+    todoChip(r.pr, ctx),
     prId(r.pr),
   ];
   const dot = r.attention ? MINE_DOT[r.attention] : r.pr.isDraft ? "off" : "idle";
@@ -370,7 +376,7 @@ function reviewRowHtml(r: ReviewRow, ctx: PrPanelContext): string {
   const control = copilotReviewControl(r.phase);
   // The Copilot chip says the same as a Copilot reason, so one of them is enough.
   const status = tone ? chip(reasonText(r.reason.kind, ""), tone) : `${control.chip ? chip(control.chip.label, control.chip.tone) : ""}<span>${esc(reasonText(r.reason.kind, ""))}</span>`;
-  const parts = [askLink(askFor(ctx.asks, r.pr)), status, r.pr.isDraft ? chip("Draft", "off") : "", prId(r.pr)];
+  const parts = [askLink(askFor(ctx.asks, r.pr)), status, r.pr.isDraft ? chip("Draft", "off") : "", todoChip(r.pr, ctx), prId(r.pr)];
   return row(r.pr, ctx, r.asked ? "run" : "idle", r.reason.at, parts.join(""));
 }
 

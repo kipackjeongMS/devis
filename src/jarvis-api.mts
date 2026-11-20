@@ -23,7 +23,8 @@ import {
 } from "./jarvis-store.mjs";
 import { listProjects, listRepositories } from "./ado.mjs";
 import { codebaseDir, codebaseStatus, syncCodebase, worktreeChanges, type WorktreeChanges } from "./jarvis-codebase.mjs";
-import { createTaskFromInput, previewWorkItem, refreshTaskWorkItems, rememberedPrs, startOfToday, startTaskFromTodos, suggestWorkItems, todaySnapshot } from "./jarvis-today.mjs";
+import { createTaskFromInput, previewWorkItem, refreshTaskWorkItems, rememberedPrList, rememberedPrs, startOfToday, startTaskFromTodos, suggestWorkItems, todaySnapshot } from "./jarvis-today.mjs";
+import { settlePrTodosNow } from "./todo-prs.mjs";
 import {
     confirmRepos,
     decidePermission,
@@ -201,6 +202,8 @@ export async function handleJarvisApi(req: IncomingMessage, res: ServerResponse,
             ];
             const s360Open = (s360?.open || []).map((key) => ({ key }));
             await settleNeedTodos(needKeys(snapshot.tasks, comms || [], needs || [], s360Open), skip);
+            // A PR's to-do ticks itself once the PR closes; ADO may be asked, so the next poll shows it.
+            void settlePrTodosNow(rememberedPrList()).catch((error: Error) => console.warn(`[jarvis] PR to-dos not settled: ${error.message}`));
             const todos = await listTodos();
             // The to-dos ride along with every poll; the quick note only says when it changed.
             return sendJson(res, 200, {

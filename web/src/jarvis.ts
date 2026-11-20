@@ -67,7 +67,7 @@ import { ALL_SECTIONS, PANEL_NAME, isPanelId, isSection as isPanelSection, setNe
 import { afterFold, hideGrid, initGrid, isFlat, keyMove, relayout } from "./workspaceGrid.js";
 import { meetingDetailHtml, meetingsHtml, meetingsRail, meetingsSig, meetingsSub, pruneMeetingsState, selectMeeting, toggleDay, toggleNote, type MeetingsView } from "./meetingsView.js";
 import { pruneS360State, s360DetailHtml, s360ListHtml, s360Rail, s360Sig, s360Sub, selectS360, toggleS360Group, type S360View } from "./s360View.js";
-import { s360Date, s360Roles, slaChip, type S360Item, type S360Need, type S360Status } from "./s360Model.js";
+import { s360Date, s360Roles, s360TodoKey, slaChip, type S360Item, type S360Need, type S360Status } from "./s360Model.js";
 import {
   communicationDetailHtml,
   communicationHtml,
@@ -105,6 +105,10 @@ import {
   needsItems,
   needTodo,
   oneLine,
+  openTodoKeys,
+  prTodo,
+  prTodoTargets,
+  s360Todo,
   commsNeedTitle,
   commsNeedWhere,
   commsNeedWho,
@@ -140,6 +144,7 @@ import {
   type QuickNote,
   type SectionId,
   type Todo,
+  type TodoSource,
   type TodayData,
   type TodayTask,
   type TodayWorker,
@@ -447,6 +452,7 @@ export function showJarvis(h: JarvisHooks): void {
   void loadMeetings();
   loadCommunication();
   void loadS360();
+  openPendingS360();
 }
 
 export function hideJarvis(): void {
@@ -473,6 +479,37 @@ function openPendingTask(): void {
   pendingTask = null;
   if (data.tasks.some((t) => t.id === p.taskId)) openDrawer({ kind: "task", taskId: p.taskId, tab: p.tab });
   else toast("That task isn't on the board anymore: it was done before today, or removed.", "err");
+}
+
+/** An S360 item to show once the Workspace is on screen (asked for from a to-do, maybe in the To-dos window). */
+let pendingS360: string | null = null;
+
+/** Show an S360 item in the S360 drawer, selected and in view. */
+export function openS360Item(key: string): void {
+  pendingS360 = key;
+  openPendingS360();
+}
+
+function openPendingS360(): void {
+  const key = pendingS360;
+  if (!key || !root || !visible) return;
+  pendingS360 = null;
+  selectS360(key, s360View.items);
+  if (isFlat()) setSheet(false);
+  openDrawer({ kind: "s360" }, true);
+  const show = (): void => {
+    if (drawer?.kind !== "s360") return;
+    if (!s360View.items?.some((i) => i.key === key)) {
+      if (!s360View.error && s360View.status?.enabled !== false) toast("That item isn't in S360's list anymore.", "err");
+      return;
+    }
+    // Again now the items are in: it opens the item's group, which may be folded.
+    selectS360(key, s360View.items);
+    renderComms(true);
+    drawerBody.querySelector<HTMLElement>(`.ld-list [data-s360="${CSS.escape(key)}"]`)?.scrollIntoView({ block: "nearest" });
+  };
+  if (s360View.items) show();
+  else void loadS360().then(show);
 }
 
 // Closing the window mid-edit: the service outlives the window, so a keepalive request still lands.
@@ -686,8 +723,14 @@ function mount(): void {
       if (data) data.todos = list;
     },
     reload: () => void loadToday(),
-    repaint: () => renderDay(true),
+    // The PR list and S360 say which of theirs are in the to-dos, so they follow a change too.
+    repaint: () => {
+      renderDay(true);
+      renderPrs();
+      renderComms();
+    },
     openTask: (id) => openTaskById(id),
+    openS360: (key) => openS360Item(key),
     taskTitle: (id) => data?.tasks.find((t) => t.id === id)?.title ?? null,
     view: () => ({ filter: "all", query: "" }),
     onSelecting: (on) => todosSelect.setAttribute("aria-pressed", String(on)),
@@ -1570,6 +1613,7 @@ function renderPrs(force = false): void {
     loaded: prsLoaded || state.prs.length > 0,
     asks: data?.comms?.asks,
     queuing,
+    todoKeys: openTodoKeys(data?.todos),
   });
   // The HTML carries every age and state on screen, so it's the panel's signature.
   if (!force && view.html === prsSig) return;
@@ -2377,6 +2421,70 @@ async function needToTodo(button: HTMLElement): Promise<void> {
   );
 }
 
+/**
+ * Add to-dos that remember where they came from (an S360 item, a PR), shown at once. The service
+ * hands back the open one already there rather than a second; Undo takes out only what this added.
+ */
+async function addSourcedTodos(picks: Array<{ text: string; source: TodoSource }>): Promise<void> {
+  if (!data || !picks.length) return;
+  const had = new Set((data.todos || []).map((t) => t.id));
+  const keys = new Set(picks.map((p) => p.source.key));
+  const iso = new Date().toISOString();
+  const placeholders: Todo[] = picks.map((p, i) => ({
+    id: -Date.now() - i,
+    text: p.text,
+    done: false,
+    author: "you",
+    createdAt: iso,
+    updatedAt: iso,
+    doneAt: null,
+    source: p.source,
+    doneNote: null,
+    parentId: null,
+    due: null,
+    priority: 0,
+    taskId: null,
+  }));
+  data.todos = [...(data.todos || []), ...placeholders];
+  renderToday(true);
+  const ok = await todoList.actMany(
+    picks.map((p) => ["/api/jarvis/todos", { text: p.text, source: p.source }]),
+    () => {
+      if (data?.todos) data.todos = data.todos.filter((t) => !placeholders.includes(t));
+    }
+  );
+  renderToday(true);
+  if (!ok) return;
+  const added = (data?.todos || []).filter((t) => !t.done && t.id > 0 && !had.has(t.id) && !!t.source && keys.has(t.source.key));
+  const already = picks.length - added.length;
+  const text = !added.length
+    ? picks.length === 1
+      ? "It's already in your to-dos"
+      : "They're already in your to-dos"
+    : (added.length === 1 ? "Added to your to-dos" : `Added ${added.length} to-dos`) + (already > 0 ? `; ${already} already there` : "");
+  toast(
+    text,
+    "ok",
+    added.length
+      ? {
+          label: "Undo",
+          run: () => void todoList.actMany(added.map((t) => ["/api/jarvis/todos/delete", { id: t.id }])).then(() => renderToday(true)),
+        }
+      : undefined
+  );
+}
+
+/** Make an S360 item a to-do; it ticks itself once S360 closes the item. */
+async function s360ToTodo(item: S360Item, from?: HTMLElement): Promise<void> {
+  const inDetail = !!from?.closest(".ld-detail");
+  await addSourcedTodos([s360Todo(item)]);
+  // The detail's button goes once the item is in the to-dos; keep the keyboard in the detail.
+  if (inDetail && (!document.activeElement || document.activeElement === document.body)) {
+    const detail = drawerBody.querySelector<HTMLElement>(".ld-detail");
+    (detail?.querySelector<HTMLElement>(".ld-acts :is(a[href], button)") ?? detail)?.focus({ preventScroll: true });
+  }
+}
+
 // ---- Today: the quick note ----------------------------------------------------------
 
 const noteValue = (): string => noteDraft ?? note?.text ?? "";
@@ -2838,10 +2946,23 @@ function prMenu(pr: PR, anchor: HTMLElement, point: { x: number; y: number }): v
     { label: "Open in Azure DevOps", icon: "azureDevOps", disabled: !pr.url, run: () => void window.open(pr.url, "_blank", "noopener") },
     { label: "Open in separate window", icon: "panel", run: () => openPrWindow(pr) },
   ];
+  // Like the copy entries: the whole selection when the row is in it.
+  const t = prTodoTargets(pr, selectedPrs(), contextIsSelectedRow(id), data?.todos);
+  if (t.picked.length) {
+    entries.push({
+      label: t.total > 1 ? `Add ${t.picked.length} PRs to to-dos` : "Add to to-dos",
+      hint: t.already ? `${t.already} already in your to-dos` : undefined,
+      icon: "checklist",
+      sepBefore: true,
+      run: () => void addSourcedTodos(t.picked.map(prTodo)),
+    });
+  } else entries.push({ label: t.total > 1 ? "All in your to-dos" : "In your to-dos", icon: "checklist", sepBefore: true, disabled: true, run: () => {} });
+  const copyFrom = entries.length;
   for (const link of linkMenuEntries(pr, selectedPrs(), contextIsSelectedRow(id))) {
     entries.push({
       label: link.label,
       icon: "copy",
+      sepBefore: entries.length === copyFrom,
       run: () => void copyText(link.text).then((ok) => toast(ok ? (link.count > 1 ? `Copied ${link.count} links` : "Copied the link") : "Couldn't copy to the clipboard", ok ? "ok" : "err")),
     });
   }
@@ -2855,11 +2976,48 @@ function prMenu(pr: PR, anchor: HTMLElement, point: { x: number; y: number }): v
   renderPrs(true);
 }
 
+/** An S360 row's context menu: make it a to-do, or open it where it lives. */
+function s360Menu(item: S360Item, anchor: HTMLElement, point: { x: number; y: number }): void {
+  const inTodos = openTodoKeys(data?.todos).has(s360TodoKey(item));
+  const https = (url: string): string => (/^https:\/\//i.test(url) ? url : "");
+  const open = (url: string) => () => void window.open(url, "_blank", "noopener");
+  const entries: ContextMenuEntry[] = [];
+  if (!item.resolvedAt) {
+    entries.push(
+      inTodos
+        ? { label: "In your to-dos", icon: "checklist", disabled: true, run: () => {} }
+        : { label: "Add to to-dos", icon: "checklist", hint: "It ticks itself once S360 closes the item", run: () => void s360ToTodo(item) }
+    );
+  }
+  const link = https(item.link);
+  const guide = https(item.url);
+  const ado = https(item.adoUrl);
+  if (link) entries.push({ label: "Open in S360", icon: "external", run: open(link) });
+  if (guide) entries.push({ label: "Guidance", icon: "file", run: open(guide) });
+  if (ado) entries.push({ label: "Work item", icon: "azureDevOps", run: open(ado) });
+  if (item.need && !inTodos) entries.push({ label: "Dismiss", icon: "dismiss", sepBefore: true, run: () => void dismissS360Need(s360TodoKey(item)) });
+  openContextMenu(point.x, point.y, `S360: ${item.title}`, entries, () => refocusS360(anchor, item.key));
+}
+
+/** Back to the S360 row the menu opened on, found again if a repaint replaced it. */
+function refocusS360(anchor: HTMLElement, key: string): void {
+  const kind = anchor.classList.contains("rr2") ? ".rr2" : ".ld-item";
+  const row = anchor.isConnected ? anchor : root?.querySelector<HTMLElement>(`${kind}[data-s360="${CSS.escape(key)}"]`);
+  row?.focus({ preventScroll: true });
+}
+
 /** Right-click, or Shift+F10 / the Menu key on a focused row: the row's menu. */
 function onContextMenu(e: MouseEvent): void {
   if (inTask(e)) return;
   const target = e.target as HTMLElement;
   if (target.closest("input, textarea, select")) return;
+  const s360Row = target.closest<HTMLElement>(".ld-item[data-s360], .rr2[data-s360]");
+  if (s360Row) {
+    const item = s360View.items?.find((i) => i.key === s360Row.dataset.s360);
+    if (!item) return;
+    e.preventDefault();
+    return s360Menu(item, s360Row, menuPoint(e, s360Row));
+  }
   const rowEl = target.closest<HTMLElement>(".rr[data-pr], .rr[data-task]");
   if (!rowEl) return;
   const anchor = rowEl.querySelector<HTMLElement>(".rr-main");
@@ -3086,6 +3244,12 @@ function onClick(e: MouseEvent): void {
       return void scanS360Now(node);
     case "s360-dismiss":
       return dismissS360Item(node);
+    case "s360-todo": {
+      const key = node.closest<HTMLElement>("[data-s360]")?.dataset.s360;
+      const item = key ? s360View.items?.find((i) => i.key === key) : undefined;
+      if (item) void s360ToTodo(item, node);
+      return;
+    }
     case "need-s360": {
       const key = node.closest<HTMLElement>("[data-s360-need]")?.dataset.s360Need;
       if (key) showS360Need(key);

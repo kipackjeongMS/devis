@@ -10,6 +10,7 @@ import { toast } from "./toast.js";
 import { state } from "./state.js";
 import { openActionDialog } from "./prActions.js";
 import { openContextMenu, menuPoint, type ContextMenuEntry } from "./contextMenu.js";
+import { openPrWindow } from "./prWindow.js";
 import { MODEL_FIELDS, chosenModel, wireModelFields } from "./modelFields.js";
 import { agoPhrase, taskFolderPreview, type Todo } from "./jarvisModel.js";
 import { checkState, contextIsSelected, pruned, ranged, rowClick, toggled, toggledAll } from "./prSelectionModel.js";
@@ -48,6 +49,8 @@ export interface TodoListHost {
   /** Paint the host around the list; it renders the list too. */
   repaint(): void;
   openTask(taskId: string): void;
+  /** Show an S360 item (its key, without need:s360:) in the Workspace's S360 drawer. */
+  openS360?(itemKey: string): void;
   /** A task's title, while the task is still there. */
   taskTitle(taskId: string): string | null;
   view(): { filter: TodoFilter; query: string };
@@ -64,6 +67,8 @@ export interface TodoList {
   render(force?: boolean): void;
   /** Change the to-dos on the server and show the list it answers with. */
   act(path: string, body: unknown, onFail?: () => void): Promise<boolean>;
+  /** The same for several changes, made in turn; a failure stops the rest. */
+  actMany(calls: Array<[string, unknown]>, onFail?: () => void): Promise<boolean>;
   focusTodo(id: number): void;
   setSelecting(on: boolean): void;
   /** Drop selection and editing state for to-dos that are gone. */
@@ -85,6 +90,9 @@ export function onTodosChanged(listener: () => void): () => void {
 }
 
 const announce = (): void => channel?.postMessage({ type: "todos-changed" });
+
+/** The S360 item's key in a to-do's source key (need:s360:<item key>), or "". */
+export const s360ItemKey = (key: string): string => (/^need:s360:[0-9a-f]{16}$/.test(key) ? key.slice("need:s360:".length) : "");
 
 /** Where a to-do from Teams, a meeting, an email or S360 came from, as a link to it. */
 export function todoLinkHtml(src: NonNullable<Todo["source"]>): string {
@@ -350,10 +358,19 @@ export function createTodoList(body: HTMLElement, host: TodoListHost): TodoList 
     if (taskTitle !== null) {
       meta.push(`<button type="button" class="todo-chip todo-task" data-key="task" data-act="todo-task" title="Open ${esc(taskTitle)}, the task started from it">${svg("play")}<span>${esc(taskTitle)}</span></button>`);
     }
-    // From Needs you: the task it's about opens from here; one from Teams or email links to it.
+    // From Needs you: the task it's about opens from here; one from Teams or email links to it. One
+    // from a PR opens the PR's window; one from S360 shows the item in the S360 drawer.
     if (src?.taskId) {
       meta.push(
         `<button type="button" class="todo-src" data-key="src" data-act="todo-open-task" data-src-task="${esc(src.taskId)}" title="Open ${esc(src.taskTitle)}">${svg("checklist")}<span>${esc(src.taskTitle || "the task")}${src.who ? ` · ${esc(src.who)}` : ""}</span></button>`
+      );
+    } else if (src?.pr) {
+      meta.push(
+        `<button type="button" class="todo-src" data-key="src" data-act="todo-open-pr" title="Open PR ${src.pr.id} in its window">${svg("pullRequest")}<span>${esc(src.taskTitle || `PR ${src.pr.id}`)}${src.who ? ` · ${esc(src.who)}` : ""}</span></button>`
+      );
+    } else if (src && host.openS360 && s360ItemKey(src.key)) {
+      meta.push(
+        `<button type="button" class="todo-src" data-key="src" data-act="todo-open-s360" data-src-s360="${esc(s360ItemKey(src.key))}" title="Show the item in S360">${svg("shield")}<span>${esc(src.taskTitle || "S360")}${src.who ? ` · ${esc(src.who)}` : ""}</span></button>`
       );
     } else if (src?.link) meta.push(todoLinkHtml(src));
     const metaHtml = meta.length ? `<span class="todo-meta" data-key="meta">${meta.join("")}</span>` : "";
@@ -717,6 +734,24 @@ export function createTodoList(body: HTMLElement, host: TodoListHost): TodoList 
     requestAnimationFrame(() => dialog.querySelector<HTMLElement>("#td-date")?.focus());
   }
 
+  /** A to-do made from a PR or an S360 item: open it in Devis, or where it lives. */
+  function sourceEntries(t: Todo): ContextMenuEntry[] {
+    const src = t.source;
+    if (!src) return [];
+    const out: ContextMenuEntry[] = [];
+    const link = src.link && /^https:\/\//i.test(src.link) ? src.link : "";
+    const s360 = s360ItemKey(src.key);
+    if (src.pr) {
+      const pr = src.pr;
+      out.push({ label: "Open the PR", hint: `PR ${pr.id}`, icon: "pullRequest", run: () => openPrWindow(pr) });
+      if (link) out.push({ label: "Open in Azure DevOps", icon: "azureDevOps", run: () => void window.open(link, "_blank", "noopener") });
+    } else if (s360) {
+      if (host.openS360) out.push({ label: "Show the S360 item", icon: "shield", run: () => host.openS360!(s360) });
+      if (link) out.push({ label: "Open in S360", icon: "external", run: () => void window.open(link, "_blank", "noopener") });
+    }
+    return out;
+  }
+
   function rowEntries(t: Todo): ContextMenuEntry[] {
     const list = all();
     const out: ContextMenuEntry[] = [];
@@ -727,9 +762,11 @@ export function createTodoList(body: HTMLElement, host: TodoListHost): TodoList 
     }
     const taskTitle = t.taskId ? host.taskTitle(t.taskId) : null;
     const openTask: ContextMenuEntry | null = taskTitle !== null ? { label: "Open its task", hint: taskTitle, icon: "checklist", run: () => host.openTask(t.taskId!) } : null;
+    const fromSource = sourceEntries(t);
     if (t.done) {
       out.push({ label: "Reopen", icon: "reset", sepBefore: out.length > 0, run: () => toggle(t, false) });
       if (openTask) out.push(openTask);
+      out.push(...fromSource);
       out.push({ label: "Delete", icon: "trash", danger: true, sepBefore: true, run: () => remove([t]) });
       return out;
     }
@@ -742,6 +779,7 @@ export function createTodoList(body: HTMLElement, host: TodoListHost): TodoList 
       { label: "Start a task…", icon: "play", sepBefore: true, run: () => openStart([t]) }
     );
     if (openTask) out.push(openTask);
+    out.push(...fromSource);
     const due = dueEntries([t]);
     due[0]!.sepBefore = true;
     out.push(...due);
@@ -960,6 +998,10 @@ export function createTodoList(body: HTMLElement, host: TodoListHost): TodoList 
           return void (t?.taskId && host.openTask(t.taskId));
         case "todo-open-task":
           return void (node.dataset.srcTask && host.openTask(node.dataset.srcTask));
+        case "todo-open-pr":
+          return void (t?.source?.pr && openPrWindow(t.source.pr));
+        case "todo-open-s360":
+          return void (node.dataset.srcS360 && host.openS360?.(node.dataset.srcS360));
         case "todo-show-done":
           showDone = !showDone;
           writePref(DONE_KEY, showDone ? "1" : "0");
@@ -1148,6 +1190,7 @@ export function createTodoList(body: HTMLElement, host: TodoListHost): TodoList 
     },
     render,
     act,
+    actMany: run,
     focusTodo,
     setSelecting,
     prune: () => {

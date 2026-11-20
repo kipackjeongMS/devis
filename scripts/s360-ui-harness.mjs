@@ -1,6 +1,7 @@
 // The Workspace's S360 parts in a hidden Electron window, against a fake API: the rail lists the
 // open items, Needs you shows the ones that need the user, the drawer lists them by SLA with the
-// picked one's detail, and Dismiss, To-do and turning S360 off do what they say.
+// picked one's detail, and Dismiss, To-do, Add to to-dos (the detail's button and a row's right-click),
+// a to-do's chip and turning S360 off do what they say.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -179,11 +180,56 @@ async function inPage() {
     const made = posts.find(([p]) => p === "/api/jarvis/todos")?.[1];
     check("the to-do remembers the need", made?.source?.key === `need:s360:${soon.key}` && made?.source?.link === soon.link);
     check("the to-do says what to do", /^Resolve the S360 item: Raise the TLS floor \(approaching its SLA, due /.test(made?.text || ""));
-    await until("the to-do links to the item in S360", () => $("#rs-b-todos .todo-src")?.getAttribute("href") === soon.link);
+    await until("the to-do's chip points at the item", () => $("#rs-b-todos .todo-src")?.dataset.srcS360 === soon.key && $("#rs-b-todos .todo-src")?.dataset.act === "todo-open-s360");
     await until("the rail says it's in the to-dos", () => /In your to-dos/.test(text(`#rs-b-s360 .rr2[data-s360="${soon.key}"]`)));
     listItem(soon.key)?.click();
     await until("the soon item shows", () => detail()?.dataset.s360 === soon.key);
     check("the detail says it's in the to-dos", /It's in your to-dos/.test(text(".jv-dbody .ld-needs")) && !$('.jv-dbody [data-act="s360-dismiss"]'));
+    check("an item in the to-dos has no Add to to-dos", !$('.jv-dbody [data-act="s360-todo"]'));
+
+    // Add to to-dos from the detail: any open item, not only one under Needs you.
+    const todoPosts = () => posts.filter(([p]) => p === "/api/jarvis/todos").map(([, b]) => b);
+    listItem(fine.key)?.click();
+    await until("the owned item shows again", () => detail()?.dataset.s360 === fine.key);
+    click('.jv-dbody [data-act="s360-todo"]');
+    await until("the detail's to-do is made", () => todoPosts().length === 2);
+    const fromDetail = todoPosts()[1];
+    check("the detail's to-do is the item's", fromDetail?.source?.key === `need:s360:${fine.key}` && fromDetail?.source?.link === fine.link && fromDetail?.source?.who === "S360");
+    check("the detail's to-do says what to do", fromDetail?.text === `Resolve the S360 item: ${fine.title} (due ${new Date(Date.parse(fine.due)).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })})`);
+    await until("the detail says it's in the to-dos now", () => /It's in your to-dos/.test(text(".jv-dbody .ld-needs")) && !$('.jv-dbody [data-act="s360-todo"]'));
+    listItem(closed.key)?.click();
+    await until("the closed item shows again", () => detail()?.dataset.s360 === closed.key);
+    check("a closed item has no Add to to-dos", !$('.jv-dbody [data-act="s360-todo"]'));
+
+    // Right-click an S360 row: its menu, with Add to to-dos while it's not in them.
+    const menuOf = (sel) => {
+        const row = $(sel);
+        check("present to right-click: " + sel, !!row);
+        row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 200, clientY: 200 }));
+        const menu = document.querySelector(".ctx-menu");
+        return menu ? [...menu.querySelectorAll(".detail-menu-item")] : [];
+    };
+    const labelOf = (b) => b.querySelector(".detail-menu-label")?.textContent || "";
+    let entries = menuOf(`#rs-b-s360 .rr2[data-s360="${late.key}"]`);
+    check("the late row's menu", entries.map(labelOf).join() === "Add to to-dos,Open in S360,Guidance,Work item");
+    entries.find((b) => labelOf(b) === "Add to to-dos")?.click();
+    check("choosing closes the menu", !document.querySelector(".ctx-menu"));
+    await until("the row's to-do is made", () => todoPosts().length === 3);
+    check("the row's to-do is the item's", todoPosts()[2]?.source?.key === `need:s360:${late.key}`);
+    await until("the rail says the late one is in the to-dos", () => /In your to-dos/.test(text(`#rs-b-s360 .rr2[data-s360="${late.key}"]`)));
+    entries = menuOf(`.jv-dbody .ld-list .ld-item[data-s360="${soon.key}"]`);
+    const inTodos = entries.find((b) => labelOf(b) === "In your to-dos");
+    check("a row in the to-dos says so, and can't be added again", !!inTodos && inTodos.getAttribute("aria-disabled") === "true" && !entries.some((b) => labelOf(b) === "Add to to-dos"));
+    inTodos?.click();
+    check("the disabled entry does nothing", todoPosts().length === 3 && !!document.querySelector(".ctx-menu"));
+    entries = menuOf(`.jv-dbody .ld-list .ld-item[data-s360="${closed.key}"]`);
+    check("a closed row offers only where it lives", entries.map(labelOf).join() === "Open in S360");
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    check("Esc closes the menu", !document.querySelector(".ctx-menu"));
+
+    // A to-do's chip shows its item in the drawer.
+    click(`#rs-b-todos .todo-src[data-src-s360="${fine.key}"]`);
+    await until("the chip shows its item", () => detail()?.dataset.s360 === fine.key && listItem(fine.key)?.classList.contains("sel"));
 
     // Off: the rail says so, nothing waits under Needs you, and nothing's counted.
     hideJarvis();

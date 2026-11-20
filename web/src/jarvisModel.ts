@@ -5,7 +5,7 @@ import { feedLane, type ReviewPhase } from "./queueModel.js";
 import type { PR } from "./types.js";
 import type { ChatImage } from "./chatImages.js";
 import type { ChatsDigest, MeetingsDigest } from "./commsModel.js";
-import { s360NeedLine, s360Why, type S360Need, type S360Today } from "./s360Model.js";
+import { s360NeedLine, s360TodoKey, s360Why, type S360Item, type S360Need, type S360Today } from "./s360Model.js";
 
 export type WorkerState = "working" | "needsInput" | "turnDone" | "idle" | "stopped" | "error";
 
@@ -789,7 +789,7 @@ export interface Todo {
   createdAt: string;
   updatedAt: string;
   doneAt: string | null;
-  /** The Needs you item it came from, if it did. */
+  /** What it was made from, if anything: a Needs you item, an S360 item or a PR. */
   source?: TodoSource | null;
   /** Why it was checked off when it ticked itself. */
   doneNote?: string | null;
@@ -803,16 +803,31 @@ export interface Todo {
   taskId: string | null;
 }
 
-/** A Needs you item a to-do was made from: the ask's key, and enough to show and open it. */
+/**
+ * What a to-do was made from: a Needs you item (need:…; an S360 item's key is its Needs you key,
+ * need:s360:…, wherever it was added from), a meeting's action item (meet:…) or a PR
+ * (pr:<org, lowercased>:<id>). The key, and enough to show and open it.
+ */
 export interface TodoSource {
   key: string;
-  /** The task it's about; empty for a Teams ask, a chat, an email or an S360 item. */
+  /** The task it's about; empty for a Teams ask, a chat, an email, an S360 item or a PR. */
   taskId: string;
-  /** The task's title, or the PR's for a Teams ask (the chat's, the email's, the S360 item's). */
+  /** The task's title, or the PR's for a Teams ask or a PR (the chat's, the email's, the S360 item's). */
   taskTitle: string;
   who: string;
-  /** Where the ask is: the message in Teams, the email in Outlook, the item in S360. */
+  /** Where it is: the message in Teams, the email in Outlook, the item in S360, the PR in Azure DevOps. */
   link?: string;
+  /** The PR, for a to-do made from one: enough to open it in Devis. */
+  pr?: TodoPr;
+}
+
+/** A PR a to-do was made from (jarvis-notes.mts TodoPr). */
+export interface TodoPr {
+  org: string;
+  /** The project's name. */
+  project: string;
+  repoId: string;
+  id: number;
 }
 
 /** The quick note. Today's poll carries only its version; the text is read when that changes. */
@@ -1205,19 +1220,67 @@ export const oneLine = (text: string, max = 200): string => {
   return t.length > max ? `${t.slice(0, max - 1).trimEnd()}…` : t;
 };
 
+/** The keys of the open to-dos made from something: what Needs you, S360 and the PR list hide or mark. */
+export function openTodoKeys(todos: Todo[] | undefined): Set<string> {
+  return new Set((todos || []).filter((t) => !t.done && t.source?.key).map((t) => t.source!.key));
+}
+
+/**
+ * The to-do an S360 item becomes, from Needs you or the S360 list alike: its key is the item's Needs
+ * you key, so the two give one to-do, and it ticks itself once S360 closes the item.
+ */
+export function s360Todo(item: S360Item): { text: string; source: TodoSource } {
+  const why = s360Why(item);
+  const due = time(item.due) ? new Date(time(item.due)).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "";
+  const state = why === "late" ? "out of SLA" : why === "soon" ? "approaching its SLA" : "";
+  const tail = [state, due ? `due ${due}` : ""].filter(Boolean).join(", ");
+  return {
+    text: `Resolve the S360 item: ${oneLine(item.title, 200)}${tail ? ` (${tail})` : ""}`,
+    source: { key: s360TodoKey(item), taskId: "", taskTitle: oneLine(item.title, 140), who: "S360", ...(item.link ? { link: item.link } : {}) },
+  };
+}
+
+/** A PR's to-do key (jarvis-notes.mts prTodoKey): a PR's id is unique in its organization. */
+export const prTodoKey = (pr: Pick<PR, "org" | "id">): string => `pr:${pr.org.toLowerCase()}:${pr.id}`;
+
+/** The to-do a PR becomes: review it, or follow up on the user's own; it ticks itself once the PR closes. */
+export function prTodo(pr: PR): { text: string; source: TodoSource } {
+  const title = oneLine(pr.title || "", 200);
+  const named = `PR ${pr.id}${title ? `: ${title}` : ""}`;
+  return {
+    text: `${pr.authoredByMe ? "Follow up on" : "Review"} ${named}`,
+    source: {
+      key: prTodoKey(pr),
+      taskId: "",
+      taskTitle: oneLine(named, 140),
+      who: pr.authoredByMe ? "Your PR" : oneLine(`${pr.author || "Someone"}'s PR`, 80),
+      ...(pr.url ? { link: pr.url } : {}),
+      pr: { org: pr.org, project: pr.project, repoId: pr.repoId, id: pr.id },
+    },
+  };
+}
+
+/**
+ * The PRs a right-click's "Add to to-dos" adds: the whole selection when the row clicked is in it,
+ * otherwise just that row. One to-do a PR; those that have an open one already are left out.
+ * `checked` should already be in on-screen order.
+ */
+export function prTodoTargets(target: PR, checked: PR[], targetIsChecked: boolean, todos: Todo[] | undefined): { picked: PR[]; already: number; total: number } {
+  const open = openTodoKeys(todos);
+  const seen = new Set<string>();
+  const all = (targetIsChecked && checked.length > 1 ? checked : [target]).filter((pr) => {
+    const key = prTodoKey(pr);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  const picked = all.filter((pr) => !open.has(prTodoKey(pr)));
+  return { picked, already: all.length - picked.length, total: all.length };
+}
+
 /** The to-do a Needs you item becomes: what to do, in a line, and where it came from. */
 export function needTodo(n: NeedItem): { text: string; source: TodoSource } {
-  if (n.kind === "s360") {
-    const item = n.need.item;
-    const why = s360Why(item);
-    const due = time(item.due) ? new Date(time(item.due)).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "";
-    const state = why === "late" ? "out of SLA" : why === "soon" ? "approaching its SLA" : "";
-    const tail = [state, due ? `due ${due}` : ""].filter(Boolean).join(", ");
-    return {
-      text: `Resolve the S360 item: ${oneLine(item.title, 200)}${tail ? ` (${tail})` : ""}`,
-      source: { key: n.source, taskId: "", taskTitle: oneLine(item.title, 140), who: "S360", ...(item.link ? { link: item.link } : {}) },
-    };
-  }
+  if (n.kind === "s360") return s360Todo(n.need.item);
   if (n.kind === "comms") {
     const c = n.need;
     const ask = oneLine(c.needsYou, 300);

@@ -85,6 +85,10 @@ const list = createTodoList(listEl, {
     // The shell brings the main window forward; a page can't raise another window by itself.
     if (document.documentElement.classList.contains("wco")) window.open("/?focus=main");
   },
+  openS360: (key) => {
+    channel?.postMessage({ type: "open-s360", key });
+    if (document.documentElement.classList.contains("wco")) window.open("/?focus=main");
+  },
   taskTitle: (taskId) => tasks.find((t) => t.id === taskId)?.title ?? null,
   view: () => ({ filter, query }),
   onSelecting: (on) => selectBtn.setAttribute("aria-pressed", String(on)),

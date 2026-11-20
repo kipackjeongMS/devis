@@ -7,7 +7,7 @@
 import { esc } from "./util.js";
 import { icon, type IconName } from "./icons.js";
 import { setupActionHtml, setupStatusHtml } from "./setupActions.js";
-import { s360Date, s360Groups, s360Roles, s360Why, slaChip, type S360Group, type S360Item, type S360Status } from "./s360Model.js";
+import { s360Date, s360Groups, s360Roles, s360TodoKey, s360Why, slaChip, type S360Group, type S360Item, type S360Status } from "./s360Model.js";
 import type { Todo } from "./jarvisModel.js";
 
 export interface S360View {
@@ -54,7 +54,7 @@ export function pruneS360State(items: S360Item[]): void {
 
 /** The to-do made from an item, an open one first. */
 function todoOf(todos: Todo[] | undefined, item: S360Item): Todo | undefined {
-  const key = `need:s360:${item.key}`;
+  const key = s360TodoKey(item);
   const made = (todos || []).filter((t) => t.source?.key === key);
   return made.find((t) => !t.done) || made[0];
 }
@@ -173,7 +173,7 @@ function itemHtml(item: S360Item, pick: string, todos: Todo[] | undefined, now: 
   const due = item.resolvedAt ? `Closed ${s360Date(item.resolvedAt, now)}` : item.due ? `Due ${s360Date(item.due, now)}` : "";
   const line = [chip.text, standing(item, todos), item.service].filter(Boolean).join(" · ");
   return `
-    <button type="button" class="ld-item tone-${chip.tone}${sel ? " sel" : ""}" data-key="s360:${esc(item.key)}" data-s360="${esc(item.key)}" data-act="s360-select" title="${esc(chip.title)}"${sel ? ' aria-current="true"' : ""}>
+    <button type="button" class="ld-item tone-${chip.tone}${sel ? " sel" : ""}" data-key="s360:${esc(item.key)}" data-s360="${esc(item.key)}" data-act="s360-select" aria-keyshortcuts="Shift+F10" title="${esc(chip.title)}"${sel ? ' aria-current="true"' : ""}>
       <span class="ld-item-h"><b class="ell">${esc(item.title)}</b><span class="ld-tm">${esc(due)}</span></span>
       <span class="ld-item-p"><span class="rdot tone-${chip.tone}"></span><span class="ell">${esc(line)}</span></span>
     </button>`;
@@ -234,11 +234,15 @@ export function s360DetailHtml(view: S360View, todos: Todo[] | undefined, now: n
   const link = safe(item.link);
   const guide = safe(item.url);
   const ado = safe(item.adoUrl);
+  const inTodos = !!todo && !todo.done;
   const acts = [
     link ? `<a class="btn sm accent" href="${esc(link)}" target="_blank" rel="noopener" data-act="s360-portal">${svg("external")}<span>Open in S360</span></a>` : "",
+    !item.resolvedAt && !inTodos
+      ? `<button type="button" class="btn sm" data-act="s360-todo" title="It ticks itself once S360 closes the item">${svg("checklist")}<span>Add to to-dos</span></button>`
+      : "",
     guide ? `<a class="btn sm" href="${esc(guide)}" target="_blank" rel="noopener" data-act="s360-guide">${svg("file")}<span>Guidance</span></a>` : "",
     ado ? `<a class="btn sm" href="${esc(ado)}" target="_blank" rel="noopener" data-act="s360-ado">${svg("azureDevOps")}<span>Work item</span></a>` : "",
-    item.need && !(todo && !todo.done)
+    item.need && !inTodos
       ? `<button type="button" class="btn sm ghost" data-act="s360-dismiss" title="It leaves Needs you, and comes back only if it gets worse">${svg("dismiss")}<span>Dismiss</span></button>`
       : "",
   ].join("");
@@ -262,7 +266,7 @@ export function s360Rail(view: S360View, todos: Todo[] | undefined, now: number)
       .map((i) => {
         const chip = slaChip(i, now);
         const line = [chip.text, standing(i, todos), i.service].filter(Boolean).join(" · ");
-        return `<button type="button" class="rr2" data-key="s:${esc(i.key)}" data-s360="${esc(i.key)}" data-act="s360-open" title="${esc(chip.title)}">
+        return `<button type="button" class="rr2" data-key="s:${esc(i.key)}" data-s360="${esc(i.key)}" data-act="s360-open" aria-keyshortcuts="Shift+F10" title="${esc(chip.title)}">
           <span class="rr-h"><b class="ell">${esc(i.title)}</b><span class="rr-tm">${esc(i.due ? s360Date(i.due, now) : "")}</span></span>
           <span class="rr-p"><span class="rdot tone-${chip.tone}"></span><span class="ell">${esc(line)}</span></span>
         </button>`;

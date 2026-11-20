@@ -18,7 +18,7 @@ import { startInboxWatch, refreshInbox } from "./inboxWatch.js";
 import { initReadingPane, closePane, setSoloPane } from "./readingPane.js";
 import { initUiZoom } from "./uiZoom.js";
 import { showPipelines, hidePipelines, reloadPipelines, showChainById } from "./pipelines.js";
-import { showJarvis, hideJarvis, reloadJarvis, resumeNoteDraft, openTaskById } from "./jarvis.js";
+import { showJarvis, hideJarvis, reloadJarvis, resumeNoteDraft, openTaskById, openS360Item } from "./jarvis.js";
 import { preferWorker } from "./jarvisTask.js";
 import { jarvisSettings } from "./settingsJarvis.js";
 import { setupCard } from "./settingsSetup.js";
@@ -617,9 +617,17 @@ if (typeof BroadcastChannel === "function") {
     openTaskById(d.taskId);
     window.focus();
   });
-  // The full To-dos window opens a task here: the one started from a to-do, or the one it came from.
+  // The full To-dos window opens a task here: the one started from a to-do, or the one it came from;
+  // or the S360 item a to-do came from.
   new BroadcastChannel("devis-todos").addEventListener("message", (e: MessageEvent) => {
     const d = e.data;
+    if (d?.type === "open-s360") {
+      if (typeof d.key !== "string" || !/^[0-9a-f]{16}$/.test(d.key)) return;
+      setFeature("jarvis");
+      openS360Item(d.key);
+      window.focus();
+      return;
+    }
     if (d?.type !== "open-task" || typeof d.taskId !== "string" || !d.taskId) return;
     setFeature("jarvis");
     openTaskById(d.taskId);

@@ -20,9 +20,9 @@ export interface Todo {
     createdAt: string;
     updatedAt: string;
     doneAt: string | null;
-    /** The Needs you item it came from, if it did. */
+    /** What it was made from, if anything: a Needs you item, a meeting's action item or a PR. */
     source: TodoSource | null;
-    /** Why it was checked off when it ticked itself ("no longer waiting on you"). */
+    /** Why it was checked off when it ticked itself ("no longer waiting on you", "the PR was completed"). */
     doneNote: string | null;
     /** The to-do it's a subtask of; null for a top-level one. */
     parentId: number | null;
@@ -34,17 +34,31 @@ export interface Todo {
     taskId: string | null;
 }
 
-/** A Needs you item a to-do was made from: the ask's key, and enough to show and open it. */
+/**
+ * What a to-do was made from: a Needs you item (need:…), a meeting's action item (meet:…) or a PR
+ * (pr:…). The key, and enough to show and open it.
+ */
 export interface TodoSource {
     key: string;
-    /** The task it's about; empty for a Teams ask. */
+    /** The task it's about; empty for a Teams ask, an S360 item or a PR. */
     taskId: string;
-    /** The task's title, or the PR's for a Teams ask. */
+    /** The task's title, the PR's for a Teams ask or a PR, or the S360 item's. */
     taskTitle: string;
     /** Who asked: a worker's label, who proposed a validation chain, or who asked in Teams. */
     who: string;
-    /** Where the ask is: the message or chat in Teams, or the email in Outlook on the web. */
+    /** Where it is: the message or chat in Teams, the email in Outlook on the web, the item in S360, or the PR in Azure DevOps. */
     link?: string;
+    /** The PR, for a to-do made from one: enough to open it in Devis. */
+    pr?: TodoPr;
+}
+
+/** A PR a to-do was made from. */
+export interface TodoPr {
+    org: string;
+    /** The project's name. */
+    project: string;
+    repoId: string;
+    id: number;
 }
 
 /** What a to-do that ticked itself says. */
@@ -81,15 +95,65 @@ const TEAMS_LINK = /^https:\/\/teams\.microsoft\.com\/l\/[\w\-.~%/?=&:+@!$'()*,;
 const askLink = (link: unknown): string => (typeof link === "string" && TEAMS_LINK.test(link) ? link : openableOutlookLink(link) || s360Link(link));
 /** A meeting's action item (comms.mts addMeetingTodo): meet:<meeting id>:<its index>. Not a Needs you item, so it never ticks itself. */
 export const MEET_KEY = /^meet:[0-9a-f]{24}:\d{1,2}$/;
+/**
+ * A PR (the PR list's "Add to to-dos"): pr:<org, lowercased>:<PR id>, since a PR's id is unique in
+ * its organization. Not a Needs you item: it ticks itself when the PR is completed or abandoned (todo-prs.mts).
+ */
+export const PR_KEY = /^pr:[a-z0-9][a-z0-9_.-]{0,99}:[1-9]\d{0,9}$/;
+export const prTodoKey = (org: string, id: number): string => `pr:${org.toLowerCase()}:${id}`;
+
+const decodePart = (part: string): string => {
+    try {
+        return decodeURIComponent(part);
+    } catch {
+        return part;
+    }
+};
+const PR_SEG = String.raw`[^\/\s?#"'<>]+`;
+const ADO_PR_LINKS = [
+    // https://dev.azure.com/{org}/{project}/_git/{repo}/pullrequest/{id}
+    new RegExp(String.raw`^https:\/\/dev\.azure\.com\/(${PR_SEG})\/${PR_SEG}\/_git\/${PR_SEG}\/pullrequest\/(\d+)$`, "i"),
+    // https://{org}.visualstudio.com/[DefaultCollection/]{project}/_git/{repo}/pullrequest/{id}
+    new RegExp(String.raw`^https:\/\/([a-z0-9][a-z0-9-]*)\.visualstudio\.com\/(?:DefaultCollection\/)?${PR_SEG}\/_git\/${PR_SEG}\/pullrequest\/(\d+)$`, "i"),
+];
+
+/** The PR's page in Azure DevOps, if `link` is that PR's (its org and id); otherwise "". */
+function adoPrLink(link: unknown, pr: TodoPr): string {
+    if (typeof link !== "string" || link.length > 2000) return "";
+    for (const pattern of ADO_PR_LINKS) {
+        const m = pattern.exec(link);
+        if (m && decodePart(m[1]).toLowerCase() === pr.org.toLowerCase() && Number(m[2]) === pr.id) return link;
+    }
+    return "";
+}
+
+/** A PR to-do's PR, if it's whole and is the one its key names; otherwise null. */
+function cleanPr(value: unknown, key: string): TodoPr | null {
+    if (!value || typeof value !== "object") return null;
+    const v = value as Partial<Record<keyof TodoPr, unknown>>;
+    const org = typeof v.org === "string" ? v.org.trim() : "";
+    const id = Number(v.id);
+    const project = clipField(v.project);
+    const repoId = typeof v.repoId === "string" && /^[\w.-]{1,100}$/.test(v.repoId) ? v.repoId : "";
+    if (!org || !project || !repoId || !Number.isInteger(id) || id <= 0 || prTodoKey(org, id) !== key) return null;
+    return { org, project, repoId, id };
+}
 
 function parseSource(r: Row): TodoSource | null {
     if (typeof r.source_key !== "string" || !r.source_key) return null;
+    const key = r.source_key;
     try {
         const s = JSON.parse(String(r.source_json || "{}")) as Partial<TodoSource>;
+        const base = { key, taskId: String(s.taskId || ""), taskTitle: String(s.taskTitle || ""), who: String(s.who || "") };
+        if (PR_KEY.test(key)) {
+            const pr = cleanPr(s.pr, key);
+            const link = pr ? adoPrLink(s.link, pr) : "";
+            return { ...base, ...(link ? { link } : {}), ...(pr ? { pr } : {}) };
+        }
         const link = askLink(s.link);
-        return { key: r.source_key, taskId: String(s.taskId || ""), taskTitle: String(s.taskTitle || ""), who: String(s.who || ""), ...(link ? { link } : {}) };
+        return { ...base, ...(link ? { link } : {}) };
     } catch {
-        return { key: r.source_key, taskId: "", taskTitle: "", who: "" };
+        return { key, taskId: "", taskTitle: "", who: "" };
     }
 }
 
@@ -115,12 +179,19 @@ const clipField = (value: unknown, max = 200): string => (typeof value === "stri
  * A Needs you item, as a request names it: its key must be one Needs you gives, and its task a real
  * id. A Teams ask has no task; it can name the message in Teams instead. A chat or email thread
  * waiting on the user names the chat in Teams or the email in Outlook; a meeting's action item
- * (meet:…) the meeting's chat; an S360 item the item in the S360 portal.
+ * (meet:…) the meeting's chat; an S360 item the item in the S360 portal. A PR (pr:…) isn't a Needs you
+ * item: it names the PR, which must be the one its key names, and its page in Azure DevOps.
  */
 function cleanSource(value: unknown): TodoSource | null {
     if (value == null) return null;
     const s = value as Partial<Record<keyof TodoSource, unknown>>;
     const key = typeof s.key === "string" ? s.key : "";
+    if (PR_KEY.test(key)) {
+        const pr = cleanPr(s.pr, key);
+        if (!pr) throw new JarvisError("That PR isn't the one its key names.");
+        const link = adoPrLink(s.link, pr);
+        return { key, taskId: "", taskTitle: clipField(s.taskTitle), who: clipField(s.who, 80), ...(link ? { link } : {}), pr };
+    }
     if (!NEED_KEY.test(key) && !MEET_KEY.test(key)) throw new JarvisError("That isn't a Needs you item.");
     if (key.startsWith("need:teams:") || key.startsWith("need:chat:") || key.startsWith("meet:")) {
         const link = typeof s.link === "string" && TEAMS_LINK.test(s.link) ? s.link : "";
@@ -302,7 +373,7 @@ async function getTodo(id: number): Promise<Todo> {
 
 /**
  * Add a to-do at the end of the open list, or a subtask at the end of `parentId`'s. One made from a
- * Needs you item (`source`) is added once: while it's open, adding the same item again gives it back.
+ * Needs you item or a PR (`source`) is added once: while it's open, adding the same item again gives it back.
  */
 export async function addTodo(
     text: unknown,
@@ -316,7 +387,7 @@ export async function addTodo(
     const parentId = extra.parentId == null || extra.parentId === "" ? null : asTodoId(extra.parentId);
     const db = await jarvisDb();
     if (parentId != null) {
-        if (source) throw new JarvisError("A to-do from Needs you goes at the top of the list.");
+        if (source) throw new JarvisError(source.pr ? "A to-do from a PR goes at the top of the list." : "A to-do from Needs you goes at the top of the list.");
         if (Number(rowById(db, parentId).done) === 1) throw new JarvisError("That to-do is done. Reopen it to add a subtask.");
     }
     if (source) {
@@ -337,7 +408,15 @@ export async function addTodo(
             at,
             at,
             source?.key ?? null,
-            source ? JSON.stringify({ taskId: source.taskId, taskTitle: source.taskTitle, who: source.who, ...(source.link ? { link: source.link } : {}) }) : null,
+            source
+                ? JSON.stringify({
+                      taskId: source.taskId,
+                      taskTitle: source.taskTitle,
+                      who: source.who,
+                      ...(source.link ? { link: source.link } : {}),
+                      ...(source.pr ? { pr: source.pr } : {}),
+                  })
+                : null,
             parentId,
             due,
         );
@@ -370,6 +449,43 @@ export async function settleNeedTodos(active: ReadonlySet<string>, skip: Readonl
         pruneDone(db);
     });
     return gone.length;
+}
+
+/** The open to-dos made from PRs that may still tick themselves (not checked off or reopened by hand): each PR once. */
+export async function openPrTodos(): Promise<Array<{ key: string; pr: TodoPr }>> {
+    const db = await jarvisDb();
+    const rows = db.prepare("SELECT source_key, source_json FROM jarvis_todos WHERE done = 0 AND source_settled = 0 AND source_key LIKE 'pr:%'").all() as Row[];
+    const out = new Map<string, TodoPr>();
+    for (const r of rows) {
+        const source = parseSource(r);
+        if (source?.pr && PR_KEY.test(source.key) && !out.has(source.key)) out.set(source.key, source.pr);
+    }
+    return [...out].map(([key, pr]) => ({ key, pr }));
+}
+
+/**
+ * Tick the open to-dos made from the PRs in `closed` (key → why: "the PR was completed"), with their
+ * subtasks, once each; reopened, they stay open. To-dos kept by hand are left alone. Returns how many were ticked.
+ */
+export async function settlePrTodos(closed: ReadonlyMap<string, string>): Promise<number> {
+    if (!closed.size) return 0;
+    const db = await jarvisDb();
+    const rows = db.prepare("SELECT id, source_key FROM jarvis_todos WHERE done = 0 AND source_settled = 0 AND source_key LIKE 'pr:%'").all() as Array<{
+        id: number;
+        source_key: string;
+    }>;
+    const hit = rows.filter((r) => closed.has(r.source_key));
+    if (!hit.length) return 0;
+    const at = now();
+    inTransaction(db, () => {
+        const settle = db.prepare("UPDATE jarvis_todos SET source_settled = 1 WHERE id = ?");
+        for (const r of hit) {
+            tickSubtree(db, Number(r.id), at, closed.get(r.source_key)!);
+            settle.run(r.id);
+        }
+        pruneDone(db);
+    });
+    return hit.length;
 }
 
 /**
@@ -500,7 +616,16 @@ function agentLine(t: Todo, depth: number, taskTitle?: (id: string) => string | 
     const task = t.taskId ? taskTitle?.(t.taskId) : null;
     if (task) bits.push(`task: ${task}`);
     if (t.author !== "you") bits.push(`added by ${t.author}`);
-    const from = !t.source?.taskTitle ? "" : t.source.key.startsWith("meet:") ? `from the meeting: ${t.source.taskTitle}` : `from Needs you: ${t.source.taskTitle}`;
+    const src = t.source;
+    const from = !src?.taskTitle
+        ? ""
+        : src.key.startsWith("meet:")
+          ? `from the meeting: ${src.taskTitle}`
+          : src.pr
+            ? `from ${src.taskTitle}`
+            : src.key.startsWith("need:s360:")
+              ? `from S360: ${src.taskTitle}`
+              : `from Needs you: ${src.taskTitle}`;
     if (from) bits.push(from);
     return `${"  ".repeat(depth)}- [${t.id}] ${t.text}${bits.length ? ` (${bits.join(", ")})` : ""}`;
 }
