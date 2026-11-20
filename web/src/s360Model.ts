@@ -126,6 +126,9 @@ export function s360Why(item: Pick<S360Item, "sla">): "late" | "soon" | "new" {
   return rank === 2 ? "late" : rank === 1 ? "soon" : "new";
 }
 
+/** The key of an item's to-do: its Needs you key, so the item gives one to-do wherever it's added from. */
+export const s360TodoKey = (item: Pick<S360Item, "key">): string => `need:s360:${item.key}`;
+
 /** An item's ask in a line: "S360: Use Default Deny … is out of SLA". */
 export function s360NeedLine(item: Pick<S360Item, "title" | "sla">): string {
   const why = s360Why(item);

@@ -619,4 +619,54 @@ assert.notEqual(fp(task("x", { validation: vs({ run: vrun({ done: 1 }) }) })), f
     assert.equal(m.devisBannerText({ ...b, state: "failed" }), "Ship 4 didn't ship: Fix the banner", "the title stands in for a missing note");
 }
 
+// ---- to-dos made from S360 items and PRs ----
+{
+    const td = (key, done = false) => ({ id: Math.random(), text: "t", done, source: key ? { key, taskId: "", taskTitle: "", who: "" } : null });
+    assert.deepEqual([...m.openTodoKeys([td("pr:msazure:1"), td("pr:msazure:2", true), td(null), td("need:s360:0123456789abcdef")])], ["pr:msazure:1", "need:s360:0123456789abcdef"], "open ones with a source");
+    assert.equal(m.openTodoKeys(undefined).size, 0);
+
+    // An S360 item from the list is the same to-do as from Needs you.
+    const item = {
+        key: "0123456789abcdef", kpiId: "k1", itemId: "i1", targetType: "Person", targetId: "kj", title: "Rotate   the\nstorage keys", sla: "InSla",
+        due: "", eta: "", status: "", statusBy: "", assignedTo: "kj", owner: "kj", service: "AppConfig", kind: "", severity: "",
+        url: "", adoUrl: "", link: "https://s360.msftcloudes.com/blades/security?s360ItemId=1", published: "", updated: "", roles: ["assigned"],
+        firstSeen: iso(-300), lastSeen: iso(-1), resolvedAt: null, need: false, dismissed: false,
+    };
+    assert.deepEqual(m.s360Todo(item), {
+        text: "Resolve the S360 item: Rotate the storage keys",
+        source: { key: "need:s360:0123456789abcdef", taskId: "", taskTitle: "Rotate the storage keys", who: "S360", link: item.link },
+    });
+    assert.deepEqual(m.s360Todo(item), m.needTodo({ kind: "s360", source: "need:s360:0123456789abcdef", at: 0, need: { key: "need:s360:0123456789abcdef", at: iso(0), item } }));
+
+    const p = (id, over = {}) => ({
+        id, title: `Fix   the\ncache ${id}`, org: "MSAzure", project: "One", repo: "AppConfig", repoId: "0d3c1a2b-1111-4222-8333-444455556666", author: "Dana Lee",
+        created: iso(-60), isDraft: false, mine: false, authoredByMe: false, sourceRef: "", targetRef: "",
+        url: `https://dev.azure.com/MSAzure/One/_git/AppConfig/pullrequest/${id}`, ...over,
+    });
+    assert.equal(m.prTodoKey(p(7)), "pr:msazure:7", "the org lowercased, as the service keys it");
+    assert.deepEqual(m.prTodo(p(7)), {
+        text: "Review PR 7: Fix the cache 7",
+        source: {
+            key: "pr:msazure:7", taskId: "", taskTitle: "PR 7: Fix the cache 7", who: "Dana Lee's PR",
+            link: "https://dev.azure.com/MSAzure/One/_git/AppConfig/pullrequest/7",
+            pr: { org: "MSAzure", project: "One", repoId: "0d3c1a2b-1111-4222-8333-444455556666", id: 7 },
+        },
+    });
+    const own = m.prTodo(p(8, { authoredByMe: true, mine: true, url: "", author: undefined }));
+    assert.equal(own.text, "Follow up on PR 8: Fix the cache 8");
+    assert.equal(own.source.who, "Your PR");
+    assert.equal(own.source.link, undefined, "no link, none kept");
+    assert.equal(m.prTodo(p(9, { author: undefined })).source.who, "Someone's PR");
+    assert.equal(m.prTodo(p(10, { title: "" })).text, "Review PR 10");
+    assert.ok(m.prTodo(p(11, { title: "x".repeat(400) })).source.taskTitle.length <= 140);
+
+    // The right-click's targets: the row alone, or the whole selection when the row is in it.
+    const [a, b, c] = [p(1), p(2), p(3)];
+    assert.deepEqual(m.prTodoTargets(a, [b, c], false, []), { picked: [a], already: 0, total: 1 }, "outside the selection: the row");
+    assert.deepEqual(m.prTodoTargets(b, [b], true, []), { picked: [b], already: 0, total: 1 });
+    assert.deepEqual(m.prTodoTargets(b, [a, b, c], true, [td("pr:msazure:3"), td("pr:msazure:1", true)]), { picked: [a, b], already: 1, total: 3 }, "open to-dos are left out; done ones aren't");
+    assert.deepEqual(m.prTodoTargets(a, [a, p(1)], true, []), { picked: [a], already: 0, total: 1 }, "one to-do a PR");
+    assert.deepEqual(m.prTodoTargets(a, [a], true, [td("pr:msazure:1")]), { picked: [], already: 1, total: 1 });
+}
+
 console.log("jarvis-model harness: ok");

@@ -160,6 +160,67 @@ try {
         assert.notEqual(reAdded.id, proposal.id);
     }
 
+    // ---- to-dos made from PRs ----
+    {
+        const pr = { org: "MSAzure", project: "One", repoId: "0d3c1a2b-1111-4222-8333-444455556666", id: 12345 };
+        const url = "https://dev.azure.com/msazure/One/_git/AppConfig-Service/pullrequest/12345";
+        const src = (over = {}) => ({ key: "pr:msazure:12345", taskId: "ignored", taskTitle: "PR 12345:   Fix the   cache", who: "Dana's PR", link: url, pr, ...over });
+        assert.equal(notes.prTodoKey("MSAzure", 12345), "pr:msazure:12345", "the org is lowercased");
+        const review = await notes.addTodo("Review PR 12345: Fix the cache", "you", src());
+        assert.deepEqual(
+            review.source,
+            { key: "pr:msazure:12345", taskId: "", taskTitle: "PR 12345: Fix the cache", who: "Dana's PR", link: url, pr },
+            "it remembers the PR, its project and repo, and its page in Azure DevOps",
+        );
+        assert.equal((await notes.addTodo("Review it twice", "you", src())).id, review.id, "the same PR makes one to-do while it's open");
+        // The snapshot must be the PR its key names.
+        await assert.rejects(notes.addTodo("x", "you", src({ pr: { ...pr, id: 999 } })), /isn't the one its key names/);
+        await assert.rejects(notes.addTodo("x", "you", src({ pr: { ...pr, org: "contoso" } })), /isn't the one its key names/);
+        await assert.rejects(notes.addTodo("x", "you", src({ pr: { ...pr, repoId: "../../etc" } })), /isn't the one its key names/);
+        await assert.rejects(notes.addTodo("x", "you", src({ pr: undefined })), /isn't the one its key names/);
+        await assert.rejects(notes.addTodo("x", "you", src({ key: "pr:msazure:0" })), /isn't a Needs you item/, "a key that isn't a PR's");
+        await assert.rejects(notes.addTodo("x", "you", src({ key: "pr:../x:1" })), /isn't a Needs you item/);
+        // A link that isn't this PR's page is dropped; the visualstudio.com form is kept.
+        const other = await notes.addTodo("x", "you", src({ key: "pr:msazure:777", pr: { ...pr, id: 777 }, link: "https://evil.example/pullrequest/777" }));
+        assert.equal(other.source.link, undefined, "a link elsewhere is dropped");
+        const wrongPr = await notes.addTodo("y", "you", src({ key: "pr:msazure:778", pr: { ...pr, id: 778 }, link: url }));
+        assert.equal(wrongPr.source.link, undefined, "another PR's link is dropped");
+        const vs = "https://msazure.visualstudio.com/DefaultCollection/One/_git/AppConfig-Service/pullrequest/779";
+        const vsTodo = await notes.addTodo("z", "you", src({ key: "pr:msazure:779", pr: { ...pr, id: 779 }, link: vs }));
+        assert.equal(vsTodo.source.link, vs);
+        // A PR's to-do goes at the top of the list.
+        await assert.rejects(notes.addTodo("x", "you", src({ key: "pr:msazure:780", pr: { ...pr, id: 780 } }), { parentId: review.id }), /from a PR goes at the top/);
+        // Needs you never ticks a PR's to-do.
+        await notes.settleNeedTodos(new Set());
+        assert.equal((await notes.listTodos()).find((t) => t.id === review.id).done, false, "settling Needs you leaves PR to-dos alone");
+
+        // Each PR once, for the open ones not kept by hand.
+        const sub = await notes.addTodo("Read the tests", "you", undefined, { parentId: review.id });
+        const kept = await notes.addTodo("Follow up on PR 781", "you", src({ key: "pr:msazure:781", pr: { ...pr, id: 781 } }));
+        await notes.updateTodo(kept.id, { done: true });
+        await notes.updateTodo(kept.id, { done: false });
+        const open = await notes.openPrTodos();
+        assert.deepEqual(open.map((o) => o.key).sort(), ["pr:msazure:12345", "pr:msazure:777", "pr:msazure:778", "pr:msazure:779"], "kept by hand: not asked about");
+        assert.deepEqual(open.find((o) => o.key === "pr:msazure:12345").pr, pr);
+
+        // A closed PR ticks its to-do and its subtasks, once, saying why.
+        assert.equal(await notes.settlePrTodos(new Map()), 0);
+        assert.equal(await notes.settlePrTodos(new Map([["pr:msazure:12345", "the PR was completed"], ["pr:msazure:781", "the PR was abandoned"]])), 1, "the one kept by hand stays");
+        let byId = new Map((await notes.listTodos()).map((t) => [t.id, t]));
+        assert.deepEqual([byId.get(review.id).done, byId.get(review.id).doneNote], [true, "the PR was completed"]);
+        assert.equal(byId.get(sub.id).done, true, "its subtasks go with it");
+        assert.equal(byId.get(kept.id).done, false);
+        assert.equal(await notes.settlePrTodos(new Map([["pr:msazure:12345", "the PR was completed"]])), 0, "done: nothing to tick");
+        // Reopened by hand, it's the user's.
+        await notes.updateTodo(review.id, { done: false });
+        assert.ok(!(await notes.openPrTodos()).some((o) => o.key === "pr:msazure:12345"), "reopened: never asked about again");
+        assert.equal(await notes.settlePrTodos(new Map([["pr:msazure:12345", "the PR was completed"]])), 0);
+        byId = new Map((await notes.listTodos()).map((t) => [t.id, t]));
+        assert.equal(byId.get(review.id).done, false);
+        assert.match(await notes.notesForAgent(), /Review PR 12345: Fix the cache \(from PR 12345: Fix the cache\)/, "agents see which PR");
+        for (const t of await notes.listTodos()) if (t.source?.key.startsWith("pr:") && t.parentId == null) await notes.deleteTodo(t.id);
+    }
+
     // ---- subtasks, due dates and priorities ----
     {
         for (const t of await notes.listTodos()) if (t.parentId == null) await notes.deleteTodo(t.id);

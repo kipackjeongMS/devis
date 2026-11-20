@@ -241,6 +241,11 @@ export function rememberedPrs(): Pr[] | null {
     return lastPrs?.prs ?? null;
 }
 
+/** The same, with when it loaded: PR to-dos trust it only while it's recent (todo-prs.mts). */
+export function rememberedPrList(): { prs: Pr[]; at: number } | null {
+    return lastPrs ? { prs: lastPrs.prs, at: lastPrs.at } : null;
+}
+
 // ---- tasks from work items ----------------------------------------------------------
 
 /** "#123", "123" or a work item URL: the id, and the org when the URL names one. */
