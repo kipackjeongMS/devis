@@ -339,7 +339,7 @@ export interface TodayTask {
   recap?: RecapState | null;
   /** Pull requests linked to the task. */
   prs?: TaskPr[];
-  /** The task's validation chain, its last run and any proposal. */
+  /** The task's validation chains, their runs and any proposals. */
   validation?: ValidationSummary | null;
   /** Review comments on the task's PRs: being reviewed, or waiting on the user. */
   prComments?: PrCommentSummary[];
@@ -347,7 +347,7 @@ export interface TodayTask {
   prBuilds?: PrBuildSummary[];
 }
 
-// ---- a task's validation chain ---------------------------------------------------------
+// ---- a task's validation chains (jarvis-validation.mts) --------------------------------------
 
 export interface ValidationRunSummary {
   runId: string;
@@ -358,15 +358,38 @@ export interface ValidationRunSummary {
   total: number;
   current: string | null;
   failed: string | null;
+  /** Who started it: "You", a worker, the Lead, "Auto-rerun"; null for runs from before this was recorded. */
+  by: string | null;
+  /** Whose code it built, for a chain that builds the branch of whoever runs it. */
+  for: string | null;
+}
+
+export type RunnerKind = "worker" | "lead" | "you" | "auto" | "pr" | "unknown";
+
+export interface ValidationChainSummary {
+  chainId: string;
+  name: string;
+  purpose: string;
+  blocks: number;
+  /** The newest running run, else the newest. */
+  run: ValidationRunSummary | null;
+  running: number;
+  queued: number;
+  lastUsed: { by: string; kind: RunnerKind; at: string } | null;
+  /** Per runner, its newest run when it failed and the user hasn't looked. */
+  failures: ValidationRunSummary[];
 }
 
 export interface ValidationSummary {
-  chainId: string | null;
-  name: string | null;
-  blocks: number;
-  run: ValidationRunSummary | null;
-  proposal: { by: string; at: string; blocks: number } | null;
+  chains: ValidationChainSummary[];
+  /** The run to headline: an unseen failure, else the newest running, else the newest. */
+  run: (ValidationRunSummary & { chainId: string; chain: string }) | null;
+  running: number;
+  queued: number;
+  proposals: Array<{ id: string; by: string; at: string; blocks: number; name: string; chainId: string | null }>;
+  failures: Array<ValidationRunSummary & { chainId: string; chain: string }>;
   attention: "proposal" | "failed" | null;
+  lastUsed: { by: string; kind: RunnerKind; at: string; chain: string } | null;
 }
 
 export interface ValidationEvidence {
@@ -387,6 +410,8 @@ export interface ProposedBlock {
   after: string[];
   branch: string;
   branchFrom?: { org: string; prId: number };
+  /** Builds the branch of whoever runs the chain. */
+  followRunner?: true;
   params?: Record<string, string>;
   /** Branches for the YAML's repository resources, by alias. */
   repoBranches?: Record<string, string>;
@@ -396,6 +421,10 @@ export interface ProposedBlock {
 
 export interface ValidationProposal {
   id: string;
+  /** The chain it changes; null for a new chain. */
+  chainId: string | null;
+  name: string;
+  purpose?: string;
   summary: string;
   blocks: ProposedBlock[];
   leftOut: Array<{ key: string; name: string; reason: string; evidence: ValidationEvidence[] }>;
@@ -414,6 +443,7 @@ export interface ValidationNode {
   path?: string;
   branch: string;
   branchFrom?: { org: string; prId: number };
+  followRunner?: true;
   params?: Record<string, string>;
   repoBranches?: Record<string, string>;
 }
@@ -427,22 +457,97 @@ export interface ValidationNodeState {
   branch?: string;
 }
 
+export interface RunTrigger {
+  kind: "worker" | "lead" | "you" | "auto";
+  label: string;
+  sessionId?: string;
+}
+
+export interface RunTarget {
+  label: string;
+  sessionId?: string;
+  branches: Array<{ org: string; project: string; repo: string; branch: string }>;
+  pr?: { org: string; prId: number; repo?: string };
+}
+
+export interface RunBlockView {
+  id: string;
+  name: string;
+  status: string;
+  buildNumber?: string;
+  url?: string;
+  error?: string;
+  branch?: string;
+}
+
+export interface RunView extends ValidationRunSummary {
+  trigger: RunTrigger | null;
+  target: RunTarget | null;
+  /** The blocks this run took in, in chain order. */
+  blocks: RunBlockView[];
+  cancelRequested: boolean;
+  /** A failed run the user has looked at. */
+  acked: boolean;
+  text: string;
+  error: string | null;
+}
+
+export interface QueueView {
+  id: string;
+  trigger: RunTrigger;
+  target: RunTarget | null;
+  at: string;
+  position: number;
+  waitingFor: string;
+}
+
+export type Concurrency = "auto" | "one" | "parallel";
+
+export interface ValidationChainView {
+  chain: { id: string; name: string; updatedAt?: string; graph: { nodes: ValidationNode[]; edges: Array<{ from: string; to: string }> } };
+  purpose: string;
+  concurrency: Concurrency;
+  mode: "one" | "parallel";
+  maxActive: number;
+  /** The block that reads like a deployment: the chain runs one at a time and workers always ask. */
+  deploys: string | null;
+  workersMayRun: boolean;
+  workersMayRunNow: boolean;
+  notifyWorker: boolean;
+  rerunOnCommit: boolean;
+  followsRunner: boolean;
+  acceptedAt: string | null;
+  acceptedBy: string | null;
+  evidence: Record<string, { reason: string; evidence: ValidationEvidence[]; by: string }>;
+  /** Newest first. */
+  runs: RunView[];
+  queue: QueueView[];
+  latest: Array<{ key: string; label: string; kind: RunnerKind; runId: string; status: string; at: string }>;
+  summary: ValidationChainSummary;
+}
+
+/** Whose code a run can build. */
+export interface TargetChoice {
+  id: string;
+  kind: "worker" | "pr";
+  label: string;
+  detail: string;
+  /** It has a branch to build: a worker with none seen yet can't be picked. */
+  ready: boolean;
+  sessionId?: string;
+}
+
 export interface ValidationView {
   taskId: string;
   taskStatus: "open" | "done";
-  chain: { id: string; name: string; graph: { nodes: ValidationNode[]; edges: Array<{ from: string; to: string }> } } | null;
-  run: { runId: string; status: string; createdAt: string; finishedAt: string | null; cancelRequested?: boolean; states: Record<string, ValidationNodeState> } | null;
-  runs: Array<{ runId: string; status: string; createdAt: string; finishedAt: string | null; text: string }>;
-  proposal: ValidationProposal | null;
-  evidence: Record<string, { reason: string; evidence: ValidationEvidence[]; by: string }>;
-  acceptedAt: string | null;
-  acceptedBy: string | null;
-  notifyWorker: boolean;
-  rerunOnCommit: boolean;
-  ackedRunId: string | null;
+  chains: ValidationChainView[];
+  proposals: ValidationProposal[];
   autoPropose: boolean;
   prs: Array<{ org: string; prId: number; title: string; sourceRef: string; status: string }>;
   templates: Array<{ id: string; name: string; nodeCount: number }>;
+  targets: TargetChoice[];
+  limits: { perChain: number; perTask: number; queue: number; chains: number };
+  running: number;
   summary: ValidationSummary | null;
 }
 
@@ -465,27 +570,107 @@ export function chainStages<T extends { id: string }>(nodes: T[], edges: Array<{
   return out.filter(Boolean);
 }
 
-/** The card chip: "Validation · 2 of 4 · Deploy running", "Validation failed · Deploy Dev", "Validation proposed". */
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+/**
+ * The card chip, most urgent first: "Validation · failed · Deploy (worker-2)", "Validation ·
+ * 2 proposals", "Validation · 2 running", "Validation · all 3 passed".
+ */
 export function validationChip(v: ValidationSummary | null | undefined): { text: string; tone: Tone } | null {
   if (!v) return null;
-  if (v.attention === "proposal" && v.proposal) return { text: `Validation proposed · ${v.proposal.blocks} pipelines`, tone: "warn" };
-  const r = v.run;
-  if (!v.chainId) return null;
-  if (!r) return { text: `Validation · ${v.blocks} pipeline${v.blocks === 1 ? "" : "s"} · not run`, tone: "idle" };
-  if (r.status === "running") return { text: `Validation · ${r.done} of ${r.total}${r.current ? ` · ${r.current}` : ""}`, tone: "run" };
-  if (r.status === "succeeded") return { text: "Validation passed", tone: "ok" };
-  if (r.status === "failed") return { text: `Validation failed${r.failed ? ` · ${r.failed}` : ""}`, tone: v.attention === "failed" ? "warn" : "off" };
-  if (r.status === "canceled") return { text: "Validation stopped", tone: "off" };
-  return { text: `Validation · ${r.status}`, tone: "idle" };
+  const f = v.failures[0];
+  if (f) {
+    const more = v.failures.length > 1 ? ` +${v.failures.length - 1}` : "";
+    return { text: `Validation · failed · ${f.failed || f.chain}${f.for || f.by ? ` (${f.for || f.by})` : ""}${more}`, tone: "warn" };
+  }
+  if (v.proposals.length) return { text: `Validation · ${plural(v.proposals.length, "proposal")}`, tone: "warn" };
+  if (v.running) {
+    const r = v.run;
+    const one = v.running === 1 && r?.status === "running" ? ` · ${r.done} of ${r.total}${r.current ? ` · ${r.current}` : ""}` : ` · ${v.running} running`;
+    return { text: `Validation${one}${v.queued ? ` · ${v.queued} waiting` : ""}`, tone: "run" };
+  }
+  const chains = v.chains;
+  if (!chains.length) return null;
+  const ran = chains.filter((c) => c.run);
+  if (!ran.length) return { text: `Validation · ${plural(chains.length, "chain")} · not run`, tone: "idle" };
+  const passed = ran.filter((c) => c.run!.status === "succeeded").length;
+  if (passed === chains.length) return { text: chains.length === 1 ? "Validation passed" : `Validation · all ${chains.length} passed`, tone: "ok" };
+  const failed = ran.filter((c) => c.run!.status === "failed").length;
+  if (failed) return { text: `Validation · ${failed} of ${chains.length} failed`, tone: "off" };
+  return { text: `Validation · ${passed} of ${chains.length} passed`, tone: "idle" };
 }
 
-/** Why the task's validation needs the user, for Needs you; null when it doesn't. */
-export function validationNeed(task: Pick<TodayTask, "status" | "validation">): string | null {
+/** One thing a task's validation needs from the user: a proposal to review, or a failed run nobody has looked at. */
+export interface ValidationNeed {
+  what: "proposal" | "failed";
+  /** The Needs you key (jarvis-needs.mts gives the same). */
+  source: string;
+  chainId: string | null;
+  /** The chain's name (a new chain's proposed name). */
+  name: string;
+  proposalId?: string;
+  runId?: string;
+  who: string;
+  text: string;
+  at: string;
+}
+
+export function validationNeeds(task: Pick<TodayTask, "id" | "status" | "validation">): ValidationNeed[] {
   const v = task.validation;
-  if (!v || task.status !== "open") return null;
-  if (v.attention === "proposal" && v.proposal) return `${v.proposal.by} proposed a validation chain of ${v.proposal.blocks} pipeline${v.proposal.blocks === 1 ? "" : "s"}`;
-  if (v.attention === "failed") return `Validation failed${v.run?.failed ? ` at ${v.run.failed}` : ""}`;
-  return null;
+  if (!v || task.status !== "open") return [];
+  const out: ValidationNeed[] = [];
+  for (const p of v.proposals) {
+    out.push({
+      what: "proposal",
+      source: `need:val:${task.id}:proposal:${p.id}`,
+      chainId: p.chainId,
+      name: p.name,
+      proposalId: p.id,
+      who: p.by,
+      text: p.chainId ? `${p.by} proposed a change to the validation chain "${p.name}"` : `${p.by} proposed a validation chain "${p.name}" of ${plural(p.blocks, "pipeline")}`,
+      at: p.at,
+    });
+  }
+  for (const r of v.failures) {
+    out.push({
+      what: "failed",
+      source: `need:val:${task.id}:failed:${r.runId}`,
+      chainId: r.chainId,
+      name: r.chain,
+      runId: r.runId,
+      who: r.by || "Validation",
+      text: `Validation "${r.chain}" failed${r.failed ? ` at ${r.failed}` : ""}${r.for ? ` for ${r.for}` : r.by ? ` (run by ${r.by})` : ""}`,
+      at: r.finishedAt || r.startedAt,
+    });
+  }
+  return out;
+}
+
+/** Why the task's validation needs the user, in a line; null when it doesn't. */
+export function validationNeed(task: Pick<TodayTask, "id" | "status" | "validation">): string | null {
+  const needs = validationNeeds(task);
+  if (!needs.length) return null;
+  return needs.length === 1 ? needs[0].text : `${needs[0].text} (+${needs.length - 1} more)`;
+}
+
+/** Where the Validation tab opens for a need: "proposal:<id>" or "chain:<chainId>:<runId>"; "" for its own pick. */
+export function validationFocus(need: ValidationNeed | undefined): string {
+  if (!need) return "";
+  if (need.proposalId) return `proposal:${need.proposalId}`;
+  return need.chainId ? `chain:${need.chainId}${need.runId ? `:${need.runId}` : ""}` : "";
+}
+
+/** The chip's tooltip: each chain, how it last went and who ran it. */
+export function validationChipTitle(v: ValidationSummary | null | undefined): string {
+  if (!v) return "Validation";
+  const lines = v.chains.map((c) => {
+    const r = c.run;
+    const how = !r ? "not run" : r.status === "running" ? `running ${r.done} of ${r.total}` : r.status === "succeeded" ? "passed" : r.status === "failed" ? `failed${r.failed ? ` at ${r.failed}` : ""}` : r.status;
+    const who = r?.for || r?.by;
+    return `${c.name}: ${how}${who ? ` (${who})` : ""}${c.queued ? `, ${c.queued} waiting` : ""}`;
+  });
+  for (const p of v.proposals) lines.push(`${p.by} proposed ${p.chainId ? "a change to" : "a new chain,"} ${p.name}`);
+  return lines.length ? lines.join("\n") : "Validation";
 }
 
 // ---- review comments on the task's PRs (jarvis-pr-comments.mts) -------------------------
@@ -1130,8 +1315,8 @@ export type NeedItem =
   | { kind: "request"; key: string; source: string; task: TodayTask; worker: TodayWorker; at: number }
   /** A worker whose turn failed: a message to it tries again. */
   | { kind: "failed"; key: string; source: string; task: TodayTask; worker: TodayWorker; at: number }
-  /** The task's validation: a chain proposed for review, or a run that failed. */
-  | { kind: "validation"; key: string; source: string; task: TodayTask; who: string; text: string; at: number }
+  /** The task's validation: one chain proposed for review, or one failed run nobody has looked at. */
+  | { kind: "validation"; key: string; source: string; task: TodayTask; need: ValidationNeed; who: string; text: string; at: number }
   /** Review comments on one of the task's PRs: the worker's plan to look at, or a review that went wrong. */
   | { kind: "prComments"; key: string; source: string; task: TodayTask; pr: PrCommentSummary; who: string; text: string; at: number }
   /** Failed builds on one of the task's PRs: the worker's fix or rerun to look at, or a review that went wrong. */
@@ -1185,12 +1370,9 @@ export function taskNeeds(tasks: TodayTask[]): TaskNeedItem[] {
         items.push({ kind: "failed", key: `fail:${worker.sessionId}`, source, task, worker, at: time(worker.updatedAt) });
       }
     }
-    const v = validationNeed(task);
-    if (v) {
-      const proposal = task.validation?.attention === "proposal" ? task.validation.proposal : null;
-      const at = proposal ? time(proposal.at) : time(task.validation?.run?.finishedAt) || time(task.updatedAt);
-      const source = proposal ? `need:val:${task.id}:proposal:${proposal.at}` : `need:val:${task.id}:failed:${task.validation?.run?.runId ?? "run"}`;
-      items.push({ kind: "validation", key: `val:${task.id}`, source, task, who: proposal?.by || "Validation", text: v, at });
+    for (const need of validationNeeds(task)) {
+      const key = `val:${task.id}:${need.proposalId ? `p:${need.proposalId}` : `r:${need.runId}`}`;
+      items.push({ kind: "validation", key, source: need.source, task, need, who: need.who, text: need.text, at: time(need.at) || time(task.updatedAt) });
     }
     for (const pr of prCommentsNeeds(task)) {
       const key = `pr:${task.id}:${pr.org.toLowerCase()}:${pr.prId}`;
@@ -1312,7 +1494,8 @@ export function needTodo(n: NeedItem): { text: string; source: TodoSource } {
     return { text, source };
   }
   if (n.kind === "validation") {
-    const text = n.task.validation?.attention === "proposal" ? `Review the validation chain ${who} proposed` : "Look at the failed validation run";
+    const name = oneLine(n.need.name, 120);
+    const text = n.need.what === "proposal" ? `Review the validation chain ${who} proposed: ${name}` : `Look at the failed validation run of ${name}`;
     return { text, source };
   }
   if (n.kind === "failed") return { text: `See why ${who}'s turn failed`, source };
@@ -1491,7 +1674,13 @@ export function todayFingerprint(data: TodayData | null, extra: string): string 
       t.updates?.latest?.id,
       t.updates?.today.length,
       t.workers.map((w) => [w.sessionId, w.state, w.busy, w.summary, w.partial.length, w.activity, w.requests.map((r) => r.id)]),
-      t.validation ? [t.validation.chainId, t.validation.blocks, t.validation.attention, t.validation.proposal?.at, t.validation.run && [t.validation.run.runId, t.validation.run.status, t.validation.run.done, t.validation.run.current]] : null,
+      t.validation
+        ? [
+            t.validation.chains.map((c) => [c.chainId, c.name, c.blocks, c.running, c.queued, c.lastUsed?.at, c.run && [c.run.runId, c.run.status, c.run.done, c.run.current], c.failures.map((f) => f.runId)]),
+            t.validation.proposals.map((p) => [p.id, p.at]),
+            t.validation.attention,
+          ]
+        : null,
       (t.prComments || []).map((p) => [p.org, p.prId, p.state, p.at, p.attention, p.items, p.worker]),
       (t.prBuilds || []).map((p) => [p.org, p.prId, p.state, p.at, p.attention, p.items, p.failed, p.worker]),
     ]),

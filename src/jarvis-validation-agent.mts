@@ -42,15 +42,19 @@ import { LEAD_NAME } from "./brand.mjs";
 import {
     blockKey,
     proposalGraph,
-    runValidation,
+    resolveTarget,
+    runChains,
     storeProposal,
-    validationChain,
     validationView,
+    workerTarget,
     type Proposal,
     type ProposalCheck,
     type ProposedBlock,
+    type RunOutcome,
+    type ValidationChainView,
     type ValidationEvidence,
 } from "./jarvis-validation.mjs";
+import type { RunTarget, RunTrigger } from "./pipeline-graph.mjs";
 
 // ---- Azure DevOps, swappable for tests -----------------------------------------------------
 
@@ -363,6 +367,11 @@ export async function findCandidates(taskId: string): Promise<{ candidates: Cand
 // ---- checking a proposal ---------------------------------------------------------------------------
 
 export interface ProposalInput {
+    /** The chain this revises; none for a new chain. */
+    chainId?: unknown;
+    name?: unknown;
+    /** When to use the chain, for whoever picks one later. */
+    purpose?: unknown;
     summary?: unknown;
     blocks?: unknown;
     leftOut?: unknown;
@@ -373,6 +382,7 @@ interface BlockInput {
     after?: unknown;
     branch?: unknown;
     followPr?: unknown;
+    followRunner?: unknown;
     params?: unknown;
     repoBranches?: unknown;
     reason?: unknown;
@@ -445,7 +455,16 @@ export async function checkProposal(task: JarvisTask, input: ProposalInput, by: 
         let branchFrom: PrRef | undefined;
         let branch = clip(b?.branch, 256).replace(/^refs\/heads\//, "");
         let effective = "";
-        if (b?.followPr !== undefined && b.followPr !== null && b.followPr !== "") {
+        const hasFollowPr = b?.followPr !== undefined && b.followPr !== null && b.followPr !== "";
+        const followRunner = b?.followRunner === true;
+        if (followRunner) {
+            if (hasFollowPr || branch) errors.push(`${name}: followRunner builds the runner's branch, so leave out followPr and branch.`);
+            else if (info && (!info.repository || info.repository.type.toLowerCase() !== "tfsgit")) {
+                // The runner matches a worker's branch by the repository the pipeline builds.
+                errors.push(`${name}'s code isn't in Azure Repos, so it can't build whoever runs the chain. Give it a branch or followPr instead.`);
+            }
+            // Its YAML is read on the default branch; each run reads it again on the runner's.
+        } else if (hasFollowPr) {
             const prId = Number(b.followPr);
             const pr = prs.find((p) => p.prId === prId && p.org.toLowerCase() === org.toLowerCase());
             if (!pr) errors.push(`${name} follows PR ${b.followPr}, which isn't linked to this task.`);
@@ -559,6 +578,7 @@ export async function checkProposal(task: JarvisTask, input: ProposalInput, by: 
             after: [],
             branch,
             ...(branchFrom ? { branchFrom } : {}),
+            ...(followRunner ? { followRunner: true as const } : {}),
             ...(params ? { params } : {}),
             ...(repoBranches ? { repoBranches } : {}),
             reason,
@@ -624,7 +644,22 @@ export async function checkProposal(task: JarvisTask, input: ProposalInput, by: 
         return s;
     };
     for (const b of blocks) b.stage = stage(b.key);
-    const draft: Proposal = { id: randomUUID(), summary, blocks: blocks.map(stripResolved), leftOut: [], checks: [], by, sessionId, at: new Date().toISOString() };
+    const chainId = clip(input.chainId, 100) || undefined;
+    const chainName = clip(input.name, 120) || undefined;
+    const purpose = clip(input.purpose, 300) || undefined;
+    const draft: Proposal = {
+        id: randomUUID(),
+        ...(chainId ? { chainId } : {}),
+        ...(chainName ? { name: chainName } : {}),
+        ...(purpose ? { purpose } : {}),
+        summary,
+        blocks: blocks.map(stripResolved),
+        leftOut: [],
+        checks: [],
+        by,
+        sessionId,
+        at: new Date().toISOString(),
+    };
     if (blocks.length) {
         try {
             validateGraph(proposalGraph(draft), cfg.organizations);
@@ -680,6 +715,14 @@ export async function checkProposal(task: JarvisTask, input: ProposalInput, by: 
         ...(blocks.some((b) => b.branchFrom)
             ? [{ tone: "ok" as const, text: `Blocks that follow a PR build its current branch (${[...new Set(blocks.filter((b) => b.branchFrom).map((b) => `PR ${b.branchFrom!.prId}`))].join(", ")})` }]
             : []),
+        ...(blocks.some((b) => b.followRunner)
+            ? [
+                  {
+                      tone: "ok" as const,
+                      text: `${blocks.filter((b) => b.followRunner).map((b) => b.name).join(", ")} build${blocks.filter((b) => b.followRunner).length === 1 ? "s" : ""} the branch of whoever runs the chain, read at each run`,
+                  },
+              ]
+            : []),
         ...(consumerLinks ? [{ tone: "ok" as const, text: "Each pipeline that uses a build comes after the one that makes it" }] : []),
         { tone: "ok", text: `No cycles · ${blocks.length} of ${MAX_CHAIN_NODES} blocks` },
         ...blocks
@@ -707,34 +750,114 @@ export async function propose(taskIdValue: unknown, input: ProposalInput, by: st
     const task = id ? await getTask(id) : null;
     if (!task) throw new JarvisError("Task not found.", 404);
     if (task.status !== "open") throw new JarvisError("The task is done; reopen it to propose validation.", 409);
+    const existing = (await validationView(task.id)).chains;
+    const chainId = clip(input.chainId, 100);
+    if (chainId && !existing.some((c) => c.chain.id === chainId)) {
+        throw new JarvisError(`Not proposed: chain ${chainId} isn't on this task. Use action status for the chains and their ids, or leave chainId out for a new chain.`, 400);
+    }
+    if (!chainId && existing.length && !clip(input.purpose, 300)) {
+        throw new JarvisError(
+            "Not proposed: this task already has validation chains. To change one, pass its chainId (action status lists them); for a new chain, add a purpose that says when to use it instead of the others.",
+            400,
+        );
+    }
     const proposal = await checkProposal(task, input, by, sessionId);
     await storeProposal(task.id, proposal);
     const warn = proposal.checks.filter((c) => c.tone === "warn").map((c) => c.text);
     const where = (await readConfig()).needsIn === "chat" ? "in Devis's chat" : "under Needs you";
-    return `Proposed: ${proposal.blocks.map((b) => b.name).join(" → ")}. It waits for the user ${where}; nothing runs until they accept and run it.${warn.length ? `\nNoted for them: ${warn.join("; ")}` : ""}`;
+    const what = chainId ? `A change to "${existing.find((c) => c.chain.id === chainId)!.chain.name}"` : "A new chain";
+    return `Proposed. ${what}: ${proposal.blocks.map((b) => b.name).join(" → ")}. It waits for the user ${where}; nothing changes or runs until they accept.${warn.length ? `\nNoted for them: ${warn.join("; ")}` : ""}`;
 }
 
 // ---- status, for the tools --------------------------------------------------------------------------
 
-export async function validationStatusText(taskId: string): Promise<string> {
+export async function validationStatusText(taskId: string, sessionId?: string): Promise<string> {
     const view = await validationView(taskId);
     const lines: string[] = [];
-    if (view.chain) {
-        lines.push(`Validation chain "${view.chain.name}", ${view.chain.graph.nodes.length} pipeline${view.chain.graph.nodes.length === 1 ? "" : "s"}:`);
-        for (const n of view.chain.graph.nodes) {
-            const after = view.chain.graph.edges.filter((e) => e.to === n.id).map((e) => view.chain!.graph.nodes.find((x) => x.id === e.from)?.name).filter(Boolean);
-            const branch = n.branchFrom ? `follows PR ${n.branchFrom.prId}` : n.branch || "default branch";
-            const repos = Object.entries(n.repoBranches ?? {}).map(([alias, br]) => `${alias} on ${br}`);
-            lines.push(
-                `- ${n.name} (${n.org}/${n.project}/${n.definitionId}), ${branch}${repos.length ? ` (repositories: ${repos.join(", ")})` : ""}${after.length ? `, after ${after.join(", ")}` : ""}`,
-            );
-        }
-        lines.push(view.runs.length ? `Runs, newest first:\n${view.runs.slice(0, 5).map((r) => `- ${r.createdAt}: ${r.text}`).join("\n")}` : "It hasn't run yet.");
-    } else lines.push("No validation chain yet.");
-    if (view.proposal) lines.push(`A proposal by ${view.proposal.by} waits for the user: ${view.proposal.blocks.map((b) => b.name).join(" → ")}.`);
-    if (view.taskStatus === "done") lines.push("The task is done, so its validation can't run until it's reopened.");
+    if (!view.chains.length) lines.push("No validation chains yet.");
+    else {
+        lines.push(
+            `${view.chains.length} validation chain${view.chains.length === 1 ? "" : "s"}, shared by the task's workers. ${view.running} run${view.running === 1 ? "" : "s"} going on the task (limit ${view.limits.perTask}).`,
+        );
+        for (const c of view.chains) lines.push("", ...chainStatusLines(c, sessionId));
+    }
+    for (const p of view.proposals) {
+        lines.push(
+            "",
+            `Proposal by ${p.by} waits for the user: ${p.chainId ? `a change to "${p.name}"` : `new chain "${p.name}"`}: ${p.blocks.map((b) => b.name).join(" → ")}.`,
+        );
+    }
+    if (view.taskStatus === "done") lines.push("", "The task is done, so its validation can't run until it's reopened.");
     return lines.join("\n");
 }
+
+function chainStatusLines(c: ValidationChainView, sessionId?: string): string[] {
+    const { chain } = c;
+    const lines = [`Chain "${chain.name}" (chainId ${chain.id})${c.purpose ? `: ${c.purpose}` : ""}`];
+    const how = [
+        c.mode === "one" ? `runs one at a time${c.deploys ? ` (${c.deploys} deploys)` : ""}` : `up to ${c.maxActive} runs at once`,
+        c.workersMayRunNow ? "workers may run it without asking" : "a worker's run asks the user first",
+        ...(c.followsRunner ? ["builds the code of whoever runs it: a run needs a target"] : []),
+    ];
+    lines.push(`  ${how.join("; ")}.`);
+    for (const n of chain.graph.nodes) {
+        const after = chain.graph.edges
+            .filter((e) => e.to === n.id)
+            .map((e) => chain.graph.nodes.find((x) => x.id === e.from)?.name)
+            .filter(Boolean);
+        const branch = n.followRunner ? "builds the runner's branch" : n.branchFrom ? `follows PR ${n.branchFrom.prId}` : n.branch || "default branch";
+        const repos = Object.entries(n.repoBranches ?? {}).map(([alias, br]) => `${alias} on ${br}`);
+        lines.push(
+            `  - ${n.name} (${n.org}/${n.project}/${n.definitionId}), ${branch}${repos.length ? ` (repositories: ${repos.join(", ")})` : ""}${after.length ? `, after ${after.join(", ")}` : ""}`,
+        );
+    }
+    const going = c.runs.filter((r) => r.status === "running");
+    for (const r of going) lines.push(`  Running: ${runLine(r, sessionId)}`);
+    for (const q of c.queue) lines.push(`  Waiting #${q.position}: ${q.trigger.label}${q.target ? ` for ${q.target.label}` : ""}, ${q.waitingFor.toLowerCase()}`);
+    if (c.latest.length) lines.push(`  Latest per runner: ${c.latest.map((l) => `${l.label} ${l.status} (${l.at})`).join("; ")}`);
+    else lines.push("  It hasn't run yet.");
+    return lines;
+}
+
+function runLine(r: ValidationChainView["runs"][number], sessionId?: string): string {
+    const mine = sessionId && r.trigger?.sessionId === sessionId ? " (yours)" : "";
+    return `run ${r.runId} by ${r.by ?? "someone"}${mine}${r.for ? ` for ${r.for}` : ""}, ${r.startedAt}: ${r.text}`;
+}
+
+async function runsText(taskId: string, chainIdValue: unknown, limitValue: unknown, sessionId?: string): Promise<string> {
+    const view = await validationView(taskId);
+    const c = pickChain(view.chains, chainIdValue);
+    if (typeof c === "string") return c;
+    const limit = Math.max(1, Math.min(20, Number(limitValue) || 10));
+    if (!c.runs.length) return `"${c.chain.name}" hasn't run yet.`;
+    return [`Runs of "${c.chain.name}", newest first:`, ...c.runs.slice(0, limit).map((r) => `- ${runLine(r, sessionId)}`)].join("\n");
+}
+
+/** One chain by id; with none given, the only one. Returns what to tell the agent when it can't pick. */
+function pickChain(chains: ValidationChainView[], chainIdValue: unknown): ValidationChainView | string {
+    const id = typeof chainIdValue === "string" ? chainIdValue.trim() : "";
+    if (!chains.length) return "This task has no validation chains yet. Propose one first.";
+    if (!id) return chains.length === 1 ? chains[0] : `Say which chain: ${chains.map((c) => `${c.chain.id} ("${c.chain.name}")`).join(", ")}.`;
+    return chains.find((c) => c.chain.id === id) ?? `Chain ${id} isn't on this task. Use action status for the chains and their ids.`;
+}
+
+/** The chains a run asks for: chainIds, or the only chain. */
+function pickChains(chains: ValidationChainView[], value: unknown): ValidationChainView[] | string {
+    const ids = Array.isArray(value) ? value.filter((x): x is string => typeof x === "string" && !!x.trim()).map((x) => x.trim()) : typeof value === "string" && value.trim() ? [value.trim()] : [];
+    if (!ids.length) {
+        const one = pickChain(chains, undefined);
+        return typeof one === "string" ? one : [one];
+    }
+    const picked: ValidationChainView[] = [];
+    for (const id of [...new Set(ids)]) {
+        const c = chains.find((x) => x.chain.id === id);
+        if (!c) return `Chain ${id} isn't on this task. Use action status for the chains and their ids.`;
+        picked.push(c);
+    }
+    return picked;
+}
+
+const outcomeText = (outcomes: RunOutcome[]) => outcomes.map((o) => `- ${o.message}${o.runId ? ` (run ${o.runId})` : ""}`).join("\n");
 
 async function candidatesText(taskId: string): Promise<string> {
     const { candidates, notes } = await findCandidates(taskId);
@@ -757,37 +880,109 @@ const BLOCK_SCHEMA = {
         pipeline: { type: "string", description: "org/project/definitionId, as candidates lists it." },
         after: { type: "array", items: { type: "string" }, description: "The pipelines (org/project/definitionId) it runs after. A pipeline that uses another's build must run after it." },
         followPr: { type: "number", description: "Build this linked PR's source branch (usually for the builds the PR's checks require)." },
+        followRunner: {
+            type: "boolean",
+            description:
+                "Build the branch of whoever runs the chain (a worker's checked-out branch, or the PR it's run for), read at each run. Use it for builds of the change itself when several workers share the chain. Not with followPr or branch.",
+        },
         branch: { type: "string", description: "A fixed branch instead; leave empty for the pipeline's default (usually right for deploys and tests, which use the earlier build)." },
         params: { type: "object", description: "Runtime parameters to change from their defaults, by name. Only what must change." },
         repoBranches: {
             type: "object",
             description:
-                "Branches for the pipeline's YAML repository resources (resources.repositories, like a templates repo), by alias: {\"templates\": \"users/me/fix\"}. Only what must change; the rest use the ref in the YAML. The pipeline's own repo uses branch or followPr.",
+                "Branches for the pipeline's YAML repository resources (resources.repositories, like a templates repo), by alias: {\"templates\": \"users/me/fix\"}. Only what must change; the rest use the ref in the YAML. The pipeline's own repo uses branch, followPr or followRunner.",
         },
         reason: { type: "string", description: "One sentence: why this pipeline belongs in the chain." },
     },
     required: ["pipeline", "reason"],
 } as const;
 
+const LEFT_OUT_SCHEMA = { type: "array", items: { type: "object", properties: { pipeline: { type: "string" }, reason: { type: "string" } }, required: ["pipeline", "reason"] } } as const;
+
+const PROPOSAL_PROPERTIES = {
+    chainId: { type: "string", description: "propose: the chain this changes (from status); leave out for a new chain. runs: the chain whose runs to list." },
+    name: { type: "string", description: "propose, new chain: a short name." },
+    purpose: { type: "string", description: "propose: when to use this chain instead of the task's others, in a sentence. Required for a new chain when the task has chains." },
+    summary: { type: "string" },
+    blocks: { type: "array", items: BLOCK_SCHEMA },
+    leftOut: LEFT_OUT_SCHEMA,
+} as const;
+
+const RUN_PROPERTIES = {
+    chainIds: { type: "array", items: { type: "string" }, description: "run: the chains to run (from status); may be left out when the task has one." },
+    limit: { type: "number", description: "runs: how many, newest first (default 10)." },
+} as const;
+
 const PROPOSE_HELP =
+    "A task can have several validation chains, each with a purpose that says when to use it; they're shared by all the task's workers. " +
+    "action status: the chains (with chainId, purpose, blocks, who's running them, the queue, each runner's latest run) and proposals waiting for the user. " +
     "action candidates: what the app found, with evidence: the builds the task's PRs must pass, pipelines that use those builds, and chains the user ran with them. " +
-    "action propose: send your chain: summary (what it proves and what you left out), blocks (pipeline, after, followPr or branch, params, repoBranches, reason), leftOut (pipeline, reason). " +
-    "The app checks it (pipelines exist and can be queued, branches exist, parameters and repository aliases fit, no cycles, builds before what uses them) and the user reviews it; nothing is created or run until they accept. " +
-    "Leave out anything that deploys to production. action status: the current chain, its runs and any proposal.";
+    "action propose: send a chain: chainId to change an existing one, or name and purpose for a new one; summary (what it proves and what you left out), blocks (pipeline, after, followPr, followRunner or branch, params, repoBranches, reason), leftOut (pipeline, reason). " +
+    "The app checks it (pipelines exist and can be queued, branches exist, parameters and repository aliases fit, no cycles, builds before what uses them) and the user reviews it; nothing changes or runs until they accept. " +
+    "Leave out anything that deploys to production. action runs: a chain's runs, newest first, each labeled with who ran it and whose code it built.";
+
+const RUN_TRIGGER = (kind: RunTrigger["kind"], label: string, sessionId?: string): RunTrigger => ({ kind, label, ...(sessionId ? { sessionId } : {}) });
+
+/**
+ * Whose code a run builds, when a chain it starts builds the runner's branch: "mine" (a worker's
+ * own, the default for a worker), a linked PR's number, or (for the Lead) a worker's name.
+ */
+async function runTarget(taskId: string, value: unknown, picked: ValidationChainView[], self?: { sessionId: string }): Promise<RunTarget | null> {
+    if (!picked.some((c) => c.followsRunner)) return null;
+    const raw = typeof value === "number" ? String(value) : typeof value === "string" ? value.trim() : "";
+    if (!raw || raw.toLowerCase() === "mine") {
+        if (self) return workerTarget(taskId, self.sessionId);
+        throw new JarvisError("These chains build the code of whoever runs them: pass target, a worker's name or a linked PR's number.", 400);
+    }
+    const view = await validationView(taskId);
+    const prId = Number(raw.replace(/^(pr|!)\s*/i, ""));
+    if (Number.isSafeInteger(prId) && prId > 0) {
+        const pr = view.prs.find((p) => p.prId === prId);
+        if (!pr) throw new JarvisError(`PR ${prId} isn't linked to this task.`, 404);
+        return resolveTarget(taskId, `pr:${pr.org}/${pr.prId}`);
+    }
+    const workers = view.targets.filter((t) => t.kind === "worker");
+    const w = workers.find((t) => t.label.toLowerCase() === raw.toLowerCase() || t.sessionId === raw);
+    if (!w) throw new JarvisError(`No worker "${raw}" on this task. Its workers: ${workers.map((t) => t.label).join(", ") || "none"}.`, 404);
+    return resolveTarget(taskId, w.id);
+}
+
+const blocksLine = (c: ValidationChainView) => `${c.chain.name}: ${c.chain.graph.nodes.map((n) => n.name).join(" → ") || "no pipelines"}`;
+
+/** A worker runs chains: the user approves unless every one may run without asking. */
+async function workerRun(worker: { taskId: string; sessionId: string; label: string }, a: { chainIds?: unknown; chainId?: unknown; target?: unknown }): Promise<string> {
+    const view = await validationView(worker.taskId);
+    const picked = pickChains(view.chains, a.chainIds ?? a.chainId);
+    if (typeof picked === "string") return picked;
+    const target = await runTarget(worker.taskId, a.target, picked, worker);
+    if (picked.some((c) => !c.workersMayRunNow)) {
+        const { askWorkerApproval } = await import("./jarvis-workers.mjs");
+        const title = picked.length === 1 ? `Run validation "${picked[0].chain.name}"` : `Run ${picked.length} validation chains`;
+        const detail = [...picked.map(blocksLine), ...(target ? [`Builds ${target.label}'s code.`] : [])].join("\n");
+        if (!(await askWorkerApproval(worker.sessionId, title, detail))) {
+            return "The user declined. Don't run it; continue without it, or ask what they want.";
+        }
+    }
+    const outcomes = await runChains(worker.taskId, picked.map((c) => c.chain.id), { trigger: RUN_TRIGGER("worker", worker.label, worker.sessionId), target });
+    return `${outcomeText(outcomes)}\nIf a run fails, you'll get the failed builds and steps.`;
+}
 
 /** The worker's tool. The task is the worker's own, from the invoking session. */
 export function taskValidationTool(): Tool<unknown> {
     return defineTool("task_validation", {
         description:
-            "This task's validation chain: the Azure DevOps pipelines that prove its change works, run in order. " + PROPOSE_HELP +
-            " action run: ask the user to run the accepted chain now; it waits for their approval.",
+            "This task's validation chains: the Azure DevOps pipelines that prove its change works, run in order. " +
+            PROPOSE_HELP +
+            " action run: run chainIds (pick by purpose); unless the user allowed it for every one, it waits for their approval. " +
+            "A chain can run several times at once (each run is labeled with who ran it); one that deploys runs one at a time, and a run that can't start yet waits in its queue. " +
+            "target: whose code chains that follow the runner build: \"mine\" (default) or a linked PR's number.",
         parameters: {
             type: "object",
             properties: {
-                action: { type: "string", enum: ["status", "candidates", "propose", "run"] },
-                summary: { type: "string" },
-                blocks: { type: "array", items: BLOCK_SCHEMA },
-                leftOut: { type: "array", items: { type: "object", properties: { pipeline: { type: "string" }, reason: { type: "string" } }, required: ["pipeline", "reason"] } },
+                action: { type: "string", enum: ["status", "candidates", "propose", "run", "runs"] },
+                ...PROPOSAL_PROPERTIES,
+                ...RUN_PROPERTIES,
+                target: { type: "string", description: "run: \"mine\" (default) or a linked PR's number." },
             },
             required: ["action"],
         },
@@ -796,19 +991,21 @@ export function taskValidationTool(): Tool<unknown> {
         handler: async (args, invocation) => {
             const worker = await getWorker(invocation.sessionId);
             if (!worker) return "This session is not one of the Workspace's workers.";
-            const a = (args || {}) as ProposalInput & { action?: unknown };
+            const a = (args || {}) as ProposalInput & { action?: unknown; chainIds?: unknown; target?: unknown; limit?: unknown };
             try {
                 switch (a.action) {
                     case "status":
-                        return await validationStatusText(worker.taskId);
+                        return await validationStatusText(worker.taskId, worker.sessionId);
                     case "candidates":
                         return await candidatesText(worker.taskId);
                     case "propose":
                         return await propose(worker.taskId, a, worker.label, worker.sessionId);
                     case "run":
-                        return await requestRun(worker.taskId, worker.sessionId);
+                        return await workerRun(worker, a);
+                    case "runs":
+                        return await runsText(worker.taskId, a.chainId, a.limit, worker.sessionId);
                     default:
-                        return "Use action status, candidates, propose or run.";
+                        return "Use action status, candidates, propose, run or runs.";
                 }
             } catch (error) {
                 return error instanceof JarvisError ? error.message : `Not done: ${(error as Error).message}`;
@@ -817,38 +1014,28 @@ export function taskValidationTool(): Tool<unknown> {
     });
 }
 
-async function requestRun(taskId: string, sessionId: string): Promise<string> {
-    const chain = await validationChain(taskId);
-    if (!chain) return "This task has no accepted validation chain yet. Propose one first.";
-    const stages = chain.graph.nodes.map((n) => n.name).join(" → ");
-    const { askWorkerApproval } = await import("./jarvis-workers.mjs");
-    const allowed = await askWorkerApproval(sessionId, `Run the validation chain: ${chain.graph.nodes.length} pipelines`, stages);
-    if (!allowed) return "The user declined. Don't run it; continue without it, or ask what they want.";
-    await runValidation(taskId);
-    return "Started. If it fails, you'll get the failed builds and steps.";
-}
-
 /** The Lead's tool: any task, by id. */
 export function leadValidationTool(): Tool<unknown> {
     return defineTool("devis_task_validation", {
         description:
-            "A task's validation chain: the Azure DevOps pipelines that prove its change works, run in order. Pass taskId (from jarvis_today). " + PROPOSE_HELP +
-            " Propose only when the user asks. You can't run it; the user runs it from the task.",
+            "A task's validation chains: the Azure DevOps pipelines that prove its change works, run in order. Pass taskId (from jarvis_today). " +
+            PROPOSE_HELP +
+            " Propose only when the user asks. action run: run chainIds now, only when the user asked you to; target is whose code chains that follow the runner build: a worker's name or a linked PR's number.",
         parameters: {
             type: "object",
             properties: {
                 taskId: { type: "string" },
-                action: { type: "string", enum: ["status", "candidates", "propose"] },
-                summary: { type: "string" },
-                blocks: { type: "array", items: BLOCK_SCHEMA },
-                leftOut: { type: "array", items: { type: "object", properties: { pipeline: { type: "string" }, reason: { type: "string" } }, required: ["pipeline", "reason"] } },
+                action: { type: "string", enum: ["status", "candidates", "propose", "run", "runs"] },
+                ...PROPOSAL_PROPERTIES,
+                ...RUN_PROPERTIES,
+                target: { type: "string", description: "run: a worker's name or a linked PR's number, for chains that follow the runner." },
             },
             required: ["taskId", "action"],
         },
         skipPermission: true,
         defer: "never",
         handler: async (args) => {
-            const a = (args || {}) as ProposalInput & { action?: unknown; taskId?: unknown };
+            const a = (args || {}) as ProposalInput & { action?: unknown; taskId?: unknown; chainIds?: unknown; target?: unknown; limit?: unknown };
             const taskId = asJarvisId(a.taskId);
             if (!taskId || !(await getTask(taskId))) return "Failed: Unknown taskId. Read it from jarvis_today.";
             try {
@@ -859,8 +1046,17 @@ export function leadValidationTool(): Tool<unknown> {
                         return await candidatesText(taskId);
                     case "propose":
                         return await propose(taskId, a, LEAD_NAME, null);
+                    case "run": {
+                        const view = await validationView(taskId);
+                        const picked = pickChains(view.chains, a.chainIds ?? a.chainId);
+                        if (typeof picked === "string") return picked;
+                        const target = await runTarget(taskId, a.target, picked);
+                        return outcomeText(await runChains(taskId, picked.map((c) => c.chain.id), { trigger: RUN_TRIGGER("lead", LEAD_NAME), target }));
+                    }
+                    case "runs":
+                        return await runsText(taskId, a.chainId, a.limit);
                     default:
-                        return "Use action status, candidates or propose.";
+                        return "Use action status, candidates, propose, run or runs.";
                 }
             } catch (error) {
                 return error instanceof JarvisError ? error.message : `Failed: ${(error as Error).message}`;

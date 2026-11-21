@@ -90,18 +90,21 @@ import {
 } from "./comms.mjs";
 import { dismissS360Need, ensureS360Runner, listS360Items, s360Digest, s360Status, s360Today, scanS360, setS360Enabled } from "./s360.mjs";
 import {
+    YOU_TRIGGER,
     acceptProposal,
     acknowledgeRun,
     askForProposal,
     attachChain,
+    cancelQueued,
     dismissProposal,
-    removeValidation,
-    runValidation,
+    removeChain,
+    resolveTarget,
+    runChains,
     saveAsReusable,
     setAutoPropose,
     setBlockRepoBranches,
-    setValidationOptions,
-    stopValidation,
+    setChainOptions,
+    stopRun,
     validationView,
 } from "./jarvis-validation.mjs";
 import {
@@ -406,7 +409,7 @@ export async function handleJarvisApi(req: IncomingMessage, res: ServerResponse,
             return sendJson(res, 200, { ok: true });
         }
 
-        // ---- a task's validation chain ----
+        // ---- a task's validation chains ----
         if (p === "/api/jarvis/validation" && get) {
             return sendJson(res, 200, await validationView(requireId(q.get("id"))));
         }
@@ -420,28 +423,39 @@ export async function handleJarvisApi(req: IncomingMessage, res: ServerResponse,
             const id = requireId(b?.id);
             switch (action) {
                 case "attach":
-                    return sendJson(res, 200, { chain: await attachChain(id, b?.from) });
+                    return sendJson(res, 200, { chain: await attachChain(id, { from: b?.from, name: b?.name, purpose: b?.purpose }) });
                 case "remove":
-                    await removeValidation(id);
+                    await removeChain(id, b?.chainId);
                     return sendJson(res, 200, { ok: true });
                 case "run":
-                    return sendJson(res, 200, { run: await runValidation(id) });
+                    // Runs you start from the task: `target` picks whose code chains that follow the runner build.
+                    return sendJson(res, 200, {
+                        runs: await runChains(id, b?.chainIds ?? b?.chainId, { trigger: YOU_TRIGGER, target: await resolveTarget(id, b?.target) }),
+                    });
                 case "stop":
-                    return sendJson(res, 200, { stopped: await stopValidation(id) });
+                    if (typeof b?.queueId === "string") return sendJson(res, 200, { stopped: await cancelQueued(id, b?.chainId, b.queueId) });
+                    return sendJson(res, 200, { stopped: await stopRun(id, b?.runId) });
                 case "options":
-                    await setValidationOptions(id, { notifyWorker: b?.notifyWorker, rerunOnCommit: b?.rerunOnCommit });
+                    await setChainOptions(id, b?.chainId, {
+                        name: b?.name,
+                        purpose: b?.purpose,
+                        concurrency: b?.concurrency,
+                        workersMayRun: b?.workersMayRun,
+                        notifyWorker: b?.notifyWorker,
+                        rerunOnCommit: b?.rerunOnCommit,
+                    });
                     return sendJson(res, 200, { ok: true });
                 case "repos":
-                    return sendJson(res, 200, await setBlockRepoBranches(id, b?.nodeId, b?.repoBranches, b?.was));
+                    return sendJson(res, 200, await setBlockRepoBranches(id, b?.chainId, b?.nodeId, b?.repoBranches, b?.was));
                 case "ack":
-                    if (typeof b?.runId !== "string") throw new JarvisError("Say which run you saw.", 400);
-                    await acknowledgeRun(id, b.runId);
+                    // Without a run, every failed run the user hasn't looked at.
+                    await acknowledgeRun(id, typeof b?.runId === "string" ? b.runId : undefined);
                     return sendJson(res, 200, { ok: true });
                 case "reusable":
-                    return sendJson(res, 200, { chain: await saveAsReusable(id) });
+                    return sendJson(res, 200, { chain: await saveAsReusable(id, b?.chainId) });
                 case "accept":
                     if (typeof b?.proposalId !== "string") throw new JarvisError("Say which proposal you reviewed.", 400);
-                    return sendJson(res, 200, { chain: await acceptProposal(id, { run: b?.run === true, id: b.proposalId }) });
+                    return sendJson(res, 200, await acceptProposal(id, { run: b?.run === true, id: b.proposalId, target: b?.target }));
                 case "dismiss":
                     if (typeof b?.proposalId !== "string") throw new JarvisError("Say which proposal you reviewed.", 400);
                     await dismissProposal(id, b?.reason, b.proposalId);

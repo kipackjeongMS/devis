@@ -470,8 +470,7 @@ async function initializeDb(): Promise<DatabaseSync> {
             ON pipeline_runs(chain_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_pipeline_runs_status
             ON pipeline_runs(status);
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_pipeline_runs_one_active
-            ON pipeline_runs(chain_id) WHERE status = 'running';
+            DROP INDEX IF EXISTS idx_pipeline_runs_one_active;
             CREATE TABLE IF NOT EXISTS pipeline_run_commands (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 run_id      TEXT NOT NULL,
@@ -495,6 +494,10 @@ async function initializeDb(): Promise<DatabaseSync> {
             connection.exec("ALTER TABLE pipeline_chains ADD COLUMN owner_task_id TEXT");
         }
         connection.exec("CREATE INDEX IF NOT EXISTS idx_pipeline_chains_owner ON pipeline_chains(owner_task_id)");
+        // A run says who started it and whose branches it builds; a chain can have several at once.
+        const runCols = connection.prepare("PRAGMA table_info(pipeline_runs)").all() as Array<{ name: string }>;
+        if (!runCols.some((c) => c.name === "trigger_json")) connection.exec("ALTER TABLE pipeline_runs ADD COLUMN trigger_json TEXT");
+        if (!runCols.some((c) => c.name === "target_json")) connection.exec("ALTER TABLE pipeline_runs ADD COLUMN target_json TEXT");
         connection.exec("COMMIT");
         db = connection;
         return connection;

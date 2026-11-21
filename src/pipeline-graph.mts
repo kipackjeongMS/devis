@@ -26,12 +26,51 @@ export interface ChainNode {
      * commits and a renamed branch need no edit. Overrides `branch`.
      */
     branchFrom?: PrRef;
+    /**
+     * Build the branch of whoever runs the chain (a worker's branch, or the PR it was run
+     * for), read when the block queues. Only a task's validation chain has a runner.
+     */
+    followRunner?: true;
 }
 
 export interface PrRef {
     org: string;
     prId: number;
 }
+
+/** Who started a run: a worker, the Lead, the user, or the app (rerun on new commits). */
+export interface RunTrigger {
+    kind: "worker" | "lead" | "you" | "auto";
+    label: string;
+    sessionId?: string;
+}
+
+/** A branch a runner has checked out. */
+export interface RunnerBranch {
+    org: string;
+    project: string;
+    repo: string;
+    branch: string;
+}
+
+/** Whose code a run builds: what blocks that follow the runner resolve to. */
+export interface RunTarget {
+    label: string;
+    sessionId?: string;
+    branches: RunnerBranch[];
+    pr?: { org: string; prId: number; repo?: string };
+}
+
+/** One string for a run's target: builds of blocks that follow the runner count only for the same one. */
+export function runnerKey(target: RunTarget | null | undefined): string | null {
+    if (!target) return null;
+    if (target.pr) return `runner:pr:${target.pr.org.toLowerCase()}/${target.pr.prId}`;
+    if (!target.branches.length) return null;
+    const parts = target.branches.map((b) => `${b.org.toLowerCase()}/${b.repo.toLowerCase()}@${normalizeBranch(b.branch)}`).sort();
+    return `runner:${parts.join(",")}`;
+}
+
+export const followsRunner = (graph: ChainGraph): boolean => graph.nodes.some((n) => n.followRunner);
 
 export interface ChainEdge {
     from: string;
@@ -335,6 +374,8 @@ export function validateGraph(raw: unknown, orgs?: string[]): ChainGraph {
         const params = paramOverrides(n.params);
         const repoBranches = repoBranchOverrides(n.repoBranches);
         const branchFrom = prRef(n.branchFrom, allowedOrgs);
+        const followRunner = n.followRunner === true;
+        if (followRunner && branchFrom) throw new Error("A block can follow a pull request or whoever runs the chain, not both");
         return {
             id,
             org,
@@ -348,6 +389,7 @@ export function validateGraph(raw: unknown, orgs?: string[]): ChainGraph {
             ...(params ? { params } : {}),
             ...(repoBranches ? { repoBranches } : {}),
             ...(branchFrom ? { branchFrom } : {}),
+            ...(followRunner ? { followRunner: true as const } : {}),
         };
     });
     const pairs = new Set<string>();
@@ -631,7 +673,8 @@ export function lastAppBuild(node: ChainNode, builds: AppBuild[]): AppBuild | un
             b.nodeId === node.id &&
             b.definitionId === node.definitionId &&
             // A block that follows a PR counts only builds of that PR, whatever its branch is called.
-            (followed ? b.followed === followed : b.branch === branch) &&
+            // One that follows the runner counts runner builds; the runner passes only its own.
+            (node.followRunner ? !!b.followed?.startsWith("runner:") : followed ? b.followed === followed : b.branch === branch) &&
             // Built against other branches of its repository resources, it's a different build.
             (b.repos ?? "") === repos &&
             b.org.toLowerCase() === node.org.toLowerCase() &&

@@ -139,6 +139,10 @@ assert.equal(topologySignature(withRepo({ Templates: "refs/heads/fix" })), topol
 assert.equal(topologySignature(withRepo(undefined)), sigA);
 assert.equal(nodeBranchLabel({ branch: "refs/heads/release/1" }), "release/1");
 assert.equal(nodeBranchLabel({ branch: "", branchFrom: { org: "org", prId: 7 } }), "PR 7's branch");
+assert.equal(nodeBranchLabel({ branch: "", followRunner: true }), "Whoever runs it");
+const runnerFollowing = { ...graph, nodes: graph.nodes.map((x) => (x.id === "n1" ? { ...x, followRunner: true } : x)) };
+assert.notEqual(topologySignature(runnerFollowing), sigA, "following whoever runs it changes what a run builds");
+assert.notEqual(topologySignature(runnerFollowing), topologySignature(following), "…and isn't following a PR");
 
 // ---- canvas geometry ------------------------------------------------------------------------
 assert.ok(NODE_W >= 200 && NODE_H >= 72);
@@ -427,6 +431,10 @@ for (const [graph, id, resources] of [
       "…only one it made following that PR, whatever the branch",
     );
     assert.equal(lastAppBuild({ ...graph.nodes[0], branchFrom: { org: "org", prId: 8 } }, [{ ...lastAppBuild(graph.nodes[0], past), followed: "org/7" }]), undefined, "…not another PR");
+    const runnerBuild = { ...lastAppBuild(graph.nodes[0], past), branch: "refs/heads/w1", followed: "runner:worker:s1" };
+    assert.equal(lastAppBuild({ ...graph.nodes[0], followRunner: true }, [runnerBuild]).buildNumber, "v1", "a block that follows the runner takes a runner's build");
+    assert.equal(lastAppBuild({ ...graph.nodes[0], followRunner: true }, past), undefined, "…not one made on a fixed branch");
+    assert.equal(lastAppBuild({ ...graph.nodes[0], branchFrom: { org: "org", prId: 7 } }, [runnerBuild]), undefined, "a PR's block doesn't take a runner's build");
     assert.equal(lastAppBuild({ ...graph.nodes[0], definitionId: 1 }, past), undefined, "nor does another pipeline");
     assert.equal(lastAppBuild(graph.nodes[1], past), undefined);
 }

@@ -454,7 +454,7 @@ function workerBrief(task: JarvisTask, worker: { label: string; cwd: string }, w
     const reviews = devis
         ? []
         : [
-              "The task can have a validation chain: Azure DevOps pipelines that prove the change works, run in order. Find and propose one with task_validation (candidates, then propose) when the user asks or the app does; the user accepts it and decides when it runs.",
+              "The task can have validation chains: Azure DevOps pipelines that prove the change works, run in order, shared by all the task's workers; each chain's purpose says when to use it. When your change is ready to prove, read them with task_validation status and run the one that fits; the user approves each run unless they allowed it for that chain. Find and propose a new chain or a change to one (candidates, then propose) when the user asks or the app does; the user accepts it before it changes.",
               "When reviewers comment on your pull requests, the app asks you to review them and propose a response per thread with task_pr_comments. The user accepts the proposal before anything changes; then make only the accepted changes and report with task_pr_comments done.",
               "When blocking builds fail on your pull requests, the app asks you to read the failures and propose, per build, a fix or a rerun with task_pr_builds. The user accepts before anything changes; then make only the accepted fixes, push, and report with task_pr_builds done. Don't queue builds yourself.",
           ];
@@ -697,7 +697,7 @@ function taskStartWorkerTool(): Tool<unknown> {
 const AUDIT_ACTIONS: Readonly<Record<string, ReadonlySet<string>>> = {
     task_artifacts: new Set(["list", "read"]),
     user_notes: new Set(["read"]),
-    task_validation: new Set(["status", "candidates"]),
+    task_validation: new Set(["status", "candidates", "runs"]),
     task_pr_comments: new Set(["threads", "propose"]),
     task_pr_builds: new Set(["builds", "propose"]),
     task_workspace: new Set(["repos"]),
@@ -2054,7 +2054,7 @@ async function recapTurn(worker: JarvisWorker, reason: RecapReason): Promise<voi
         const statuses = await listStatuses({ taskId: task.id, limit: 2000 });
         const prs = await listTaskPrs(task.id);
         const validation = await import("./jarvis-validation.mjs")
-            .then(async (v) => (await v.validationView(task.id)).runs.map((r) => `${r.createdAt}: ${r.text}`))
+            .then((v) => v.validationHistory(task.id))
             .catch(() => [] as string[]);
         const minutes = Math.round(RECAP_LIMITS.turnMs / 60_000);
         const result = await withTimeout(

@@ -47,9 +47,10 @@ export function noticeLine(n: NeedItem): NoticePart[] {
   const title = { em: n.task.title };
   if (n.kind === "failed") return [{ strong: n.worker.label }, "'s turn failed on ", title, ". A message to it tries again."];
   if (n.kind === "validation") {
-    return n.task.validation?.attention === "proposal"
-      ? [{ strong: n.who }, " proposed how to validate ", title, "."]
-      : ["The validation run failed on ", title, "."];
+    const name = { em: n.need.name };
+    return n.need.what === "proposal"
+      ? [{ strong: n.who }, n.need.chainId ? " proposed a change to the validation chain " : " proposed a new validation chain, ", name, ", on ", title, "."]
+      : ["The validation run of ", name, n.who !== "Validation" ? ` (run by ${n.who})` : "", " failed on ", title, "."];
   }
   if (n.kind === "prComments") {
     return n.pr.attention === "proposal"
@@ -84,7 +85,7 @@ export function noticeLabel(n: NeedItem): string {
   }
   if (n.kind === "s360") return `the S360 item “${oneLine(n.need.item.title, 80)}”`;
   if (n.kind === "failed") return `${n.worker.label}'s failed turn`;
-  if (n.kind === "validation") return n.task.validation?.attention === "proposal" ? `${n.who}'s validation plan` : "the failed validation run";
+  if (n.kind === "validation") return n.need.what === "proposal" ? `${n.who}'s validation plan` : "the failed validation run";
   if (n.kind === "prComments") return n.pr.attention === "proposal" ? `${n.who}'s plan for PR ${n.pr.prId}'s comments` : `the review comments on PR ${n.pr.prId}`;
   if (n.kind === "prBuilds") return n.pr.attention === "proposal" ? `${n.who}'s plan for PR ${n.pr.prId}'s builds` : `the failed builds on PR ${n.pr.prId}`;
   if (n.worker.requests.length > 1) return `${n.worker.label}'s requests`;

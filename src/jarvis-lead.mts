@@ -94,18 +94,30 @@ function taskView(task: TodayTask) {
         })),
         validation: task.validation
             ? {
-                  chain: task.validation.name,
-                  pipelines: task.validation.blocks,
-                  lastRun: task.validation.run
-                      ? {
-                            status: task.validation.run.status,
-                            passed: `${task.validation.run.done} of ${task.validation.run.total}`,
-                            running: task.validation.run.current || undefined,
-                            failedAt: task.validation.run.failed || undefined,
-                            startedAt: task.validation.run.startedAt,
-                        }
-                      : null,
-                  proposalWaiting: task.validation.proposal ? `by ${task.validation.proposal.by}, ${task.validation.proposal.blocks} pipelines` : undefined,
+                  chains: task.validation.chains.map((c) => ({
+                      chainId: c.chainId,
+                      chain: c.name,
+                      purpose: c.purpose || undefined,
+                      pipelines: c.blocks,
+                      running: c.running || undefined,
+                      queued: c.queued || undefined,
+                      lastUsed: c.lastUsed ? `${c.lastUsed.by}, ${c.lastUsed.at}` : undefined,
+                      lastRun: c.run
+                          ? {
+                                status: c.run.status,
+                                by: c.run.by ?? undefined,
+                                for: c.run.for ?? undefined,
+                                passed: `${c.run.done} of ${c.run.total}`,
+                                running: c.run.current || undefined,
+                                failedAt: c.run.failed || undefined,
+                                startedAt: c.run.startedAt,
+                            }
+                          : null,
+                      unseenFailures: c.failures.length ? c.failures.map((f) => `${f.by ?? "someone"}: failed at ${f.failed ?? "a block"}`) : undefined,
+                  })),
+                  proposalsWaiting: task.validation.proposals.length
+                      ? task.validation.proposals.map((p) => `${p.chainId ? `change to "${p.name}"` : `new chain "${p.name}"`} by ${p.by}, ${p.blocks} pipelines`)
+                      : undefined,
               }
             : null,
         workers: task.workers.map((w) => ({
@@ -343,7 +355,7 @@ export function leadBrief(needsIn: NeedsIn = "panel"): string {
         "Lead with what needs the user: workers waiting on them, failed workers, and PRs to review. Then what is running, then what is done.",
         `You may create tasks, mark them done, post status updates, add to a task's note.md, and start, message or stop workers, but only when the user asks. Permission requests from workers are the user's to approve ${chat ? "on their notice in your chat" : "under Needs you in the Workspace"}; point them there.`,
         "The user also keeps their own to-do list and quick note, kept across days. Read them with devis_notes when the user asks about their notes or to-dos, or what to work on; add, check off or append only when they ask.",
-        "A task can have a validation chain: Azure DevOps pipelines run in order to prove its change. devis_today shows each task's validation; devis_task_validation reads it, finds candidates and proposes a chain when the user asks. The user accepts and runs it from the task.",
+        "A task can have several validation chains: Azure DevOps pipelines run in order to prove its change, shared by its workers, each with a purpose that says when to use it. devis_today shows each task's validation; devis_task_validation reads the chains and their runs, finds candidates and proposes a chain when the user asks, and runs one when the user asks. The user accepts proposals from the task.",
         `When the user clearly asks to change ${APP_NAME} itself (a feature, a fix or a tweak to this app, the Workspace or you), start it with devis_change_self, passing on everything they said. Follow up through devis_message_worker. The worker asks the user to review the change before it ships, and only the user ships it. Never change ${APP_NAME}' source or deploy it yourself.`,
         "You also have the user's MCP servers (Agency's ADO, Bluebird, WorkIQ, mail, calendar, Teams, Kusto, IcM and the rest) for anything outside the Workspace. Anything that changes something outside the app, like sending mail or updating a work item, only when the user asks.",
         WEB_BRIEF,

@@ -312,13 +312,13 @@ try {
     assert.match(await userNotes({ action: "read" }, "not-a-worker"), /not one of the Workspace's workers/);
 
     // ---- the task's validation chain: every worker can read it and propose one ----
-    assert.match(session.config.systemMessage.content, /validation chain: Azure DevOps pipelines/);
+    assert.match(session.config.systemMessage.content, /validation chains: Azure DevOps pipelines that prove the change works, run in order, shared by all the task's workers/);
     const validationTool = session.config.tools.find((t) => t.name === "task_validation");
     assert.ok(validationTool?.skipPermission, "the worker has task_validation");
     const validate = (args, sessionId = plain.sessionId) => validationTool.handler(args, { sessionId });
-    assert.equal(await validate({ action: "status" }), "No validation chain yet.");
-    assert.equal(await validate({ action: "run" }), "This task has no accepted validation chain yet. Propose one first.");
-    assert.equal(await validate({ action: "nope" }), "Use action status, candidates, propose or run.");
+    assert.equal(await validate({ action: "status" }), "No validation chains yet.");
+    assert.equal(await validate({ action: "run" }), "This task has no validation chains yet. Propose one first.");
+    assert.equal(await validate({ action: "nope" }), "Use action status, candidates, propose, run or runs.");
     assert.match(await validate({ action: "status" }, "not-a-worker"), /not one of the Workspace's workers/);
 
     // ---- a PR the worker creates is linked to the task, whichever way it made it ----
@@ -421,7 +421,7 @@ try {
     assert.equal(seen.read, "# Design\n\nOption B.", "reading an artifact still works");
     assert.match(seen.list, /^note\.md · /);
     assert.equal(seen.notes, notesBefore);
-    assert.equal(seen.vstatus, "No validation chain yet.");
+    assert.equal(seen.vstatus, "No validation chains yet.");
     assert.equal(seen.mcpUpdate.kind, "reject", "an MCP tool told to update is refused");
     assert.deepEqual(seen.mcpGet, { kind: "approve-once" }, "…told to get, it runs");
     assert.equal(seen.mcpWriteTool.kind, "reject", "a write tool is refused whatever its action");

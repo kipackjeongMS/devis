@@ -58,8 +58,8 @@ export function needKeys(
         for (const pr of task.prBuilds ?? []) if (pr.attention) keys.add(prBuildNeedKey(task.id, pr));
         const v = task.validation;
         if (!v) continue;
-        if (v.attention === "proposal" && v.proposal) keys.add(`need:val:${task.id}:proposal:${v.proposal.at}`);
-        else if (v.attention === "failed") keys.add(`need:val:${task.id}:failed:${v.run?.runId ?? "run"}`);
+        for (const proposal of v.proposals) keys.add(`need:val:${task.id}:proposal:${proposal.id}`);
+        for (const run of v.failures) keys.add(`need:val:${task.id}:failed:${run.runId}`);
     }
     return keys;
 }

@@ -21,6 +21,7 @@ import {
     type WorkItemPrLink,
 } from "./ado.mjs";
 import { readConfig } from "./config.mjs";
+import type { RunnerBranch } from "./pipeline-graph.mjs";
 import {
     JarvisError,
     clip,
@@ -457,6 +458,30 @@ async function recordBranches(worker: { sessionId: string; taskId: string; cwd: 
         out.push({ ...repo, branch });
     }
     return out;
+}
+
+/**
+ * The task branches a worker is on now, one per repository, for a validation run that builds
+ * the runner's branch. A removed worker (or one whose folders can't be read) falls back to the
+ * branches it was last seen on. Shared branches like main never count.
+ */
+export async function workerBranches(sessionId: string, taskIdHint?: string): Promise<RunnerBranch[]> {
+    const worker = await getWorker(sessionId);
+    if (worker) {
+        try {
+            const live = await recordBranches(worker);
+            if (live.length) return live.map((b) => ({ org: b.org, project: b.project, repo: b.repo, branch: b.branch }));
+        } catch {
+            /* fall back to what was recorded */
+        }
+    }
+    const taskId = worker?.taskId ?? taskIdHint;
+    const seen = taskId ? await listTaskBranches(taskId) : [];
+    const newest = new Map<string, RunnerBranch>();
+    for (const b of seen.filter((x) => x.sessionId === sessionId)) {
+        newest.set(`${b.org.toLowerCase()}/${b.project.toLowerCase()}/${b.repo.toLowerCase()}`, { org: b.org, project: b.project, repo: b.repo, branch: b.branch });
+    }
+    return [...newest.values()];
 }
 
 async function linkBranchPrs(taskId: string, b: RepoRef & { branch: string }): Promise<void> {

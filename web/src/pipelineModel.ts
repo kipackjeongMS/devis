@@ -45,6 +45,8 @@ export interface ChainNode {
   repoBranches?: Record<string, string>;
   /** Build this PR's source branch, read when the block queues (a task's validation chain). */
   branchFrom?: PrRef;
+  /** Build the branch of whoever runs the chain (a worker's, or the PR it ran for). Only a task's chain has a runner. */
+  followRunner?: true;
 }
 
 export interface PrRef {
@@ -52,8 +54,9 @@ export interface PrRef {
   prId: number;
 }
 
-/** What a block builds, for labels: the PR it follows, its branch, or the default. */
-export function nodeBranchLabel(n: Pick<ChainNode, "branch" | "branchFrom">): string {
+/** What a block builds, for labels: the PR it follows, whoever runs it, its branch, or the default. */
+export function nodeBranchLabel(n: Pick<ChainNode, "branch" | "branchFrom" | "followRunner">): string {
+  if (n.followRunner) return "Whoever runs it";
   if (n.branchFrom) return `PR ${n.branchFrom.prId}'s branch`;
   return (n.branch || "").trim().replace(/^refs\/heads\//, "") || "Default branch";
 }
@@ -187,6 +190,21 @@ export interface DefinitionInfo {
 
 export type RunStatus = "running" | "succeeded" | "failed" | "canceled";
 
+/** Who started a run: a worker, the Lead, the user, or the app (rerun on new commits). */
+export interface RunTrigger {
+  kind: "worker" | "lead" | "you" | "auto";
+  label: string;
+  sessionId?: string;
+}
+
+/** Whose code a run builds: what blocks that follow the runner resolve to. */
+export interface RunTarget {
+  label: string;
+  sessionId?: string;
+  branches: { org: string; project: string; repo: string; branch: string }[];
+  pr?: { org: string; prId: number; repo?: string };
+}
+
 export interface ChainRun {
   runId: string;
   chainId: string;
@@ -198,6 +216,10 @@ export interface ChainRun {
   createdAt: string;
   updatedAt: string;
   finishedAt?: string | null;
+  /** Who started it; null for older runs and the user's own chains. */
+  trigger?: RunTrigger | null;
+  /** Whose branches blocks that follow the runner built; null when none do. */
+  target?: RunTarget | null;
 }
 
 export interface ChainSummary {
@@ -206,6 +228,8 @@ export interface ChainSummary {
   nodeCount: number;
   updatedAt: string;
   lastRun: { runId: string; status: RunStatus; createdAt: string; finishedAt?: string | null } | null;
+  /** Runs going now; a task's chain can have several. */
+  activeRuns?: number;
   /** The Jarvis task whose validation this chain is; null for the user's own chains. */
   owner?: { taskId: string; title: string; status: string } | null;
 }
@@ -455,7 +479,8 @@ export function lastAppBuild(node: ChainNode, builds: AppBuild[]): AppBuild | un
     (b) =>
       b.nodeId === node.id &&
       b.definitionId === node.definitionId &&
-      (followed ? b.followed === followed : b.branch === branch) &&
+      // One that follows the runner counts runner builds; which runner is the backend's call.
+      (node.followRunner ? !!b.followed?.startsWith("runner:") : followed ? b.followed === followed : b.branch === branch) &&
       (b.repos ?? "") === repos &&
       b.org.toLowerCase() === node.org.toLowerCase() &&
       b.project.toLowerCase() === node.project.toLowerCase(),
@@ -470,7 +495,7 @@ export function topologySignature(graph: ChainGraph): string {
       n.org.toLowerCase(),
       n.project.toLowerCase(),
       n.definitionId,
-      n.branchFrom ? `pr:${n.branchFrom.org.toLowerCase()}/${n.branchFrom.prId}` : normalizeBranch(n.branch),
+      n.followRunner ? "runner" : n.branchFrom ? `pr:${n.branchFrom.org.toLowerCase()}/${n.branchFrom.prId}` : normalizeBranch(n.branch),
       repoSignature(n.repoBranches),
     ])
     .sort((a, b) => String(a[0]).localeCompare(String(b[0])));

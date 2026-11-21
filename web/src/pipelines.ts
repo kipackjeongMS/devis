@@ -55,6 +55,7 @@ import {
 import { openActionDialog } from "./prActions.js";
 import { branchLabel, openRepoBranchesDialog, repoHint } from "./repoBranchesDialog.js";
 import { toast } from "./toast.js";
+import { focusValidation } from "./taskValidation.js";
 import { esc } from "./util.js";
 
 export interface PipelinesHooks {
@@ -124,6 +125,10 @@ let pendingChain: string | null = null;
 const ownerPrs = new Map<string, { status: "loading" | "ready" | "error"; prs: OwnerPr[]; error?: string }>();
 let doc: ChainDoc = emptyDoc();
 let run: ChainRun | null = null;
+/** The open task chain's recent runs, newest first, for the run switcher: a task's chain can run more than once at a time. */
+let runList: ChainRun[] = [];
+let runListOf = "";
+let runListToken = 0;
 let selection: Selection = null;
 let openToken = 0;
 
@@ -309,6 +314,7 @@ function mount(): void {
   live = q(".chain-live");
   ownerBar = q(".chain-owner");
   ownerBar.addEventListener("click", (e) => void onOwnerClick(e));
+  ownerBar.addEventListener("change", onOwnerChange);
 
   canvas = new ChainCanvas({
     onSelect: (sel) => {
@@ -448,6 +454,9 @@ async function loadChains(openInitial: boolean): Promise<void> {
   }
   renderPicker();
   syncTimers();
+  // Another run of the open chain started or finished (from its task): list it.
+  const shown = doc.id ? chains.find((c) => c.id === doc.id) : undefined;
+  if (shown?.owner && (shown.activeRuns ?? 0) !== runList.filter((r) => r.status === "running").length) void refreshRuns();
   if (pendingChain && chains.some((c) => c.id === pendingChain)) {
     const id = pendingChain;
     pendingChain = null;
@@ -465,7 +474,7 @@ async function loadChains(openInitial: boolean): Promise<void> {
     announce("This chain changed elsewhere; showing the saved version");
   }
   if (!openInitial) return;
-  const running = chains.find((c) => c.lastRun?.status === "running");
+  const running = chains.find((c) => isChainRunning(c));
   const last = localStorage.getItem(LAST_CHAIN_KEY);
   const target = running || chains.find((c) => c.id === last) || mostRecent();
   if (target) await openChain(target.id);
@@ -477,6 +486,8 @@ async function openChain(id: string): Promise<void> {
     const res = await getJSON(`/api/pipeline-chain?id=${encodeURIComponent(id)}`);
     if (token !== openToken) return;
     const c = res.chain;
+    runList = res.runs || [];
+    runListOf = c.id;
     setDoc({ id: c.id, name: c.name, graph: c.graph, dirty: false, version: 0, saveError: null, updatedAt: c.updatedAt ?? null }, res.run || null);
   } catch (e) {
     if (token !== openToken) return;
@@ -487,9 +498,40 @@ async function openChain(id: string): Promise<void> {
 
 function openDraft(): void {
   openToken++;
+  runList = [];
+  runListOf = "";
   setDoc(emptyDoc(), null);
   nameInput.focus();
 }
+
+/** Reads the open chain's recent runs again, for the switcher (task chains only). */
+async function refreshRuns(): Promise<void> {
+  const id = doc.id;
+  const token = ++runListToken;
+  if (!id || !ownerOf(id)) {
+    runList = [];
+    return;
+  }
+  try {
+    const res = await getJSON(`/api/pipeline-chain?id=${encodeURIComponent(id)}`);
+    if (token !== runListToken || doc.id !== id) return;
+    const known = new Set(runList.map((r) => r.runId));
+    const listed = runListOf === id;
+    runList = res.runs || [];
+    runListOf = id;
+    // A run that just started elsewhere (a worker, the task's tab) shows live, unless one is already on screen.
+    const fresh = runList.find((r) => r.status === "running" && !known.has(r.runId));
+    if (fresh && !isRunning() && listed) {
+      run = fresh;
+      renderRun();
+      announce(`A run started${fresh.trigger?.label ? ` by ${fresh.trigger.label}` : ""}; showing it`);
+    } else renderOwner();
+  } catch {
+    // The next summary poll tries again.
+  }
+}
+
+const isChainRunning = (c: ChainSummary): boolean => (c.activeRuns ?? 0) > 0 || c.lastRun?.status === "running";
 
 function setDoc(next: ChainDoc, nextRun: ChainRun | null): void {
   doc = next;
@@ -815,6 +857,7 @@ function confirmRun(): void {
       run = res.run;
       renderRun();
       void loadChains(false);
+      void refreshRuns();
       toast("Chain started", "ok");
       announce("Chain started");
     },
@@ -954,10 +997,12 @@ function confirmTrigger(id: string): void {
     confirmLabel: "Run from here",
     onConfirm: async () => {
       if (!(await flushSave())) throw new Error(`Couldn't save the chain: ${doc.saveError || "unknown error"}`);
-      const res = await postJSON("/api/pipeline-chains/trigger", { id: doc.id, nodeId: id });
+      // Joins the run on screen: a task's chain can have several going.
+      const res = await postJSON("/api/pipeline-chains/trigger", { id: doc.id, nodeId: id, ...(live ? { runId: live.runId } : {}) });
       run = res.run;
       renderRun();
       void loadChains(false);
+      void refreshRuns();
       const msg = res.pending
         ? `Requested. "${n.name}" starts on the runner's next check.`
         : live
@@ -1012,7 +1057,7 @@ function confirmDelete(): void {
     title: "Delete chain",
     loc: chainTitle(),
     body: `<p class="pa-note">Removes this chain and its run history from Devis. The pipelines in Azure DevOps aren't changed.${
-      ownerOf(id) ? ` It's the validation of the task "${esc(ownerOf(id)!.title)}"; the task keeps going without one.` : ""
+      ownerOf(id) ? ` It's a validation chain of the task "${esc(ownerOf(id)!.title)}"; the task keeps its other chains.` : ""
     }</p>`,
     confirmLabel: "Delete",
     danger: true,
@@ -1063,6 +1108,7 @@ async function readRun(): Promise<void> {
     toast(msg, next.status === "succeeded" ? "ok" : "err");
     announce(msg);
     void loadChains(false);
+    void refreshRuns();
   }
 }
 
@@ -1076,7 +1122,10 @@ function syncTimers(): void {
     window.clearInterval(tickTimer);
     pollTimer = tickTimer = 0;
   }
-  const others = visible && chains.some((c) => c.id !== doc.id && c.lastRun?.status === "running");
+  // Runs the open run's poll doesn't cover: other chains', and the open chain's other runs.
+  const others =
+    visible &&
+    chains.some((c) => (c.id === doc.id ? (c.activeRuns ?? 0) > (isRunning() ? 1 : 0) : isChainRunning(c)));
   if (others && !summaryTimer) summaryTimer = window.setInterval(pollSummaries, SUMMARY_POLL_MS);
   else if (!others && summaryTimer) {
     window.clearInterval(summaryTimer);
@@ -1115,6 +1164,7 @@ function renderRun(): void {
   syncCatalogMarks();
   syncTimers();
   syncHistory();
+  renderOwner();
 }
 
 // Results belong to one chain: block ids repeat across chains, so drop them before painting another.
@@ -1159,7 +1209,7 @@ function renderPicker(): void {
   if (!doc.id) options.push(`<option value="" selected>${esc(doc.name.trim() || "New chain")} (unsaved)</option>`);
   const option = (c: ChainSummary): string => {
     const name = c.id === doc.id ? doc.name.trim() || c.name : c.name;
-    const running = c.lastRun?.status === "running" || (c.id === doc.id && isRunning());
+    const running = isChainRunning(c) || (c.id === doc.id && isRunning());
     return `<option value="${esc(c.id)}"${c.id === doc.id ? " selected" : ""}>${esc(name)}${running ? " · running" : ""}</option>`;
   };
   const own = chains.filter((c) => !c.owner);
@@ -1174,18 +1224,20 @@ function renderPicker(): void {
 
 const ownerOf = (id: string | null): ChainSummary["owner"] => (id ? chains.find((c) => c.id === id)?.owner ?? null : null);
 
-/** A task's chain says whose it is, and that its blocks can follow the task's PRs. */
+/** A task's chain says whose it is, what its blocks can follow, and (when it ran more than once) which run is shown. */
 function renderOwner(): void {
   const owner = ownerOf(doc.id);
   ownerBar.hidden = !owner;
   root?.classList.toggle("is-task-chain", !!owner);
   if (!owner) {
     ownerBar.innerHTML = "";
+    delete ownerBar.dataset.sig;
     return;
   }
   const html = `${icon("flow")}<span class="chain-owner-text">Validation for the task <b>${esc(owner.title)}</b>${
     owner.status === "done" ? " · done, so it can't run until the task is reopened" : ""
-  }. Blocks can follow the task's pull requests. It goes away with the task.</span>
+  }. Blocks can follow the task's pull requests, or whoever runs the chain. It goes away with the task.</span>
+    ${runSwitcherHtml()}
     <button type="button" class="btn sm ghost" data-owner-act="open-task">Open the task</button>
     <button type="button" class="btn sm ghost" data-owner-act="reusable">${icon("copy")}<span>Save as reusable</span></button>`;
   if (ownerBar.dataset.sig !== html) {
@@ -1194,18 +1246,48 @@ function renderOwner(): void {
   }
 }
 
+/** Picks which of a task chain's recent runs the canvas shows; only there when it has more than one. */
+function runSwitcherHtml(): string {
+  const list = run && !runList.some((r) => r.runId === run!.runId) ? [run, ...runList] : runList;
+  if (list.length < 2) return "";
+  const at = (iso: string): string => new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const options = list
+    .map((r) => {
+      const who = r.trigger?.label || "You";
+      const label = `${r.status === "canceled" ? "Stopped" : statusLabel(r.status)} · ${who}${r.target ? ` for ${r.target.label}` : ""} · ${at(r.createdAt)}`;
+      return `<option value="${esc(r.runId)}"${r.runId === run?.runId ? " selected" : ""}>${esc(label)}</option>`;
+    })
+    .join("");
+  const live = list.filter((r) => r.status === "running").length;
+  return `<label class="chain-owner-run"><span>Showing${live > 1 ? ` (${live} running)` : ""}</span>
+      <select class="filter-select" data-owner-run aria-label="Which run the canvas shows">${options}</select>
+    </label>`;
+}
+
+function onOwnerChange(e: Event): void {
+  const t = e.target as HTMLElement;
+  if (!(t instanceof HTMLSelectElement) || t.dataset.ownerRun === undefined) return;
+  const picked = runList.find((r) => r.runId === t.value);
+  if (!picked || picked.runId === run?.runId) return;
+  run = picked;
+  renderRun();
+  announce(`Showing the run ${picked.trigger?.label ? `${picked.trigger.label} started` : "started"} at ${new Date(picked.createdAt).toLocaleTimeString()}`);
+  if (isRunning()) void pollRun();
+}
+
 async function onOwnerClick(e: MouseEvent): Promise<void> {
   const btn = (e.target as Element).closest<HTMLButtonElement>("[data-owner-act]");
   const owner = ownerOf(doc.id);
   if (!btn || !owner) return;
   if (btn.dataset.ownerAct === "open-task") {
+    focusValidation(owner.taskId, `chain:${doc.id}${run ? `:${run.runId}` : ""}`);
     window.dispatchEvent(new CustomEvent("ado-open-task", { detail: { taskId: owner.taskId, tab: "validation" } }));
     return;
   }
   btn.disabled = true;
   try {
     if (!(await flushSave())) throw new Error("Save this chain first.");
-    const res = await postJSON("/api/jarvis/validation/reusable", { id: owner.taskId });
+    const res = await postJSON("/api/jarvis/validation/reusable", { id: owner.taskId, chainId: doc.id });
     toast(`Saved "${res.chain.name}" to your chains`, "ok");
     await loadChains(false);
   } catch (err) {
@@ -1544,7 +1626,7 @@ function requestOwnerPrs(taskId: string, again = false): void {
 
 const prValue = (p: { org: string; prId: number }): string => `${p.org.toLowerCase()}|${p.prId}`;
 
-/** The block's branch: typed, or (on a task's chain) a PR of the task to follow. */
+/** The block's branch: typed, or (on a task's chain) a PR of the task, or whoever runs the chain. */
 function branchFieldHtml(n: ChainNode): string {
   const owner = ownerOf(doc.id);
   const typed = `<label class="insp-field">
@@ -1552,34 +1634,37 @@ function branchFieldHtml(n: ChainNode): string {
       <span class="insp-input">${icon("branch")}<input class="insp-branch" value="${esc(n.branch)}" placeholder="Default branch" spellcheck="false" autocomplete="off"></span>
       <span class="insp-hint">Leave empty to build the pipeline's default branch.</span>
     </label>`;
-  if (!owner && !n.branchFrom) return typed;
+  if (!owner && !n.branchFrom && !n.followRunner) return typed;
   const entry = owner ? ownerPrs.get(owner.taskId) : undefined;
   if (owner && !entry) requestOwnerPrs(owner.taskId);
   const prs = entry?.prs || [];
-  const current = n.branchFrom ? prValue(n.branchFrom) : "";
-  const known = !current || prs.some((p) => prValue(p) === current);
+  const current = n.followRunner ? "runner" : n.branchFrom ? prValue(n.branchFrom) : "";
+  const known = !n.branchFrom || prs.some((p) => prValue(p) === current);
   const options = [
     `<option value=""${current ? "" : " selected"}>A branch I type</option>`,
+    `<option value="runner"${n.followRunner ? " selected" : ""}>Whoever runs it (a worker's branch, or the PR it runs for)</option>`,
     ...prs.map(
       (p) =>
         `<option value="${esc(prValue(p))}"${prValue(p) === current ? " selected" : ""}>Follow PR ${p.prId} · ${esc(p.sourceRef)}${p.status !== "active" ? ` (${esc(p.status)})` : ""}</option>`
     ),
     ...(known ? [] : [`<option value="${esc(current)}" selected>Follow PR ${n.branchFrom!.prId} (not linked to the task)</option>`]),
   ].join("");
-  const hint = n.branchFrom
-    ? "Builds the PR's source branch as it is when this block queues, so new commits are picked up."
-    : entry?.status === "loading"
-      ? "Reading the task's pull requests…"
-      : entry?.status === "error"
-        ? `Couldn't read the task's pull requests: ${entry.error}`
-        : prs.length
-          ? "Follow a PR to build whatever its branch has when this block runs."
-          : "The task has no pull requests to follow yet.";
+  const hint = n.followRunner
+    ? "Builds the branch of whoever runs the chain: the worker's own branch, or the source branch of the PR it runs for. Parameters are read on the default branch."
+    : n.branchFrom
+      ? "Builds the PR's source branch as it is when this block queues, so new commits are picked up."
+      : entry?.status === "loading"
+        ? "Reading the task's pull requests…"
+        : entry?.status === "error"
+          ? `Couldn't read the task's pull requests: ${entry.error}`
+          : prs.length
+            ? "Follow a PR to build whatever its branch has when this block runs."
+            : "The task has no pull requests to follow yet.";
   return `<div class="insp-field">
       <label class="insp-label" for="inspFollow">Builds</label>
       <select class="filter-select insp-follow" id="inspFollow">${options}</select>
     </div>
-    ${n.branchFrom ? `<p class="insp-hint insp-follow-hint">${esc(hint)}</p>` : `${typed.replace('<span class="insp-hint">Leave empty to build the pipeline\'s default branch.</span>', `<span class="insp-hint">Leave empty to build the pipeline's default branch. ${esc(hint)}</span>`)}`}`;
+    ${n.branchFrom || n.followRunner ? `<p class="insp-hint insp-follow-hint">${esc(hint)}</p>` : `${typed.replace('<span class="insp-hint">Leave empty to build the pipeline\'s default branch.</span>', `<span class="insp-hint">Leave empty to build the pipeline's default branch. ${esc(hint)}</span>`)}`}`;
 }
 
 // ---- parameters and consumed pipelines -------------------------------------------------------
@@ -1589,7 +1674,7 @@ function branchFieldHtml(n: ChainNode): string {
  * followed PR's source branch. Null while that PR isn't known yet (still reading, or not the task's).
  */
 function readBranch(n: ChainNode): string | null {
-  if (!n.branchFrom) return normalizeBranch(n.branch);
+  if (n.followRunner || !n.branchFrom) return normalizeBranch(n.branch);
   const owner = ownerOf(doc.id);
   const want = prValue(n.branchFrom);
   const pr = owner ? ownerPrs.get(owner.taskId)?.prs.find((p) => prValue(p) === want) : undefined;
@@ -2245,21 +2330,30 @@ function onInspectorChange(e: Event): void {
   }
   if (t instanceof HTMLSelectElement && t.classList.contains("insp-follow")) {
     const owner = ownerOf(doc.id);
-    const listed = owner ? ownerPrs.get(owner.taskId)?.prs.find((p) => prValue(p) === t.value) : undefined;
+    const runner = t.value === "runner";
+    const listed = owner && !runner ? ownerPrs.get(owner.taskId)?.prs.find((p) => prValue(p) === t.value) : undefined;
     const n = nodeById(selection.id);
     const kept = n?.branchFrom && prValue(n.branchFrom) === t.value ? n.branchFrom : null;
-    const pr = t.value ? (listed ? { org: listed.org, prId: listed.prId } : kept) : null;
+    const pr = t.value && !runner ? (listed ? { org: listed.org, prId: listed.prId } : kept) : null;
     editNode(
       selection.id,
       (node) => {
-        if (pr) {
-          node.branchFrom = { ...pr };
+        if (runner) {
+          node.followRunner = true;
+          delete node.branchFrom;
           node.branch = "";
-        } else delete node.branchFrom;
+        } else if (pr) {
+          node.branchFrom = { ...pr };
+          delete node.followRunner;
+          node.branch = "";
+        } else {
+          delete node.branchFrom;
+          delete node.followRunner;
+        }
       },
       false
     );
-    announce(pr ? `Follows PR ${pr.prId}` : "Builds a branch you type");
+    announce(runner ? "Builds the branch of whoever runs the chain" : pr ? `Follows PR ${pr.prId}` : "Builds a branch you type");
     renderInspector();
     return;
   }

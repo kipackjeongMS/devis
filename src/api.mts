@@ -52,6 +52,7 @@ import {
     PipelineStoreError,
     appBuilds,
     blockResults,
+    chainRuns,
     deleteChain,
     enqueueRunCommand,
     getChain,
@@ -69,6 +70,7 @@ import { parseThreadStatus, parseVote, parseLifecycleAction, parseCompletionOpti
 import { parsePrCanvasTarget } from "./canvas-target.mjs";
 import { getModelCatalog } from "./models.mjs";
 import { handleJarvisApi } from "./jarvis-api.mjs";
+import { pipelineRunOptions } from "./jarvis-validation.mjs";
 import { notePrActivity, rememberPrs } from "./jarvis-today.mjs";
 import { recordEvent } from "./jarvis-store.mjs";
 import {
@@ -881,7 +883,9 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
             const id = q.get("id") || "";
             const chain = await getChain(id);
             if (!chain) return sendJson(res, 404, { error: "Chain not found" });
-            return sendJson(res, 200, { chain, run: await latestRun(id) });
+            // A task's chain can run more than once at a time: `run` is the newest going, else the newest.
+            const runs = await chainRuns(id, 10);
+            return sendJson(res, 200, { chain, run: runs.find((r) => r.status === "running") ?? (await latestRun(id)), runs });
         }
         if (p === "/api/pipeline-chain-builds" && req.method === "GET") {
             return sendJson(res, 200, { builds: await appBuilds(q.get("id") || "") });
@@ -974,7 +978,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
         }
         if (p === "/api/pipeline-chains/run" && req.method === "POST") {
             const b = await readBody(req);
-            const run = await startChainRun(String(b?.id || ""));
+            const id = String(b?.id || "");
+            const run = await startChainRun(id, await pipelineRunOptions(id));
             wakePipelineRunner();
             return sendJson(res, 200, { run });
         }
@@ -989,7 +994,14 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
         }
         if (p === "/api/pipeline-chains/trigger" && req.method === "POST") {
             const b = await readBody(req);
-            const { run, commandId } = await triggerNode(String(b?.id || ""), String(b?.nodeId || ""));
+            const id = String(b?.id || "");
+            let runId = typeof b?.runId === "string" && b.runId ? b.runId : undefined;
+            if (!runId) {
+                const going = (await chainRuns(id, 20)).filter((r) => r.status === "running");
+                if (going.length === 1) runId = going[0].runId;
+            }
+            // Adding a block to a run that's going needs no new-run options; a new run keeps to the chain's limits.
+            const { run, commandId } = await triggerNode(id, String(b?.nodeId || ""), runId ? { runId } : await pipelineRunOptions(id));
             if (commandId === null) {
                 wakePipelineRunner();
                 return sendJson(res, 200, { run });

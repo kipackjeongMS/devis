@@ -37,6 +37,27 @@ const task = (id, over = {}) => ({
     ...over,
 });
 const request = (at) => ({ id: "r" + at, kind: "question", title: "?", detail: "", choices: [], allowFreeform: true, at: iso(at) });
+// A task's validation summary (jarvis-validation.mts summaryOf): chains, their runs, failures nobody has looked at, proposals.
+const vrun = (over = {}) => ({ runId: "r1", status: "running", startedAt: iso(-5), finishedAt: null, done: 1, total: 3, current: "Deploy", failed: null, by: null, for: null, ...over });
+const vchain = (over = {}) => ({ chainId: "c1", name: "Build and test", purpose: "", blocks: 3, run: null, running: 0, queued: 0, lastUsed: null, failures: [], ...over });
+const vproposal = (over = {}) => ({ id: "p1", by: "W1", at: iso(-1), blocks: 2, name: "Build and test", chainId: null, ...over });
+const vsum = (chains = [vchain()], over = {}) => {
+    const tag = (c) => (r) => ({ ...r, chainId: c.chainId, chain: c.name });
+    const failures = chains.flatMap((c) => c.failures.map(tag(c)));
+    const runs = chains.filter((c) => c.run).map((c) => tag(c)(c.run));
+    const proposals = over.proposals || [];
+    return {
+        chains,
+        run: failures[0] || runs.find((r) => r.status === "running") || runs[0] || null,
+        running: chains.reduce((n, c) => n + c.running, 0),
+        queued: chains.reduce((n, c) => n + c.queued, 0),
+        proposals,
+        failures,
+        attention: proposals.length ? "proposal" : failures.length ? "failed" : null,
+        lastUsed: null,
+        ...over,
+    };
+};
 
 // ---- worker state: live data wins ----
 assert.equal(m.workerState(worker({ state: "turnDone", requests: [request(-1)] })), "needsInput");
@@ -94,26 +115,27 @@ assert.deepEqual(groups.done.map((t) => t.id), ["done-today"]);
     const broken = worker({ sessionId: "s-bad", label: "ui", state: "error", summary: "boom", updatedAt: iso(-10) });
     const both = task("both", { workers: [asker, broken] });
     const proposed = task("proposed", {
-        validation: { chainId: null, name: null, blocks: 0, run: null, proposal: { by: "api", at: iso(-60), blocks: 2 }, attention: "proposal" },
+        validation: vsum([], { proposals: [vproposal({ by: "api", at: iso(-60) })] }),
     });
+    const lostRun = vrun({ runId: "r", status: "failed", startedAt: iso(-30), finishedAt: iso(-5), done: 1, total: 2, current: null, failed: "Deploy" });
     const failedRun = task("failed-run", {
         updatedAt: iso(-1),
-        validation: { chainId: "c", name: "V", blocks: 2, run: { runId: "r", status: "failed", startedAt: iso(-30), finishedAt: iso(-5), done: 1, total: 2, current: null, failed: "Deploy" }, proposal: null, attention: "failed" },
+        validation: vsum([vchain({ chainId: "c", name: "V", blocks: 2, run: lostRun, failures: [lostRun] })]),
     });
     const doneBroken = task("done-broken", { status: "done", doneAt: iso(-3), workers: [worker({ state: "error" })] });
     const items = m.needsItems([doneBroken, failedRun, both, proposed, fresh]);
     assert.deepEqual(items.map((n) => [n.kind, n.key, n.task.id]), [
-        ["validation", "val:proposed", "proposed"],
+        ["validation", "val:proposed:p:p1", "proposed"],
         ["request", "req:s-ask", "both"],
         ["failed", "fail:s-bad", "both"],
-        ["validation", "val:failed-run", "failed-run"],
+        ["validation", "val:failed-run:r:r", "failed-run"],
     ], "every ask, the longest wait first; a done task's old failure isn't one");
     assert.equal(items[0].who, "api", "a proposal names who proposed it");
     assert.equal(items[3].who, "Validation");
     assert.equal(items[3].at, Date.parse(iso(-5)), "a failed run waits from when it failed");
     assert.equal(m.needLine(items[1]), "api: ? (+1 more)");
     assert.equal(m.needLine(items[2]), "ui failed");
-    assert.equal(m.needLine(items[0]), "api proposed a validation chain of 2 pipelines");
+    assert.equal(m.needLine(items[0]), 'api proposed a validation chain "Build and test" of 2 pipelines');
     const repos = m.needsItems([task("r", { workers: [worker({ label: "w1", requests: [{ ...request(-1), kind: "repos", title: "Pick" }] })] })]);
     assert.equal(m.needLine(repos[0]), "w1: confirm its repositories");
     assert.deepEqual(m.needsItems([fresh, running, doneToday]), []);
@@ -126,16 +148,16 @@ assert.deepEqual(groups.done.map((t) => t.id), ["done-today"]);
 
     // ---- an ask taken on as a to-do ----
     assert.deepEqual(items.map((n) => n.source), [
-        `need:val:proposed:proposal:${iso(-60)}`,
+        "need:val:proposed:proposal:p1",
         "need:req:s-ask:r-40",
         `need:fail:s-bad:${iso(-10)}`,
         "need:val:failed-run:failed:r",
     ], "each names its exact ask: a worker's oldest request, its failure, the proposal or the failed run");
     assert.deepEqual(items.map((n) => m.needTodo(n).text), [
-        "Review the validation chain api proposed",
+        "Review the validation chain api proposed: Build and test",
         "Answer api: ?",
         "See why ui's turn failed",
-        "Look at the failed validation run",
+        "Look at the failed validation run of V",
     ]);
     assert.deepEqual(m.needTodo(items[1]).source, { key: "need:req:s-ask:r-40", taskId: "both", taskTitle: "both", who: "api" });
     assert.equal(m.needTodo(repos[0]).text, "Confirm w1's repositories");
@@ -145,7 +167,7 @@ assert.deepEqual(groups.done.map((t) => t.id), ["done-today"]);
     assert.ok(m.needTodo(long[0]).text.length <= 200 && m.needTodo(long[0]).text.endsWith("…"));
     // An open to-do made from an ask takes it out of Needs you; a done one doesn't.
     const todo = (key, done = false) => ({ id: 1, text: "t", done, author: "you", createdAt: iso(-1), updatedAt: iso(-1), doneAt: null, source: { key, taskId: "x", taskTitle: "x", who: "x" } });
-    assert.deepEqual(m.visibleNeeds(items, [todo("need:req:s-ask:r-40")]).map((n) => n.key), ["val:proposed", "fail:s-bad", "val:failed-run"]);
+    assert.deepEqual(m.visibleNeeds(items, [todo("need:req:s-ask:r-40")]).map((n) => n.key), ["val:proposed:p:p1", "fail:s-bad", "val:failed-run:r:r"]);
     assert.equal(m.visibleNeeds(items, [todo("need:req:s-ask:r-40", true)]).length, 4);
     assert.equal(m.visibleNeeds(items, [{ ...todo("x"), source: null }]).length, 4);
     assert.equal(m.visibleNeeds(items, undefined).length, 4);
@@ -568,31 +590,67 @@ assert.deepEqual(m.prChipText(tpr(5, { status: "completed" })), { text: "PR 5 ·
 assert.equal(m.prSourceText("workitem"), "Linked to the work item in Azure DevOps");
 assert.equal(m.prSourceText("branch"), "From a worker's branch");
 
-// ---- a task's validation: the card chip, Needs you, and stages ----
-const vs = (over = {}) => ({ chainId: "c1", name: "Validation · x", blocks: 3, run: null, proposal: null, attention: null, ...over });
-const vrun = (over = {}) => ({ runId: "r1", status: "running", startedAt: iso(-5), finishedAt: null, done: 1, total: 3, current: "Deploy", failed: null, ...over });
+// ---- a task's validation chains: the card chip, Needs you, and stages ----
 assert.equal(m.validationChip(null), null);
-assert.deepEqual(m.validationChip(vs()), { text: "Validation · 3 pipelines · not run", tone: "idle" });
-assert.deepEqual(m.validationChip(vs({ run: vrun() })), { text: "Validation · 1 of 3 · Deploy", tone: "run" });
-assert.deepEqual(m.validationChip(vs({ run: vrun({ status: "succeeded", done: 3, current: null }) })), { text: "Validation passed", tone: "ok" });
-assert.deepEqual(m.validationChip(vs({ run: vrun({ status: "failed", failed: "Deploy" }), attention: "failed" })), { text: "Validation failed · Deploy", tone: "warn" });
-assert.deepEqual(m.validationChip(vs({ run: vrun({ status: "failed", failed: "Deploy" }) })), { text: "Validation failed · Deploy", tone: "off" }, "a failure the user saw is quiet");
-assert.deepEqual(m.validationChip(vs({ chainId: null, blocks: 0, proposal: { by: "W1", at: iso(-1), blocks: 2 }, attention: "proposal" })), { text: "Validation proposed · 2 pipelines", tone: "warn" });
-const proposalTask = task("proposed", { validation: vs({ proposal: { by: "W1", at: iso(-1), blocks: 2 }, attention: "proposal" }) });
-assert.equal(m.validationNeed(proposalTask), "W1 proposed a validation chain of 2 pipelines");
+assert.equal(m.validationChip(vsum([])), null, "no chains and nothing proposed: no chip");
+assert.deepEqual(m.validationChip(vsum()), { text: "Validation · 1 chain · not run", tone: "idle" });
+assert.deepEqual(m.validationChip(vsum([vchain({ run: vrun(), running: 1 })])), { text: "Validation · 1 of 3 · Deploy", tone: "run" });
+assert.deepEqual(
+    m.validationChip(vsum([vchain({ run: vrun(), running: 2, queued: 1 })])),
+    { text: "Validation · 2 running · 1 waiting", tone: "run" },
+    "two runs of one chain at once, and one waiting its turn",
+);
+assert.deepEqual(m.validationChip(vsum([vchain({ run: vrun({ status: "succeeded", done: 3, current: null }) })])), { text: "Validation passed", tone: "ok" });
+const passed = (id) => vchain({ chainId: id, run: vrun({ status: "succeeded", done: 3, current: null }) });
+assert.deepEqual(m.validationChip(vsum([passed("a"), passed("b")])), { text: "Validation · all 2 passed", tone: "ok" });
+assert.deepEqual(m.validationChip(vsum([passed("a"), vchain({ chainId: "b" })])), { text: "Validation · 1 of 2 passed", tone: "idle" });
+const lost = vrun({ status: "failed", failed: "Deploy", current: null, finishedAt: iso(-1), by: "x-worker-2" });
+assert.deepEqual(m.validationChip(vsum([vchain({ run: lost, failures: [lost] })])), { text: "Validation · failed · Deploy (x-worker-2)", tone: "warn" });
+assert.deepEqual(
+    m.validationChip(vsum([vchain({ run: lost, failures: [lost, { ...lost, runId: "r2", by: "x-worker-1" }] })])),
+    { text: "Validation · failed · Deploy (x-worker-2) +1", tone: "warn" },
+    "each runner's failure counts",
+);
+assert.deepEqual(m.validationChip(vsum([vchain({ run: lost })])), { text: "Validation · 1 of 1 failed", tone: "off" }, "a failure the user saw is quiet");
+assert.deepEqual(m.validationChip(vsum([], { proposals: [vproposal()] })), { text: "Validation · 1 proposal", tone: "warn" });
+const proposalTask = task("proposed", { validation: vsum([], { proposals: [vproposal()] }) });
+assert.equal(m.validationNeed(proposalTask), 'W1 proposed a validation chain "Build and test" of 2 pipelines');
+assert.equal(m.validationNeed(task("change", { validation: vsum([vchain()], { proposals: [vproposal({ chainId: "c1" })] }) })), 'W1 proposed a change to the validation chain "Build and test"');
 assert.equal(m.taskSection(proposalTask, START), "needs", "a proposal to review needs the user");
-const failedRun = task("vfailed", { validation: vs({ run: vrun({ status: "failed", failed: "Deploy" }), attention: "failed" }) });
-assert.equal(m.validationNeed(failedRun), "Validation failed at Deploy");
+const failedRun = task("vfailed", { validation: vsum([vchain({ run: lost, failures: [lost] })]) });
+assert.equal(m.validationNeed(failedRun), 'Validation "Build and test" failed at Deploy (run by x-worker-2)');
+const forPr = vrun({ ...lost, runId: "r3", for: "PR 12" });
+assert.equal(m.validationNeed(task("forpr", { validation: vsum([vchain({ run: forPr, failures: [forPr] })]) })), 'Validation "Build and test" failed at Deploy for PR 12');
+assert.equal(
+    m.validationNeed(task("two", { validation: vsum([vchain({ run: lost, failures: [lost] })], { proposals: [vproposal()] }) })),
+    'W1 proposed a validation chain "Build and test" of 2 pipelines (+1 more)',
+);
+assert.equal(m.validationFocus(m.validationNeeds(proposalTask)[0]), "proposal:p1");
+assert.equal(m.validationFocus(m.validationNeeds(failedRun)[0]), "chain:c1:r1", "a failure opens its chain at that run");
+assert.equal(m.validationFocus(undefined), "");
+assert.equal(
+    m.validationChipTitle(vsum([vchain({ run: vrun({ by: "x-worker-1" }), queued: 1 }), vchain({ chainId: "c2", name: "Deploy to dev" })], { proposals: [vproposal({ name: "Smoke" })] })),
+    "Build and test: running 1 of 3 (x-worker-1), 1 waiting\nDeploy to dev: not run\nW1 proposed a new chain, Smoke",
+);
 assert.equal(m.taskSection(failedRun, START), "needs");
 assert.equal(m.taskSection({ ...failedRun, status: "done", doneAt: iso(-1) }, START), "done", "a done task's old failure doesn't need the user");
-assert.equal(m.taskSection(task("vok", { validation: vs({ run: vrun({ status: "succeeded" }) }) }), START), "idle");
+assert.equal(m.taskSection(task("vok", { validation: vsum([vchain({ run: vrun({ status: "succeeded" }) })]) }), START), "idle");
 assert.deepEqual(
     m.chainStages([{ id: "a" }, { id: "b" }, { id: "c" }, { id: "d" }], [{ from: "a", to: "c" }, { from: "b", to: "c" }, { from: "c", to: "d" }]).map((s) => s.map((n) => n.id)),
     [["a", "b"], ["c"], ["d"]],
 );
 assert.deepEqual(m.chainStages([{ id: "a" }, { id: "b" }], [{ from: "a", to: "b" }, { from: "b", to: "a" }]).flat().length, 2, "a cycle still lists every block");
 const fp = (t) => m.todayFingerprint({ tasks: [t], reviewed: [], overview: null }, "");
-assert.notEqual(fp(task("x", { validation: vs({ run: vrun({ done: 1 }) }) })), fp(task("x", { validation: vs({ run: vrun({ done: 2 }) }) })), "Today repaints as a run moves on");
+assert.notEqual(
+    fp(task("x", { validation: vsum([vchain({ run: vrun({ done: 1 }), running: 1 })]) })),
+    fp(task("x", { validation: vsum([vchain({ run: vrun({ done: 2 }), running: 1 })]) })),
+    "Today repaints as a run moves on",
+);
+assert.notEqual(
+    fp(task("x", { validation: vsum([vchain({ run: vrun(), running: 1 })]) })),
+    fp(task("x", { validation: vsum([vchain({ run: vrun(), running: 2 })]) })),
+    "…and when another run of the chain starts",
+);
 
 // ---- a live read on top of Today's ----
 {

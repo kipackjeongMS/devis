@@ -15,6 +15,8 @@ import {
     type ChainGraph,
     type NodeStates,
     type RunCommandKind,
+    type RunTarget,
+    type RunTrigger,
 } from "./pipeline-graph.mjs";
 
 const ACTIVE_STATUS = new Set(["queuing", "queued", "running"]);
@@ -46,6 +48,8 @@ export interface ChainSummary {
     nodeCount: number;
     updatedAt: string;
     lastRun: { runId: string; status: RunStatus; createdAt: string; finishedAt: string | null } | null;
+    /** Runs going now; a task's chain can have several. */
+    activeRuns: number;
     /** The Jarvis task that owns the chain, when one does. */
     owner: { taskId: string; title: string; status: string } | null;
 }
@@ -61,6 +65,17 @@ export interface RunRow {
     createdAt: string;
     updatedAt: string;
     finishedAt: string | null;
+    /** Who started it; null for runs from before this was recorded, and for the user's own chains. */
+    trigger: RunTrigger | null;
+    /** Whose branches blocks that follow the runner build; null when none do. */
+    target: RunTarget | null;
+}
+
+/** How a run starts: at most `maxActive` runs of the chain at once (1 unless the caller allows more). */
+export interface RunOptions {
+    maxActive?: number;
+    trigger?: RunTrigger;
+    target?: RunTarget;
 }
 
 export interface PendingCommand {
@@ -106,7 +121,18 @@ function toRun(row: Row): RunRow {
         createdAt: String(row.created_at),
         updatedAt: String(row.updated_at),
         finishedAt: (row.finished_at as string | null) ?? null,
+        trigger: parseJson<RunTrigger>(row.trigger_json),
+        target: parseJson<RunTarget>(row.target_json),
     };
+}
+
+function parseJson<T>(raw: unknown): T | null {
+    if (typeof raw !== "string" || !raw) return null;
+    try {
+        return JSON.parse(raw) as T;
+    } catch {
+        return null;
+    }
 }
 
 function cleanName(name: unknown): string {
@@ -138,7 +164,8 @@ export async function listChains(): Promise<ChainSummary[]> {
         .prepare(
             `SELECT c.id, c.name, c.graph_json, c.updated_at, c.owner_task_id,
                     ${owners ? "t.title AS owner_title, t.status AS owner_status," : "NULL AS owner_title, NULL AS owner_status,"}
-                    r.run_id, r.status AS run_status, r.created_at AS run_created, r.finished_at AS run_finished
+                    r.run_id, r.status AS run_status, r.created_at AS run_created, r.finished_at AS run_finished,
+                    (SELECT COUNT(*) FROM pipeline_runs a WHERE a.chain_id = c.id AND a.status = 'running') AS active_runs
              FROM pipeline_chains c
              ${owners ? "LEFT JOIN jarvis_tasks t ON t.id = c.owner_task_id" : ""}
              LEFT JOIN pipeline_runs r ON r.run_id = (
@@ -161,6 +188,7 @@ export async function listChains(): Promise<ChainSummary[]> {
                   finishedAt: (row.run_finished as string | null) ?? null,
               }
             : null,
+        activeRuns: Number(row.active_runs ?? 0),
         owner: row.owner_task_id
             ? {
                   taskId: String(row.owner_task_id),
@@ -231,13 +259,10 @@ export async function saveChain(input: { id?: string; name: unknown; graph: Chai
                     throw new PipelineStoreError("This chain was changed elsewhere since it was opened. Reload it.", 409);
                 }
             }
-            const live = db
-                .prepare("SELECT * FROM pipeline_runs WHERE chain_id = ? AND status = 'running'")
-                .get(id) as Row | undefined;
-            if (live) {
-                const run = toRun(live);
+            const lives = (db.prepare("SELECT * FROM pipeline_runs WHERE chain_id = ? AND status = 'running'").all(id) as Row[]).map(toRun);
+            const kept = new Map(input.graph.nodes.map((n) => [n.id, n]));
+            for (const run of lives) {
                 // An active block must keep its pipeline: the runner polls its build there.
-                const kept = new Map(input.graph.nodes.map((n) => [n.id, n]));
                 const building = Object.entries(run.states).find(([nodeId, s]) => {
                     if (!ACTIVE_STATUS.has(s.status)) return false;
                     const edited = kept.get(nodeId);
@@ -259,7 +284,7 @@ export async function saveChain(input: { id?: string; name: unknown; graph: Chai
                 .prepare("UPDATE pipeline_chains SET name = ?, graph_json = ?, updated_at = ? WHERE id = ?")
                 .run(name, graphJson, at, id);
             if (Number(result.changes) === 0) throw new PipelineStoreError("Chain not found", 404);
-            if (live) insertCommand(db, String(live.run_id), "graph", "", graphJson);
+            for (const run of lives) insertCommand(db, run.runId, "graph", "", graphJson);
         });
         return (await getChain(id))!;
     }
@@ -306,14 +331,39 @@ function pruneRuns(db: DatabaseSync, chainId: string, graph: ChainGraph): void {
     for (const row of rows) if (!keep.has(String(row.run_id))) drop.run(String(row.run_id));
 }
 
-// Caller holds a transaction and has checked that the chain has no live run.
-function insertRun(db: DatabaseSync, chainId: string, runId: string, graph: ChainGraph, states: NodeStates): void {
+// Caller holds a transaction and has checked how many runs the chain may have going.
+function insertRun(db: DatabaseSync, chainId: string, runId: string, graph: ChainGraph, states: NodeStates, opts: RunOptions = {}): void {
     pruneRuns(db, chainId, graph);
     const at = now();
     db.prepare(
-        `INSERT INTO pipeline_runs (run_id, chain_id, status, graph_json, state_json, created_at, updated_at)
-         VALUES (?, ?, 'running', ?, ?, ?, ?)`,
-    ).run(runId, chainId, JSON.stringify(graph), JSON.stringify(states), at, at);
+        `INSERT INTO pipeline_runs (run_id, chain_id, status, graph_json, state_json, created_at, updated_at, trigger_json, target_json)
+         VALUES (?, ?, 'running', ?, ?, ?, ?, ?, ?)`,
+    ).run(
+        runId,
+        chainId,
+        JSON.stringify(graph),
+        JSON.stringify(states),
+        at,
+        at,
+        opts.trigger ? JSON.stringify(opts.trigger) : null,
+        opts.target ? JSON.stringify(opts.target) : null,
+    );
+}
+
+/** A run whose blocks build the runner's branch needs to know who that is. */
+function needsTarget(graph: ChainGraph, states: NodeStates, opts: RunOptions): void {
+    if (opts.target) return;
+    const follower = graph.nodes.find((n) => n.followRunner && states[n.id]);
+    if (follower) {
+        throw new PipelineStoreError(
+            `"${follower.name}" builds the branch of whoever runs the chain. Run it from its task's Validation tab.`,
+            409,
+        );
+    }
+}
+
+function countActive(db: DatabaseSync, chainId: string): number {
+    return Number((db.prepare("SELECT COUNT(*) AS n FROM pipeline_runs WHERE chain_id = ? AND status = 'running'").get(chainId) as Row).n);
 }
 
 function insertCommand(db: DatabaseSync, runId: string, kind: RunCommandKind, nodeId: string, payload?: string): number {
@@ -323,19 +373,25 @@ function insertCommand(db: DatabaseSync, runId: string, kind: RunCommandKind, no
     return Number(result.lastInsertRowid);
 }
 
-export async function startChainRun(chainId: string): Promise<RunRow> {
+export async function startChainRun(chainId: string, opts: RunOptions = {}): Promise<RunRow> {
     const chain = await getChain(chainId);
     if (!chain) throw new PipelineStoreError("Chain not found", 404);
     if (!chain.graph.nodes.length) throw new PipelineStoreError("Add at least one pipeline before running", 400);
+    const states = initialNodeStates(chain.graph);
+    needsTarget(chain.graph, states, opts);
     await checkRunGuards(chain);
     const db = await ensureDb();
     const runId = randomUUID();
+    const maxActive = Math.max(1, opts.maxActive ?? 1);
     inTransaction(db, () => {
-        const active = db
-            .prepare("SELECT 1 FROM pipeline_runs WHERE chain_id = ? AND status = 'running'")
-            .get(chainId);
-        if (active) throw new PipelineStoreError("This chain is already running", 409);
-        insertRun(db, chainId, runId, chain.graph, initialNodeStates(chain.graph));
+        const active = countActive(db, chainId);
+        if (active >= maxActive) {
+            throw new PipelineStoreError(
+                maxActive === 1 ? "This chain is already running" : `This chain already has ${active} runs going. Wait for one to finish.`,
+                409,
+            );
+        }
+        insertRun(db, chainId, runId, chain.graph, states, opts);
     });
     emitPipelineEvent({ type: "runStarted", chainId, runId });
     return (await getRun(runId))!;
@@ -343,18 +399,28 @@ export async function startChainRun(chainId: string): Promise<RunRow> {
 
 // Runs one block and everything after it. With no live run this starts a new
 // run scoped to those blocks; otherwise it asks the runner to add them to the
-// live run (commandId), so the runner stays the only writer of run state.
-export async function triggerNode(chainId: string, nodeId: string): Promise<{ run: RunRow; commandId: number | null }> {
+// live run (commandId), so the runner stays the only writer of run state. With
+// several live runs the caller names one (runId).
+export async function triggerNode(
+    chainId: string,
+    nodeId: string,
+    opts: RunOptions & { runId?: string } = {},
+): Promise<{ run: RunRow; commandId: number | null }> {
     const db = await ensureDb();
     const chainNow = await getChain(chainId);
-    const idle = !db.prepare("SELECT 1 FROM pipeline_runs WHERE chain_id = ? AND status = 'running'").get(chainId);
+    const idle = countActive(db, chainId) === 0;
     if (chainNow && idle) await checkRunGuards(chainNow);
     const { runId, commandId } = inTransaction(db, () => {
-        const live = db
-            .prepare("SELECT * FROM pipeline_runs WHERE chain_id = ? AND status = 'running'")
-            .get(chainId) as Row | undefined;
+        const lives = (db.prepare("SELECT * FROM pipeline_runs WHERE chain_id = ? AND status = 'running' ORDER BY created_at, rowid").all(chainId) as Row[]).map(toRun);
+        let live: RunRow | undefined;
+        if (opts.runId) {
+            live = lives.find((r) => r.runId === opts.runId);
+            if (!live) throw new PipelineStoreError("That run has already finished. Run the block again.", 409);
+        } else if (lives.length > 1) {
+            throw new PipelineStoreError(`This chain has ${lives.length} runs going. Pick the run to add the block to.`, 409);
+        } else live = lives[0];
         if (live) {
-            const run = toRun(live);
+            const run = live;
             if (run.cancelRequested) {
                 throw new PipelineStoreError("This chain is stopping. Wait for it to finish, then run the block again.", 409);
             }
@@ -373,8 +439,10 @@ export async function triggerNode(chainId: string, nodeId: string): Promise<{ ru
         if (!chain.graph.nodes.some((n) => n.id === nodeId)) {
             throw new PipelineStoreError("That block is not part of this chain. Save the chain, then try again.", 404);
         }
+        const states = initialNodeStates(chain.graph, nodeId);
+        needsTarget(chain.graph, states, opts);
         const newRunId = randomUUID();
-        insertRun(db, chainId, newRunId, chain.graph, initialNodeStates(chain.graph, nodeId));
+        insertRun(db, chainId, newRunId, chain.graph, states, opts);
         return { runId: newRunId, commandId: null };
     });
     if (commandId === null) emitPipelineEvent({ type: "runStarted", chainId, runId });
@@ -530,6 +598,15 @@ export async function activeRuns(): Promise<RunRow[]> {
     const rows = db
         .prepare("SELECT * FROM pipeline_runs WHERE status = 'running' ORDER BY created_at, rowid")
         .all() as Row[];
+    return rows.map(toRun);
+}
+
+/** A chain's runs, newest first. */
+export async function chainRuns(chainId: string, limit = MAX_RUNS_PER_CHAIN): Promise<RunRow[]> {
+    const db = await ensureDb();
+    const rows = db
+        .prepare("SELECT * FROM pipeline_runs WHERE chain_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?")
+        .all(chainId, Math.max(1, Math.floor(limit))) as Row[];
     return rows.map(toRun);
 }
 

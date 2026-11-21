@@ -58,7 +58,7 @@ export interface TodayTask extends JarvisTask {
     recap: RecapState | null;
     /** Pull requests linked to the task, as last read from ADO. */
     prs: TaskPr[];
-    /** The task's validation chain, its last run and any proposal; null when it has none. */
+    /** The task's validation chains, their latest runs and any proposals; null when it has none. */
     validation: ValidationSummary | null;
     /** Comment reviews on the task's PRs that have something going on (see jarvis-pr-comments). */
     prComments: PrCommentSummary[];

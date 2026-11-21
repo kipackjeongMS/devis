@@ -2829,6 +2829,9 @@ body[data-feature="pipelines"]:not([data-page="settings"]) .pipelines-view {
 .chain-owner-text { flex: 1 1 auto; min-width: 0; }
 .chain-owner-text b { color: var(--text-1); font-weight: 600; }
 .chain-owner .btn { flex: none; }
+.chain-owner-run { display: inline-flex; flex: 0 1 auto; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; }
+.chain-owner-run > span { color: var(--text-2); }
+.chain-owner-run select { min-width: 0; max-width: 300px; text-overflow: ellipsis; }
 .insp-follow { width: 100%; }
 .insp-follow-hint { margin: -2px 0 0; }
 
@@ -6155,7 +6158,9 @@ button.tm-pr-title:hover { color: var(--accent-text); text-decoration: underline
 .tm-pr-fold svg.ic { width: 12px; height: 12px; transition: transform var(--t-normal) var(--ease); }
 .tm-pr-fold[aria-expanded="true"] svg.ic { transform: rotate(90deg); }
 
-/* Validation: the task's chain in stages, its runs, and a worker's proposal to review. */
+/* Validation: the task's chains in a list, and the one picked beside it: its stages for one run,
+   its runs by who started them, its settings. Or a worker's proposal to review. The list stacks
+   above the detail when the pane is narrow. */
 .tv-card { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .tv-card + .tv-card { margin-top: 18px; padding-top: 4px; border-top: 1px solid var(--divider); }
 .tv-card > .tm-dv-bar { margin: 0; }
@@ -6200,10 +6205,6 @@ button.tm-pr-title:hover { color: var(--accent-text); text-decoration: underline
 .tv-ev svg.ic { flex: none; width: 11px; height: 11px; }
 .tv-left-out ul { margin: 4px 0 0; padding-left: 18px; color: var(--text-2); font-size: var(--fs-caption); line-height: var(--lh-caption); }
 .tv-checks { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
-.tv-runs { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
-.tv-runs li { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-.tv-runs li > span { min-width: 0; overflow-wrap: anywhere; }
-.tv-runs time { flex: none; color: var(--text-3); font: var(--fs-readout)/18px var(--mono); }
 .tv-options { display: flex; flex-direction: column; gap: 6px; }
 .tv-opt { display: flex; align-items: flex-start; gap: 8px; color: var(--text-2); font-size: var(--fs-caption); line-height: var(--lh-caption); cursor: pointer; }
 .tv-opt input { flex: none; margin: 2px 0 0; accent-color: var(--accent); }
@@ -6221,6 +6222,169 @@ button.tm-pr-title:hover { color: var(--accent-text); text-decoration: underline
 .tv-dismiss { display: flex; flex-direction: column; gap: 6px; }
 .tv-dismiss textarea { width: 100%; min-height: 52px; padding: 6px 8px; border: 1px solid var(--stroke-control); border-radius: var(--r-control); background: var(--control); color: var(--text-1); font: inherit; font-size: var(--fs-label); resize: vertical; }
 .tv-confirm-list { margin: 10px 0 0; padding-left: 20px; color: var(--text-2); font-size: var(--fs-label); line-height: 22px; }
+
+.tv-wrap { min-width: 0; }
+.tv-wrap.has-list { display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; gap: 14px; }
+@container tmleft (min-width: 640px) {
+  .tv-wrap.has-list { grid-template-columns: minmax(196px, 248px) minmax(0, 1fr); gap: 18px; }
+  .tv-master { position: sticky; top: 0; }
+}
+.tv-master { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.tv-master-h { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 0 2px; color: var(--text-3); font: 600 var(--fs-readout)/16px var(--mono); letter-spacing: .06em; text-transform: uppercase; }
+.tv-master-h > .tm-muted { min-width: 0; overflow: hidden; font: var(--fs-readout)/16px var(--font); letter-spacing: 0; text-overflow: ellipsis; text-transform: none; white-space: nowrap; }
+.tv-list { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 4px; border: 1px solid var(--stroke-card); border-radius: var(--r-surface); background: var(--card); list-style: none; }
+.tv-list:focus { outline: none; }
+.tv-list:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.tv-list:focus-visible .tv-item.is-sel { box-shadow: inset 0 0 0 1px var(--focus); }
+.tv-item { position: relative; display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 8px; min-height: 40px; padding: 5px 8px 5px 10px; border-radius: var(--r-control); color: var(--text-2); cursor: pointer; transition: background-color var(--t-fast) var(--ease); }
+.tv-item:hover { background: var(--fill-hover); }
+.tv-item.is-sel { background: var(--fill-selected); color: var(--text-1); }
+.tv-item.is-sel::before { content: ""; position: absolute; top: 9px; bottom: 9px; left: 0; width: 3px; border-radius: 2px; background: var(--accent); }
+.tv-item.sep-before { margin-top: 7px; }
+.tv-item.sep-before::after { content: ""; position: absolute; top: -5px; right: 6px; left: 6px; border-top: 1px solid var(--divider); pointer-events: none; }
+.tv-item-glyph { display: grid; place-items: center; width: 16px; height: 16px; color: var(--tone); }
+.tv-item-glyph svg.ic { width: 14px; height: 14px; }
+.tv-item-glyph .spinner { width: 12px; height: 12px; vertical-align: 0; }
+.tv-item-body { display: flex; flex-direction: column; min-width: 0; }
+.tv-item-name { overflow: hidden; font: 600 var(--fs-label)/20px var(--font); text-overflow: ellipsis; white-space: nowrap; }
+.tv-item-meta { overflow: hidden; color: var(--text-3); font-size: var(--fs-readout); line-height: 16px; text-overflow: ellipsis; white-space: nowrap; }
+.tv-item-state { padding: 0 6px; border-radius: 999px; background: var(--tone-tint); color: var(--tone-text); font: 600 var(--fs-readout)/18px var(--font); white-space: nowrap; }
+.tv-item.is-new .tv-item-name { font-weight: 500; }
+
+.tv-detail { min-width: 0; }
+.tv-d-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.tv-d-name { flex: 1 1 180px; min-width: 0; margin: 0; color: var(--text-1); font: 600 var(--fs-subhead)/24px var(--font); overflow-wrap: anywhere; }
+.tv-d-name:focus { outline: none; }
+.tv-d-name:focus-visible { border-radius: 4px; outline: 2px solid var(--focus); outline-offset: 2px; }
+.tv-d-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-left: auto; }
+.tv-split { display: inline-flex; }
+.tv-split > .btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.tv-split > .tv-split-more { justify-content: center; width: 26px; margin-left: 1px; padding: 0; border-top-left-radius: 0; border-bottom-left-radius: 0; }
+.tv-split-more svg.ic { width: 12px; height: 12px; }
+.tv-d-by { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 0; color: var(--text-2); font-size: var(--fs-caption); line-height: var(--lh-caption); }
+.tv-d-by svg.ic { flex: none; width: 13px; height: 13px; color: var(--caution); }
+.tv-link { padding: 0; border: 0; background: none; color: var(--accent-text); font: inherit; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.tv-link:hover { color: var(--text-1); }
+.tv-link:focus-visible { border-radius: 2px; outline: 2px solid var(--focus); outline-offset: 1px; }
+.tv-purpose { margin: 0; color: var(--text-2); font-size: var(--fs-label); line-height: 20px; white-space: pre-line; overflow-wrap: anywhere; }
+.tv-purpose.is-empty { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; color: var(--text-3); white-space: normal; }
+.tv-badges { display: flex; flex-wrap: wrap; gap: 4px 6px; margin: 0; padding: 0; list-style: none; }
+.tv-badge { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 0 8px; border: 1px solid var(--stroke-card); border-radius: 999px; color: var(--text-2); font-size: var(--fs-readout); line-height: 20px; }
+.tv-badge > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tv-badge svg.ic { flex: none; width: 12px; height: 12px; color: var(--text-3); }
+
+.tv-sec-h { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; min-height: 28px; margin-top: 6px; }
+.tv-sec-h > .tv-sub { margin: 0; }
+.tv-sec-h > .tm-muted { font-size: var(--fs-caption); line-height: var(--lh-caption); }
+.tv-showing { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; color: var(--text-3); font-size: var(--fs-caption); }
+.tv-showing select { min-width: 0; max-width: 340px; }
+.tv-block.is-absent { border-style: dashed; border-left-style: solid; background: none; opacity: .7; }
+.tv-block.is-new { border-color: color-mix(in srgb, var(--accent) 45%, transparent); border-left-color: var(--accent); }
+.tv-diff { margin: 0; color: var(--text-2); font-size: var(--fs-caption); line-height: var(--lh-caption); overflow-wrap: anywhere; }
+.tv-diff-add { color: var(--success); }
+.tv-diff-drop { color: var(--critical); }
+
+/* Who started a run, or whose code it built: a mark in the worker's own hue, and the name. */
+.tv-who { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 100%; vertical-align: middle; }
+.tv-who-mark {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: color-mix(in srgb, hsl(var(--who-h, 210) 65% 55%) 24%, transparent);
+  color: color-mix(in srgb, hsl(var(--who-h, 210) 70% 62%) 75%, var(--text-1));
+  font: 700 9px/1 var(--font);
+  letter-spacing: -.02em;
+}
+.tv-who-mark svg.ic { width: 11px; height: 11px; }
+.tv-who.is-you .tv-who-mark { background: var(--accent-tint); color: var(--accent-text); }
+.tv-who.is-auto .tv-who-mark,
+.tv-who.is-pr .tv-who-mark { background: var(--neutral-tint); color: var(--text-2); }
+.tv-who-name { min-width: 0; overflow: hidden; color: var(--text-1); text-overflow: ellipsis; white-space: nowrap; }
+.tv-who.is-removed .tv-who-mark { opacity: .5; }
+.tv-who.is-removed .tv-who-name { color: var(--text-3); text-decoration: line-through; }
+.tv-who.is-unknown .tv-who-name { color: var(--text-3); }
+.tv-filters { display: flex; flex-wrap: wrap; gap: 4px; }
+.tv-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; height: 26px; padding: 0 9px 0 3px; border: 1px solid var(--stroke-control); border-radius: 999px; background: none; color: var(--text-2); font-size: var(--fs-caption); cursor: pointer; }
+.tv-chip:first-child { padding-left: 10px; }
+.tv-chip:hover { background: var(--fill-hover); color: var(--text-1); }
+.tv-chip[aria-pressed="true"] { border-color: color-mix(in srgb, var(--accent) 60%, transparent); background: var(--accent-tint); color: var(--text-1); }
+.tv-chip:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.tv-chip-st { display: inline-grid; flex: none; place-items: center; color: var(--tone); }
+.tv-chip-st svg.ic { width: 11px; height: 11px; }
+.tv-chip-st .spinner { width: 10px; height: 10px; border-width: 1.5px; vertical-align: 0; }
+
+/* Runs: newest first, waiting ones on top. A row shows its stages above when picked. */
+.tv-runs { display: flex; flex-direction: column; margin: 0; padding: 0; overflow: hidden; border: 1px solid var(--stroke-card); border-radius: var(--r-surface); background: var(--card); list-style: none; }
+.tv-run { position: relative; display: flex; align-items: center; gap: 4px; min-width: 0; padding-right: 6px; }
+.tv-run + .tv-run { border-top: 1px solid var(--divider); }
+.tv-run::before { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 3px; background: var(--tone); opacity: 0; }
+.tv-run.is-shown { background: var(--fill-selected); }
+.tv-run.is-shown::before { opacity: 1; }
+.tv-run-main {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-areas: "st who progress at";
+  grid-template-columns: 108px minmax(0, 1fr) minmax(0, max-content) max-content;
+  align-items: center;
+  gap: 2px 12px;
+  min-width: 0;
+  min-height: 38px;
+  padding: 6px 8px 6px 12px;
+  border: 0;
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+  font-size: var(--fs-caption);
+  line-height: var(--lh-caption);
+  text-align: left;
+}
+button.tv-run-main { cursor: pointer; }
+button.tv-run-main:hover { background: var(--fill-hover); }
+button.tv-run-main:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.tv-run-st { display: inline-flex; grid-area: st; align-items: center; gap: 6px; min-width: 0; color: var(--tone-text); font-weight: 600; white-space: nowrap; }
+.tv-run-st svg.ic { flex: none; width: 13px; height: 13px; }
+.tv-run-st .spinner { width: 11px; height: 11px; vertical-align: 0; }
+.tv-run-who { display: flex; flex-wrap: wrap; grid-area: who; align-items: center; gap: 2px 6px; min-width: 0; }
+.tv-run-for { display: inline-flex; align-items: center; gap: 5px; min-width: 0; color: var(--text-3); }
+.tv-run-progress { grid-area: progress; min-width: 0; overflow: hidden; color: var(--text-3); text-overflow: ellipsis; white-space: nowrap; }
+.tv-run-at { grid-area: at; color: var(--text-3); font: var(--fs-readout)/18px var(--mono); white-space: nowrap; }
+.tv-run-acts { display: flex; flex: none; align-items: center; gap: 4px; }
+.tv-run-acts:empty { display: none; }
+.tv-queued .tv-run-st { color: var(--text-3); font-weight: 500; }
+.tv-queued .tv-run-st svg.ic { color: var(--text-3); }
+@container tmleft (max-width: 559px) {
+  .tv-run-main { grid-template-areas: "st at" "who who" "progress progress"; grid-template-columns: minmax(0, 1fr) max-content; }
+  .tv-run-progress:empty { display: none; }
+}
+.tv-more { margin: 4px 0 0; font-size: var(--fs-caption); }
+
+/* Settings fold under the runs; their edits save on their own, the name and purpose on Save. */
+.tv-settings { border: 1px solid var(--stroke-card); border-radius: var(--r-surface); }
+.tv-settings > summary { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: calc(var(--r-surface) - 1px); color: var(--text-2); font-size: var(--fs-label); line-height: 20px; list-style: none; cursor: pointer; }
+.tv-settings > summary::-webkit-details-marker { display: none; }
+.tv-settings > summary::after { content: ""; width: 6px; height: 6px; margin: 0 2px 0 auto; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform var(--t-normal) var(--ease); }
+.tv-settings[open] > summary::after { transform: rotate(45deg); }
+.tv-settings[open] > summary { border-bottom-right-radius: 0; border-bottom-left-radius: 0; }
+.tv-settings > summary:hover { background: var(--fill-hover); color: var(--text-1); }
+.tv-settings > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.tv-settings > summary svg.ic { width: 14px; height: 14px; }
+.tv-settings-body { display: flex; flex-direction: column; gap: 10px; padding: 10px 12px 12px; border-top: 1px solid var(--divider); }
+.tv-meta { display: flex; flex-direction: column; gap: 8px; }
+.tv-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; color: var(--text-3); font-size: var(--fs-caption); line-height: var(--lh-caption); }
+.tv-field-row { flex-flow: row wrap; align-items: center; gap: 6px 10px; }
+.tv-field-row > select { min-width: 0; max-width: 100%; }
+.tv-input { width: 100%; padding: 5px 8px; border: 1px solid var(--stroke-control); border-radius: var(--r-control); background: var(--control); color: var(--text-1); font: inherit; font-size: var(--fs-label); line-height: 20px; }
+textarea.tv-input { min-height: 52px; resize: vertical; }
+.tv-input:focus { border-color: var(--accent); outline: none; }
+.tv-input:disabled { opacity: .6; }
+.tv-target-pick { margin-top: 12px; }
+.tv-target-pick select { width: 100%; }
+@media (prefers-reduced-motion: reduce) {
+  .tv-item, .tv-settings > summary::after { transition: none; }
+}
 
 /* Pull requests: one card per PR. Its head (state, title, where it stands, what's waiting) always
    shows; its body (builds, comments, where it came from) folds. */

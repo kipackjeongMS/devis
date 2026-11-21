@@ -31,6 +31,7 @@ import {
     resolvePins,
     resolveRepoBranches,
     runOutcome,
+    runnerKey,
     type BuildInfo,
     type AppBuild,
     type ChainGraph,
@@ -38,6 +39,7 @@ import {
     type NodeRunState,
     type NodeStates,
     type ResourcePin,
+    type RunTarget,
 } from "./pipeline-graph.mjs";
 import {
     activeRuns,
@@ -275,6 +277,35 @@ interface QueuePlan {
     error: string | null;
 }
 
+/** A reason a block can't follow its runner, worded for the user. */
+class RunnerError extends Error {}
+
+// The branch a block that follows the runner builds: the source branch of the PR the run
+// was for, or the runner's checked-out branch in the repository the pipeline builds.
+async function runnerBranch(ado: PipelineAdo, n: ChainNode, target: RunTarget | null): Promise<string> {
+    if (!target) {
+        throw new RunnerError(`"${n.name}" builds the branch of whoever runs the chain, but this run has no runner. Run the chain again from its task.`);
+    }
+    const definition = await ado.getDefinition(n.org, n.project, n.definitionId);
+    const repo = definition.repository;
+    if (target.pr) {
+        if (repo?.name && target.pr.repo && repo.name.toLowerCase() !== target.pr.repo.toLowerCase()) {
+            throw new RunnerError(`"${n.name}" builds ${repo.name}, but PR ${target.pr.prId} is in ${target.pr.repo}.`);
+        }
+        try {
+            return normalizeBranch(await ado.prSourceBranch(target.pr.org, target.pr.prId));
+        } catch (e) {
+            throw new RunnerError(`Couldn't read the branch of PR ${target.pr.prId}: ${describeAdoError(e)}`);
+        }
+    }
+    if (!repo?.name) throw new RunnerError(`Couldn't tell which repository "${n.name}" builds, so it can't build ${target.label}'s branch.`);
+    const name = repo.name.toLowerCase();
+    const same = target.branches.filter((b) => b.org.toLowerCase() === n.org.toLowerCase() && b.repo.toLowerCase() === name);
+    const pick = same.find((b) => b.project.toLowerCase() === n.project.toLowerCase()) ?? same[0];
+    if (!pick) throw new RunnerError(`"${n.name}" builds ${target.label}'s branch, but ${target.label} has no branch in ${repo.name}.`);
+    return normalizeBranch(pick.branch);
+}
+
 // How a ready block is queued: the builds its YAML `resources.pipelines` consume (from
 // this run, or the chain's earlier runs in `past`), and whether its parameter overrides
 // and repository branches still fit the pipeline on that branch. Blocks with none of
@@ -391,13 +422,18 @@ async function processRun(run: RunRow, opts: PipelineRunnerOptions): Promise<voi
 
     let step = advance(graph, states, canceled);
     states = step.states;
-    // What earlier runs of the chain built, loaded once a block is ready to queue.
+    // What earlier runs of the chain built, loaded once a block is ready to queue. Builds
+    // made for another runner don't count: they hold someone else's code.
     let past: AppBuild[] | undefined;
+    const runner = runnerKey(run.target);
     for (const id of step.ready) {
         if (!options) break; // shutting down: leave the rest waiting for the next launch
         const n = nodes.get(id)!;
-        past ??= (await appBuilds(run.chainId)).filter((b) => b.runId !== runId);
-        // A block that follows a PR builds the PR's source branch as it is now.
+        past ??= (await appBuilds(run.chainId)).filter(
+            (b) => b.runId !== runId && (!b.followed?.startsWith("runner:") || b.followed === runner),
+        );
+        // A block that follows a PR builds the PR's source branch as it is now; one that
+        // follows the runner builds the runner's branch (or the PR it ran for).
         let branch = normalizeBranch(n.branch);
         let branchError: string | null = null;
         if (n.branchFrom) {
@@ -405,6 +441,12 @@ async function processRun(run: RunRow, opts: PipelineRunnerOptions): Promise<voi
                 branch = normalizeBranch(await ado.prSourceBranch(n.branchFrom.org, n.branchFrom.prId));
             } catch (e) {
                 branchError = `Couldn't read the branch of PR ${n.branchFrom.prId}: ${describeAdoError(e)}`;
+            }
+        } else if (n.followRunner) {
+            try {
+                branch = await runnerBranch(ado, n, run.target);
+            } catch (e) {
+                branchError = e instanceof RunnerError ? e.message : `Couldn't read whose branch "${n.name}" builds: ${describeAdoError(e)}`;
             }
         }
         const plan = branchError ? { pins: [], error: branchError } : await planQueue(ado, graph, states, n, past, branch);
@@ -430,7 +472,7 @@ async function processRun(run: RunRow, opts: PipelineRunnerOptions): Promise<voi
             status: "queuing",
             queuedAt: now(),
             branch,
-            ...(n.branchFrom ? { followed: prKey(n.branchFrom) } : {}),
+            ...(n.followRunner ? (runner ? { followed: runner } : {}) : n.branchFrom ? { followed: prKey(n.branchFrom) } : {}),
             ...(states[id].manual ? { manual: true } : {}),
             ...(plan.pins.length ? { resources: plan.pins } : {}),
             ...(plan.params ? { params: plan.params } : {}),

@@ -12,6 +12,7 @@ import {
     checkParams,
     descendants,
     finalYamlResources,
+    followsRunner,
     hasCycle,
     hasUpstreamBuild,
     initialNodeStates,
@@ -73,6 +74,14 @@ bad({ nodes: [node("a", 1, { project: " " })], edges: [] }, /project/i);
 bad({ nodes: [node("a b", 1)], edges: [] }, /id/i);
 bad({ nodes: [node("a", 1, { org: "other" })], edges: [] }, /not a configured/, ["org"]);
 bad({ nodes: Array.from({ length: MAX_CHAIN_NODES + 1 }, (_, i) => node(`n${i}`, i + 1)), edges: [] }, /at most/);
+bad({ nodes: [node("a", 1, { followRunner: true, branchFrom: { org: "org", prId: 7 } })], edges: [] }, /not both/, ["org"]);
+{
+    const runner = validateGraph({ nodes: [node("a", 1, { followRunner: true }), node("b", 2, { followRunner: "yes" })], edges: [] });
+    assert.equal(runner.nodes[0].followRunner, true, "a block can follow whoever runs the chain");
+    assert.equal("followRunner" in runner.nodes[1], false, "only a literal true counts");
+    assert.equal(followsRunner(runner), true);
+    assert.equal(followsRunner(ok), false);
+}
 
 assert.equal(hasCycle(["a", "b", "c"], [{ from: "a", to: "b" }, { from: "b", to: "c" }]), false);
 assert.equal(hasCycle(["a", "b", "c"], [{ from: "a", to: "b" }, { from: "b", to: "c" }, { from: "c", to: "a" }]), true);
@@ -423,6 +432,12 @@ assert.equal(lastAppBuild(official("bld", { project: "PROJ", org: "ORG" }), past
     assert.equal(lastAppBuild(official("bld", { branchFrom: { org: "org", prId: 8 } }), prPast), undefined, "not another PR's build");
     assert.equal(lastAppBuild(official("bld", { branch: "main" }), prPast).buildNumber, "1.9.0", "a fixed branch ignores PR builds' tags");
     assert.equal(lastAppBuild(official("bld", { branchFrom: { org: "org", prId: 7 } }), [prPast[1]]), undefined, "not a build made on a fixed branch");
+    const runnerPast = appBuildsFromRuns([
+        { runId: "q1", graph: histGraph({ branch: "" }), states: { bld: { ...passed("4.0.0"), branch: "refs/heads/kjeong/w1", followed: "runner:worker:s1" } } },
+    ]);
+    assert.equal(lastAppBuild(official("bld", { followRunner: true }), runnerPast).buildNumber, "4.0.0", "a block that follows the runner takes a runner's build");
+    assert.equal(lastAppBuild(official("bld", { followRunner: true }), prPast), undefined, "…not a PR's or a fixed branch's");
+    assert.equal(lastAppBuild(official("bld", { branchFrom: { org: "org", prId: 7 } }), runnerPast), undefined, "a PR's block doesn't take a runner's build");
 }
 assert.equal(lastAppBuild(official("other"), past), undefined, "matched by block, not pipeline");
 // Built against other branches of its repository resources, it's another build.

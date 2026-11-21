@@ -63,6 +63,7 @@ import { classifyQuery, type WorkItemOption } from "./workItemPickerModel.js";
 import { sendPrsToCopilot } from "./bridge.js";
 import { requestNotifyPermission } from "./notifyWatch.js";
 import { closeTaskModal, openTaskModal, pruneTaskModalState, reposFromCard, requestCardHtml, shipFromCard, updateTaskModal, warnUnsaved, type LeftTab, type TaskModalHost } from "./jarvisTask.js";
+import { focusValidation } from "./taskValidation.js";
 import { ALL_SECTIONS, PANEL_NAME, isPanelId, isSection as isPanelSection, setNeedsPanel, type PanelId, type Section as PanelSection } from "./workspaceLayout.js";
 import { afterFold, hideGrid, initGrid, isFlat, keyMove, relayout } from "./workspaceGrid.js";
 import { meetingDetailHtml, meetingsHtml, meetingsRail, meetingsSig, meetingsSub, pruneMeetingsState, selectMeeting, toggleDay, toggleNote, type MeetingsView } from "./meetingsView.js";
@@ -135,6 +136,9 @@ import {
   todayHasTasks,
   todaySummary,
   validationChip,
+  validationChipTitle,
+  validationFocus,
+  validationNeeds,
   workerState,
   type BoardSection,
   type CommsAsk,
@@ -1366,7 +1370,7 @@ function noticeBodyHtml(n: NeedItem, now: number): string {
       return ask(
         "flow",
         n.text,
-        `<button type="button" class="btn sm accent" data-act="task-validation">${n.task.validation?.attention === "proposal" ? "Review the proposal" : "See what failed"}</button>`
+        `<button type="button" class="btn sm accent" data-act="task-validation" data-focus="${esc(validationFocus(n.need))}">${n.need.what === "proposal" ? "Review the proposal" : "See what failed"}</button>`
       );
     case "prComments":
       return ask("pullRequest", n.text, review(n.pr.attention === "proposal"));
@@ -1926,7 +1930,7 @@ function needHtml(n: NeedItem, now: number): string {
             ? ask(n.text, `<button type="button" class="btn sm accent" data-act="task-comments">${n.pr.attention === "proposal" ? "Review the plan" : "See what happened"}</button>`)
             : ask(
               n.text,
-              `<button type="button" class="btn sm accent" data-act="task-validation">${n.task.validation?.attention === "proposal" ? "Review the proposal" : "See what failed"}</button>`
+              `<button type="button" class="btn sm accent" data-act="task-validation" data-focus="${esc(validationFocus(n.need))}">${n.need.what === "proposal" ? "Review the proposal" : "See what failed"}</button>`
             );
   const age = n.at ? `<span class="need-age">${esc(ago(new Date(n.at).toISOString(), now))}</span>` : "";
   // Taken on as a to-do, it leaves Needs you; the to-do ticks itself once the ask is gone.
@@ -2867,7 +2871,7 @@ const SECTION_TONE: Record<BoardSection, string> = { running: "run", idle: "idle
 function taskCard(task: TodayTask, now: number, section: BoardSection): string {
   const asks = taskNeeds([task]);
   const done = task.status === "done";
-  const tone = asks.length ? "warn" : task.validation?.attention === "failed" ? "bad" : SECTION_TONE[section];
+  const tone = asks.length ? "warn" : task.validation?.failures.length ? "bad" : SECTION_TONE[section];
   const working = task.workers.filter((w) => workerState(w) === "working");
   const workers = task.workers.length
     ? `${task.workers.length} worker${task.workers.length === 1 ? "" : "s"}${working.length ? `, ${working.length} working` : ""}`
@@ -2886,7 +2890,7 @@ function taskCard(task: TodayTask, now: number, section: BoardSection): string {
     }),
     more ? `<button type="button" class="rr-chip" data-act="task-prs" title="All of this task's pull requests">+${more}</button>` : "",
     vChip
-      ? `<button type="button" class="rr-chip tone-${vChip.tone}" data-act="task-validation" title="${esc(task.validation?.name || "Validation")}">${svg("flow")}<span>${esc(vChip.text)}</span></button>`
+      ? `<button type="button" class="rr-chip tone-${vChip.tone}" data-act="task-validation" title="${esc(validationChipTitle(task.validation))}">${svg("flow")}<span>${esc(vChip.text)}</span></button>`
       : "",
     cChip
       ? `<button type="button" class="rr-chip tone-${cChip.tone}" data-act="task-comments" title="Review comments on this task's PRs">${svg("chat")}<span>${esc(cChip.text)}</span></button>`
@@ -3442,6 +3446,7 @@ function onClick(e: MouseEvent): void {
     case "task-comments": {
       if (!task) return;
       const tab = TASK_TAB[node.dataset.act];
+      if (node.dataset.act === "task-validation") focusValidation(task.id, node.dataset.focus || validationFocus(validationNeeds(task)[0]));
       if (isFlat()) setSheet(false);
       return openDrawer({ kind: "task", taskId: task.id, tab });
     }
