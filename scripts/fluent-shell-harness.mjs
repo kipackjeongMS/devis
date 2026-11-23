@@ -93,7 +93,9 @@ for (const file of ["prStatus", "prPanel", "inboxPanel", "reviewPanel", "diff", 
 // Native Windows 11 frame: a Mica backdrop (acrylic only on request) + a title-bar overlay, with a solid fallback.
 assert.match(main, /return pick === "acrylic" \|\| pick === "none" \? pick : "mica"/);
 assert.match(main, /backgroundMaterial:\s*backdrop/);
-assert.match(main, /nativeTheme\.themeSource\s*=\s*"dark"/);
+// The frame follows the theme pick (dark, light or Windows'), never a pinned dark.
+assert.match(main, /nativeTheme\.themeSource\s*=\s*themePref/);
+assert.doesNotMatch(main, /nativeTheme\.themeSource\s*=\s*"dark"/);
 assert.match(main, /titleBarOverlay/);
 assert.match(main, /searchParams\.set\("shell",\s*glass \? "glass" : "solid"\)/);
 assert.match(css, /html\.glass\s*\{/);

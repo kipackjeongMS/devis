@@ -1,5 +1,6 @@
 // Mermaid diagram rendering (vendored @10.9.3 UMD, loaded offline via index.html).
 import { esc } from "./util.js";
+import { currentTheme, type Theme } from "./theme.js";
 
 // The vendored UMD bundle attaches a global `mermaid`.
 declare global {
@@ -8,16 +9,25 @@ declare global {
   }
 }
 
-let _mermaidReady = false;
+/** Mermaid's own theme for each app theme: its dark palette, or its grey neutral one on light glass. */
+export function mermaidThemeFor(theme: Theme): "dark" | "neutral" {
+  return theme === "light" ? "neutral" : "dark";
+}
+
+let _mermaidTheme: string | null = null;
 export function initMermaid(): void {
-  if (_mermaidReady || !window.mermaid) return;
+  const theme = mermaidThemeFor(currentTheme());
+  if (_mermaidTheme === theme || !window.mermaid) return;
   try {
-    window.mermaid.initialize({ startOnLoad: false, theme: "dark", securityLevel: "strict" });
-    _mermaidReady = true;
+    window.mermaid.initialize({ startOnLoad: false, theme, securityLevel: "strict" });
+    _mermaidTheme = theme;
   } catch (_) {
     /* ignore */
   }
 }
+
+// What each drawn diagram was drawn from and in, so a theme change can draw it again.
+const drawnFrom = new WeakMap<HTMLElement, { src: string; adjustable: boolean; theme: string | null }>();
 
 let _mermaidSeq = 0;
 
@@ -314,25 +324,53 @@ export async function renderMermaid(container: HTMLElement | null, adjustable = 
     const src = node.textContent || "";
     node.removeAttribute("data-mermaid");
     if (!src || !src.trim()) continue;
-    const id = "mmd-" + ++_mermaidSeq;
-    try {
-      const { svg } = await window.mermaid.render(id, src);
-      // A repaint may have replaced this node while it rendered; drawing into it would only hold the old tree.
-      if (!node.isConnected) continue;
-      node.innerHTML = svg;
-      const renderedSvg = node.querySelector<SVGSVGElement>("svg");
-      if (renderedSvg && adjustable) addDiagramControls(node, renderedSvg);
-      node.classList.add("rendered");
-    } catch (_) {
-      if (!node.isConnected) continue;
-      node.classList.add("mmd-error");
-      node.innerHTML =
-        '<div class="mmd-err">⚠ Diagram failed to render</div><pre class="md-pre"><code>' +
-        esc(src) +
-        "</code></pre>";
-    } finally {
-      // Mermaid renders in a scratch element under <body>; a failed render can leave it behind.
-      document.getElementById("d" + id)?.remove();
-    }
+    await drawDiagram(node, src, adjustable);
   }
 }
+
+async function drawDiagram(node: HTMLElement, src: string, adjustable: boolean): Promise<void> {
+  const id = "mmd-" + ++_mermaidSeq;
+  const theme = _mermaidTheme;
+  try {
+    const { svg } = await window.mermaid.render(id, src);
+    // A repaint may have replaced this node while it rendered; drawing into it would only hold the old tree.
+    if (!node.isConnected) return;
+    node.innerHTML = svg;
+    const renderedSvg = node.querySelector<SVGSVGElement>("svg");
+    if (renderedSvg && adjustable) addDiagramControls(node, renderedSvg);
+    node.classList.add("rendered");
+    drawnFrom.set(node, { src, adjustable, theme });
+    // The theme changed while this one drew.
+    if (theme !== mermaidThemeFor(currentTheme())) queueRedraw();
+  } catch (_) {
+    if (!node.isConnected) return;
+    node.classList.add("mmd-error");
+    node.innerHTML =
+      '<div class="mmd-err">⚠ Diagram failed to render</div><pre class="md-pre"><code>' +
+      esc(src) +
+      "</code></pre>";
+  } finally {
+    // Mermaid renders in a scratch element under <body>; a failed render can leave it behind.
+    document.getElementById("d" + id)?.remove();
+  }
+}
+
+// Mermaid bakes its colors into each SVG, so drawn diagrams are drawn again in the new theme.
+// One redraw at a time: Mermaid's theme is global, and a quick second switch must win.
+async function redrawForTheme(): Promise<void> {
+  if (!window.mermaid || _mermaidTheme === null) return;
+  initMermaid();
+  for (const node of document.querySelectorAll<HTMLElement>(".mermaid.rendered")) {
+    const from = drawnFrom.get(node);
+    if (!from || from.theme === _mermaidTheme) continue;
+    node.classList.remove("rendered", "adjustable");
+    node.replaceChildren();
+    await drawDiagram(node, from.src, from.adjustable);
+  }
+}
+let redraws: Promise<void> = Promise.resolve();
+function queueRedraw(): void {
+  redraws = redraws.then(redrawForTheme, redrawForTheme);
+}
+// Node harnesses import this module for its pure view math, so the listener waits for a browser.
+if (typeof window !== "undefined") window.addEventListener("devis:theme-applied", queueRedraw);

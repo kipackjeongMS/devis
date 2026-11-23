@@ -20,6 +20,7 @@ import { createTodosWindowController, isTodosWindowUrl, TODOS_WINDOW_MIN, TODOS_
 import { ARTIFACTS_WINDOW_MIN, artifactsWindowTarget, createArtifactsWindowController, placeArtifactsWindow, type ArtifactsWindowHandle } from "./artifacts-window.mjs";
 import { nextZoom, titleBarHeight, zoomCommand, zoomLevelOf } from "./ui-zoom.mjs";
 import { folderPickedScript, loginItem, shellRequest } from "./shell-request.mjs";
+import { frameColors, themePrefOf, themeScript, type ThemePref } from "./theme.mjs";
 import { readSetupState, setupStatePath } from "./setup-state.mjs";
 
 // Kept from the app's first name: Windows ties toast settings to it.
@@ -87,6 +88,7 @@ function confineToOrigin(contents: WebContents): void {
         const request = shellRequest(url, origin);
         if (request) {
             if (request.kind === "pick-folder") void pickFolder(contents, request.id);
+            else if (request.kind === "theme") setTheme(request.value);
             else syncLoginItem();
             return { action: "deny" };
         }
@@ -176,11 +178,12 @@ function renderMode(): Promise<"lean" | "full"> {
     return renderDecision;
 }
 
-/** Load a page of the service, telling it which shell it's in. The page draws its own title bar and lets the backdrop tint through its glass. */
+/** Load a page of the service, telling it which shell it's in and the theme pref. The page draws its own title bar and lets the backdrop tint through its glass. */
 async function load(window: BrowserWindow, url: string, current: () => boolean = () => true): Promise<void> {
     const target = new URL(url);
     target.searchParams.set("shell", glass ? "glass" : "solid");
     target.searchParams.set("render", await renderMode());
+    target.searchParams.set("theme", themePref);
     if (!window.isDestroyed() && current()) await window.loadURL(target.toString()).catch(() => undefined);
 }
 
@@ -193,15 +196,16 @@ async function show(window: BrowserWindow, url: string): Promise<void> {
 /** The frame every window shares: hidden title bar with caption buttons over the page, the native backdrop, a sandboxed page. */
 function chromeOptions(): BrowserWindowConstructorOptions {
     const backdrop = windowBackdrop();
-    // The UI is dark-only, so pin the native frame (and the backdrop tint) to dark too.
-    nativeTheme.themeSource = "dark";
+    // The native frame, the backdrop's tint and the page's prefers-color-scheme all follow the theme pref.
+    nativeTheme.themeSource = themePref;
+    const colors = frameColors(nativeTheme.shouldUseDarkColors, glass);
     return {
         title: APP_NAME,
         icon: APP_ICON,
-        backgroundColor: glass ? "#00000000" : "#050505",
+        backgroundColor: colors.background,
         ...(glass ? { backgroundMaterial: backdrop } : {}),
         titleBarStyle: "hidden",
-        titleBarOverlay: { color: glass ? "#00000000" : "#050505", symbolColor: "#f2f2f2", height: titleBarHeight(uiZoom) },
+        titleBarOverlay: { color: colors.overlay, symbolColor: colors.symbol, height: titleBarHeight(uiZoom) },
         autoHideMenuBar: true,
         show: false,
         webPreferences: {
@@ -271,6 +275,54 @@ function followUiZoom(window: BrowserWindow): void {
         setUiZoom(nextZoom(uiZoom, command), contents);
     });
     contents.on("did-navigate", () => sizeWindow(window));
+}
+
+// ---- theme ---------------------------------------------------------------------------
+
+function themeFile(): string {
+    return join(app.getPath("userData"), "theme.json");
+}
+
+function savedTheme(): ThemePref {
+    try {
+        return themePrefOf((JSON.parse(readFileSync(themeFile(), "utf8")) as { pref?: unknown }).pref);
+    } catch {
+        return "dark";
+    }
+}
+
+/** Dark, light, or Windows' own setting; every window follows it. */
+let themePref: ThemePref = savedTheme();
+
+/** Repaint a window's native frame (its background and caption buttons) for the resolved theme. */
+function paintFrame(window: BrowserWindow): void {
+    if (window.isDestroyed()) return;
+    const colors = frameColors(nativeTheme.shouldUseDarkColors, glass);
+    if (!glass) window.setBackgroundColor(colors.background);
+    if (process.platform !== "darwin") {
+        try {
+            window.setTitleBarOverlay({ color: colors.overlay, symbolColor: colors.symbol, height: titleBarHeight(uiZoom) });
+        } catch {
+            // A window without the overlay keeps its frame.
+        }
+    }
+}
+
+/** Switch every window to `pref`, save it, and tell each page, so its Settings and its URL keep up. */
+function setTheme(pref: ThemePref): void {
+    if (pref !== themePref) {
+        themePref = pref;
+        try {
+            writeFileSync(themeFile(), JSON.stringify({ pref }));
+        } catch {
+            // Not saved: the app opens in the last saved theme.
+        }
+    }
+    nativeTheme.themeSource = pref;
+    for (const window of BrowserWindow.getAllWindows()) {
+        paintFrame(window);
+        if (!window.webContents.isDestroyed()) void window.webContents.executeJavaScript(themeScript(pref)).catch(() => undefined);
+    }
 }
 
 function createWindow(url: string): BrowserWindow {
@@ -626,6 +678,11 @@ async function recover(): Promise<void> {
 }
 
 async function start(): Promise<void> {
+    // Before any dialog or window, so both open in the saved theme. With "system", Windows can change it any time.
+    nativeTheme.themeSource = themePref;
+    nativeTheme.on("updated", () => {
+        for (const window of BrowserWindow.getAllWindows()) paintFrame(window);
+    });
     syncLoginItem();
     const status = await connect();
     watch(status);

@@ -209,7 +209,7 @@
     margin: 24px calc(-1 * var(--pane-pad)) 0;
     padding: 10px var(--pane-pad) calc(10px + env(safe-area-inset-bottom, 0px));
     border-top: 1px solid var(--divider);
-    background: #151515;
+    background: var(--surface-sheet);
   }
   .reading-pane .pr-approve-btn { flex: 1 1 auto; }
 

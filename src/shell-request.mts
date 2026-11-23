@@ -1,8 +1,9 @@
 // What the page asks of the desktop shell. The page is sandboxed with no bridge, so it asks by
 // opening `/?shell-request=<what>` on the service's own origin; the shell's window-open handler
 // (main.mts) catches that, does it, and never opens anything. Kept free of Electron so it can be tested.
+import { isThemePref, type ThemePref } from "./theme.mjs";
 
-export type ShellRequest = { kind: "pick-folder"; id: string } | { kind: "login-item" };
+export type ShellRequest = { kind: "pick-folder"; id: string } | { kind: "login-item" } | { kind: "theme"; value: ThemePref };
 
 /** The page's own random tag for one folder pick, echoed back with the answer. */
 const PICK_ID = /^[a-z0-9]{1,32}$/i;
@@ -18,6 +19,10 @@ export function shellRequest(url: string, origin: string): ShellRequest | null {
     if (parsed.origin !== origin || parsed.pathname !== "/") return null;
     const what = parsed.searchParams.get("shell-request");
     if (what === "login-item") return { kind: "login-item" };
+    if (what === "theme") {
+        const value = parsed.searchParams.get("value");
+        return isThemePref(value) ? { kind: "theme", value } : null;
+    }
     if (what === "pick-folder") {
         const id = parsed.searchParams.get("id") || "";
         return PICK_ID.test(id) ? { kind: "pick-folder", id } : null;

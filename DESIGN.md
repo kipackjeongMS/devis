@@ -1,6 +1,7 @@
 ---
 name: Devis
 description: A glass review console for Azure DevOps pull requests and pipeline chains, with Copilot reviews in the loop.
+# The dark theme (the default). Light values are under "Light theme" below and in web/style.css.
 colors:
   ink: "#050505"
   ink-2: "#101010"
@@ -187,7 +188,7 @@ Devis is a heads-up review console. Smoked black glass panes hover over a faintl
 
 The glass is restrained, because the content is code. Panes carry a smoked tint and a luminous hairline edge; rows, cards and badges inside them do not. Blur is spent only on small sticky and floating chrome. One emissive cyan is the only brand color, and it glows only where it signals state. Diffs, findings, severity and comments keep their own colors and stay the loudest things on screen.
 
-In the desktop shell, a Windows 11 Mica backdrop (22H2 and later) tints the field with the desktop wallpaper, and the app forces the dark theme so the glass always reads as smoked. Mica samples the wallpaper once, so it costs nothing per frame; `ADO_PR_OPS_BACKDROP=acrylic` opts back into the live acrylic blur, and `none` turns the backdrop off. Without a backdrop, the same field renders on solid ink.
+In the desktop shell, a Windows 11 Mica backdrop (22H2 and later) tints the field with the desktop wallpaper, and the backdrop follows the chosen theme (see Light theme). Mica samples the wallpaper once, so it costs nothing per frame; `ADO_PR_OPS_BACKDROP=acrylic` opts back into the live acrylic blur, and `none` turns the backdrop off. Without a backdrop, the same field renders on solid ink.
 
 The living reference is `web/design-system.html`. It renders the real `web/style.css`, so open it from the preview server to check any component. It is excluded from the packaged app.
 
@@ -221,6 +222,21 @@ Each status pairs a foreground with a 13% tint: success mint, caution amber, cri
 **The One Light Rule.** Only cyan glows. If two unrelated things on screen are cyan, one of them is wrong.
 
 **The Color Is Evidence Rule.** Hue appears only where it carries meaning: a vote, a status, a severity or a diff line. Glass, edges and text stay neutral black, gray and white.
+
+### Light theme
+
+Dark is the default. Light is the same frosted glass in white, with a deeper cyan.
+
+- **The setting:** Settings › Appearance › Theme offers Dark, Light and Use Windows setting. It applies at once in every open window and isn't part of Save.
+- **Where it's kept:** the desktop shell saves it in `theme.json` in the app's data folder and opens each window with `?theme=`. In a plain browser it lives in `localStorage` (`devis.theme`).
+- **No flash:** `web/themeBoot.js`, a classic script in each page's head, sets `data-theme` and `data-theme-pref` on `<html>` before the stylesheet paints. `web/src/theme.ts` keeps it current, follows Windows for Use Windows setting, and fires `devis:theme-applied` when it changes.
+- **The shell:** sets `nativeTheme.themeSource`, so Mica, the caption buttons and `prefers-color-scheme` follow the choice, and repaints every window's frame.
+- **The palette:** a light gray field (`ink` `#ebebeb`) under white glass that gets more opaque as it rises (`glass` 62%, `glass-head` 88%, `glass-float` 95%). Edges, fills and dividers are black at a low alpha. Text is `#1b1b1b`, `#3f3f3f` and `#616161`.
+- **Color on white:** the accent deepens to `#0078a8`, so white text on it and it on white both clear 4.5:1; focus is `#005f86`. Status colors deepen the same way: mint `#107c41`, amber `#8a5a00`, rose `#c42b48`. Code uses the VS Code Light+ colors.
+- **Only tokens change:** every light value sits in the `:root[data-theme="light"]` block of `web/style.css`, and components read tokens, so they need no light rules. Every token needs a light value; `scripts/theme-harness.mjs` checks it.
+- **`card-flat`:** a card with no stroke (a quote, a table head, a note). It's a white lift on dark and a gray wash on light, since a white card disappears on a white pane.
+- **Diagrams:** Mermaid bakes its colors into each SVG, so diagrams redraw when the theme changes: Mermaid's `dark` theme on dark, `neutral` on light.
+- **Fallbacks:** reduced transparency and lean mode have light versions, with opaque white tiers in place of opaque black.
 
 ## Typography
 
@@ -932,7 +948,7 @@ The app runs all day, so everything it holds has a limit.
 - Do keep glass to panes, heads, floats, dialogs and pipeline blocks, and keep everything inside a pane as tints.
 - Do keep one emissive cyan per view, and let severity and diff colors carry meaning.
 - Do set IDs, branches, build numbers and other readouts in Cascadia Mono.
-- Do check new components in `web/design-system.html`, at 1440px and below 1100px, and with reduced transparency on.
+- Do check new components in `web/design-system.html`, at 1440px and below 1100px, in both themes (the Theme select in its sidebar), and with reduced transparency on.
 
 ### Don't:
 
@@ -940,7 +956,7 @@ The app runs all day, so everything it holds has a limit.
 - Don't put a backdrop blur on anything the size of the window (a dialog's scrim, a sheet). It redraws everything under it whenever anything changes; on a machine without a GPU that's the difference between the display's full rate and a stutter.
 - Don't let anything other than cyan glow, and don't glow decoratively: glow means selection, focus, running or the primary command.
 - Don't drop a float, head or dialog below 84% opacity; code and diagrams must never ghost through.
-- Don't add light-theme surfaces; the shell forces dark so the glass always reads as smoked.
+- Don't hard-code a color that only works on one theme; add a token with a dark and a light value.
 - Don't use colored side stripes on blocks, rows or cards.
 - Don't use emoji as icons; use `icon()` from `web/src/icons.ts`.
 - Don't put a `<button>` on the page without a base class.

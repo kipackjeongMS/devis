@@ -3,6 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<script src="themeBoot.js"></script>
 <title>Devis design system</title>
 <link rel="stylesheet" href="style.css">
 <style>
@@ -13,6 +15,10 @@
   .ds-shell { display: grid; grid-template-columns: 208px minmax(0, 1fr); gap: 32px; max-width: 1440px; margin: 0 auto; padding: 16px 24px 120px 16px; }
   .ds-rail { position: sticky; top: 16px; align-self: start; max-height: calc(100vh - 32px); overflow-y: auto; padding: 12px 8px 16px; }
   .ds-rail-brand { display: flex; align-items: center; gap: 10px; padding: 4px 8px 4px; }
+  .ds-theme { display: grid; gap: 4px; margin: 8px 8px 0; color: var(--text-3); font-size: var(--fs-caption); line-height: var(--lh-caption); }
+  /* The diagram specimen is drawn by hand, so it carries Mermaid's colors itself: dark, then neutral. */
+  .ds-mmd { --mmd-node: #1d2b40; --mmd-stroke: #5f86ad; --mmd-text: #e6eefb; --mmd-line: #8ab4d8; }
+  :root[data-theme="light"] .ds-mmd { --mmd-node: #eeeeee; --mmd-stroke: #999999; --mmd-text: #333333; --mmd-line: #333333; }
   .ds-rail-brand b { font-size: var(--fs-label); font-weight: 600; line-height: 20px; }
   .ds-rail h2 { margin: 16px 8px 4px; color: var(--text-3); font-size: var(--fs-caption); font-weight: 400; line-height: var(--lh-caption); }
   .ds-rail ol { margin: 0; padding: 0; list-style: none; }
@@ -60,7 +66,7 @@
 
   /* Foundations */
   .ds-depth { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; padding: 24px; border-radius: var(--r-pane);
-    background: repeating-linear-gradient(135deg, rgba(76, 214, 255, .1) 0 2px, transparent 2px 14px), var(--ink); }
+    background: repeating-linear-gradient(135deg, rgb(var(--accent-rgb) / .1) 0 2px, transparent 2px 14px), var(--ink); }
   .ds-tier { display: flex; min-height: 136px; flex-direction: column; justify-content: flex-end; gap: 2px; padding: 12px; border: 1px solid var(--edge); border-top-color: var(--edge-top); border-radius: var(--r-surface); }
   .ds-tier strong { font-size: var(--fs-label); line-height: 20px; }
   .ds-tier small { color: var(--text-3); font: var(--fs-caption)/var(--lh-caption) var(--mono); }
@@ -73,7 +79,7 @@
   .ds-swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); gap: 0 20px; }
   .ds-swatch { display: flex; min-width: 0; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--divider); }
   .ds-chip { flex: none; width: 36px; height: 36px; border: 1px solid var(--stroke-card); border-radius: var(--r-control);
-    background: linear-gradient(var(--c), var(--c)), repeating-conic-gradient(#0c0c0c 0 25%, #1c1c1c 0 50%) 0 0 / 10px 10px; }
+    background: linear-gradient(var(--c), var(--c)), repeating-conic-gradient(var(--ink) 0 25%, var(--ink-3) 0 50%) 0 0 / 10px 10px; }
   .ds-swatch span { min-width: 0; }
   .ds-swatch code { display: block; color: var(--text-1); font-size: var(--fs-caption); line-height: var(--lh-caption); }
   .ds-swatch small { display: block; overflow: hidden; color: var(--text-3); font: var(--fs-caption)/var(--lh-caption) var(--mono); text-overflow: ellipsis; white-space: nowrap; }
@@ -110,7 +116,7 @@
   .ds-float { position: relative !important; inset: auto !important; top: auto !important; left: auto !important; transform: none !important; animation: none !important; }
   .ds-floats { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 24px; }
   .ds-dialog-stage { position: relative; min-height: 480px; overflow: hidden; border: 1px solid var(--edge); border-radius: var(--r-pane);
-    background: repeating-linear-gradient(135deg, rgba(76, 214, 255, .08) 0 2px, transparent 2px 14px), var(--ink); }
+    background: repeating-linear-gradient(135deg, rgb(var(--accent-rgb) / .08) 0 2px, transparent 2px 14px), var(--ink); }
   .ds-dialog-stage .ask-overlay { position: relative; inset: auto; z-index: 1; min-height: 480px; animation: none; }
   .ds-dialog-stage .ds-ghost { position: absolute; inset: 0; }
   .ds-ghost { padding: 32px; color: var(--text-2); font-size: var(--fs-body); line-height: var(--lh-body); }
@@ -179,6 +185,7 @@
       <span class="brand-mark" aria-hidden="true"><svg class="ic" viewBox="0 0 16 16"><circle cx="4.5" cy="3.75" r="1.5"/><circle cx="4.5" cy="12.25" r="1.5"/><circle cx="11.5" cy="12.25" r="1.5"/><path d="M4.5 5.25v5.5M11.5 10.75V7a2.5 2.5 0 0 0-2.5-2.5H6.5M8 3l-1.5 1.5L8 6"/></svg></span>
       <b>Design system</b>
     </div>
+    <label class="ds-theme"><span>Theme</span><select class="filter-select" id="ds-theme"></select></label>
     <nav>
       <div>
         <h2>Overview</h2>
@@ -363,9 +370,9 @@
         <table class="ds-table" style="margin-top:16px">
           <thead><tr><th>Shadow</th><th>Value</th><th>Used by</th></tr></thead>
           <tbody>
-            <tr><td><code>--shadow-pane</code></td><td class="mono">0 18px 44px -14px rgba(0,0,0,.6)</td><td>Every floating pane</td></tr>
-            <tr><td><code>--shadow-flyout</code></td><td class="mono">0 16px 36px -8px rgba(0,0,0,.62), 0 2px 8px rgba(0,0,0,.3)</td><td>Flyouts, menus, toasts, zoom cluster, block action pills, a dragged block</td></tr>
-            <tr><td><code>--shadow-dialog</code></td><td class="mono">0 40px 80px -16px rgba(0,0,0,.72), 0 4px 24px rgba(0,0,0,.36)</td><td>Dialogs and the stacked reading sheet</td></tr>
+            <tr><td><code>--shadow-pane</code></td><td class="mono" data-token="shadow-pane">0 18px 44px -14px rgba(0,0,0,.6)</td><td>Every floating pane</td></tr>
+            <tr><td><code>--shadow-flyout</code></td><td class="mono" data-token="shadow-flyout">0 16px 36px -8px rgba(0,0,0,.62), 0 2px 8px rgba(0,0,0,.3)</td><td>Flyouts, menus, toasts, zoom cluster, block action pills, a dragged block</td></tr>
+            <tr><td><code>--shadow-dialog</code></td><td class="mono" data-token="shadow-dialog">0 40px 80px -16px rgba(0,0,0,.72), 0 4px 24px rgba(0,0,0,.36)</td><td>Dialogs and the stacked reading sheet</td></tr>
             <tr><td><code>--accent-glow</code></td><td class="mono">8–26px halo</td><td>Emitted light, not elevation: selection, focus, running and the primary command</td></tr>
           </tbody>
         </table>
@@ -375,7 +382,7 @@
         <h3>Color</h3>
         <p class="ds-text">One emissive cyan is the only brand color. Glass, edges and text stay neutral black, gray and white; hue is evidence. Chips sit over a checkerboard so translucent tokens show their alpha.</p>
         <div class="glass-pane ds-stage">
-          <div class="ds-block"><p class="ds-cap">Field and glass</p><div class="ds-swatches" data-swatches="ink ink-2 ink-3 well glass glass-2 glass-3 glass-head glass-float card card-2"></div></div>
+          <div class="ds-block"><p class="ds-cap">Field and glass</p><div class="ds-swatches" data-swatches="ink ink-2 ink-3 well glass glass-2 glass-3 glass-head glass-float card card-2 card-flat"></div></div>
           <div class="ds-block"><p class="ds-cap">Fills and strokes</p><div class="ds-swatches" data-swatches="fill-hover fill-press fill-selected control control-hover control-press input-active edge edge-top divider stroke-card stroke-control stroke-control-2 stroke-input"></div></div>
           <div class="ds-block"><p class="ds-cap">Text</p><div class="ds-swatches" data-swatches="text-1 text-2 text-3 text-off"></div></div>
           <div class="ds-block"><p class="ds-cap">Accent</p><div class="ds-swatches" data-swatches="accent accent-hover accent-press accent-text accent-tint accent-tint-2 accent-glow on-accent focus"></div></div>
@@ -834,10 +841,10 @@
             <div class="mermaid adjustable">
               <div class="mmd-toolbar"><span class="mmd-hint">Drag to pan · Ctrl+scroll to zoom</span><button type="button" class="mmd-control">Fit</button><button type="button" class="mmd-control" aria-label="Zoom out">−</button><button type="button" class="mmd-control mmd-scale">100%</button><button type="button" class="mmd-control" aria-label="Zoom in">+</button></div>
               <div class="mmd-viewport" tabindex="0" role="group" aria-label="Diagram"><div class="mmd-stage">
-                <svg viewBox="0 0 320 200" width="320" height="200" role="img" aria-label="Export flow: Export, Pacer, Writer, Replica" style="font:12px var(--font)">
-                  <g fill="none" stroke="#8ab4d8" stroke-width="1.2"><path d="M70 50h56M194 50h56M160 70v48"/><path d="m120 46 6 4-6 4M244 46 250 50l-6 4M156 112l4 6 4-6"/></g>
-                  <g fill="#1d2b40" stroke="#5f86ad"><rect x="10" y="30" width="60" height="40" rx="6"/><rect x="126" y="30" width="68" height="40" rx="6"/><rect x="250" y="30" width="60" height="40" rx="6"/><rect x="120" y="118" width="80" height="40" rx="6"/></g>
-                  <g fill="#e6eefb" text-anchor="middle"><text x="40" y="54">Export</text><text x="160" y="54">Pacer</text><text x="280" y="54">Writer</text><text x="160" y="142">Quota</text></g>
+                <svg class="ds-mmd" viewBox="0 0 320 200" width="320" height="200" role="img" aria-label="Export flow: Export, Pacer, Writer, Replica" style="font:12px var(--font)">
+                  <g fill="none" style="stroke: var(--mmd-line)" stroke-width="1.2"><path d="M70 50h56M194 50h56M160 70v48"/><path d="m120 46 6 4-6 4M244 46 250 50l-6 4M156 112l4 6 4-6"/></g>
+                  <g style="fill: var(--mmd-node); stroke: var(--mmd-stroke)"><rect x="10" y="30" width="60" height="40" rx="6"/><rect x="126" y="30" width="68" height="40" rx="6"/><rect x="250" y="30" width="60" height="40" rx="6"/><rect x="120" y="118" width="80" height="40" rx="6"/></g>
+                  <g style="fill: var(--mmd-text)" text-anchor="middle"><text x="40" y="54">Export</text><text x="160" y="54">Pacer</text><text x="280" y="54">Writer</text><text x="160" y="142">Quota</text></g>
                 </svg>
               </div></div>
             </div>
@@ -1599,27 +1606,48 @@
 
 <script type="module">
   import { icon } from "./icons.js";
+  import { THEME_PREFS, followTheme, setThemePref, themePref } from "./theme.js";
 
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
+  // The same theme pick as Settings > Appearance, so every specimen can be checked in both themes.
+  followTheme();
+  const themeSelect = document.getElementById("ds-theme");
+  if (themeSelect) {
+    themeSelect.innerHTML = THEME_PREFS.map((p) => `<option value="${p.value}">${esc(p.label)}</option>`).join("");
+    themeSelect.value = themePref();
+    themeSelect.addEventListener("change", () => setThemePref(themeSelect.value));
+  }
 
   for (const el of document.querySelectorAll("[data-icon]")) el.insertAdjacentHTML("afterbegin", icon(el.dataset.icon));
   for (const el of document.querySelectorAll("[data-icon-end]")) el.insertAdjacentHTML("beforeend", icon(el.dataset.iconEnd));
 
-  const ICONS = ["check", "dismiss", "clock", "chat", "person", "sync", "warning", "reply", "circle", "sparkle", "tray", "copy", "folder", "chevron", "back", "add", "terminal", "bell", "settings", "pullRequest", "flow", "pipeline", "play", "stop", "trash", "search", "minus", "fit", "tidy", "branch", "external"];
+  const ICONS = ["check", "dismiss", "clock", "chat", "person", "sync", "warning", "reply", "circle", "sparkle", "tray", "copy", "folder", "chevron", "back", "add", "terminal", "bell", "settings", "pullRequest", "flow", "pipeline", "play", "stop", "trash", "search", "minus", "fit", "tidy", "branch", "external", "theme"];
   const iconHost = document.getElementById("ds-icons");
   if (iconHost) iconHost.innerHTML = ICONS.map((n) => `<figure>${icon(n)}<figcaption>${n}</figcaption></figure>`).join("");
 
   const tokens = getComputedStyle(document.documentElement);
-  for (const host of document.querySelectorAll("[data-swatches]")) {
-    host.innerHTML = host.dataset.swatches
-      .trim()
-      .split(/\s+/)
-      .map((name) => {
-        const value = tokens.getPropertyValue(`--${name}`).trim();
-        return `<div class="ds-swatch"><span class="ds-chip" style="--c:var(--${name})"></span><span><code>--${name}</code><small title="${esc(value)}">${esc(value)}</small></span></div>`;
-      })
-      .join("");
-  }
+  const paintSwatches = () => {
+    for (const host of document.querySelectorAll("[data-swatches]")) {
+      host.innerHTML = host.dataset.swatches
+        .trim()
+        .split(/\s+/)
+        .map((name) => {
+          const value = tokens.getPropertyValue(`--${name}`).trim();
+          return `<div class="ds-swatch"><span class="ds-chip" style="--c:var(--${name})"></span><span><code>--${name}</code><small title="${esc(value)}">${esc(value)}</small></span></div>`;
+        })
+        .join("");
+    }
+    for (const cell of document.querySelectorAll("[data-token]")) {
+      const value = tokens.getPropertyValue(`--${cell.dataset.token}`).trim();
+      if (value) cell.textContent = value;
+    }
+  };
+  paintSwatches();
+  window.addEventListener("devis:theme-applied", () => {
+    paintSwatches();
+    if (themeSelect) themeSelect.value = themePref();
+  });
 
   const easePath = document.getElementById("ds-ease-path");
   const easeLabel = document.getElementById("ds-ease-label");

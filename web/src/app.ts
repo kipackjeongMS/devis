@@ -28,6 +28,7 @@ import { needsFirstRun, showFirstRun } from "./firstRun.js";
 import { icon } from "./icons.js";
 import { showAgencyBanner, showAzureBanner, hideAzureBanner } from "./staleBanner.js";
 import { applyShellClasses } from "./shell.js";
+import { THEME_PREFS, setThemePref, themePref, themePrefOf } from "./theme.js";
 import { loadPrRecency, prIdentity } from "./prRecency.js";
 import { announcePrUpdated, onPrUpdatedElsewhere } from "./prWindow.js";
 import { addScope, removeScope, scopeChips } from "./prScopes.js";
@@ -276,6 +277,31 @@ function renderSettings(): void {
        </header>`
     )
   );
+  // Appearance applies the moment it changes, in every window; it isn't part of Save.
+  const appearance = el(`<section class="settings-group" aria-labelledby="settingsAppearanceGroup"></section>`);
+  appearance.appendChild(el(`<h2 id="settingsAppearanceGroup">Appearance</h2>`));
+  const themeCard = settingsCard(
+    "theme",
+    "Theme",
+    "Dark or light glass, in every window. Use Windows setting follows Settings › Personalization › Colors.",
+    "settingsTheme"
+  );
+  const themeSelect = el(
+    `<select class="filter-select settings-theme-select" aria-labelledby="settingsTheme">${THEME_PREFS.map(
+      (p) => `<option value="${p.value}">${esc(p.label)}</option>`
+    ).join("")}</select>`
+  ) as HTMLSelectElement;
+  themeSelect.value = themePref();
+  themeSelect.addEventListener("change", () => setThemePref(themePrefOf(themeSelect.value)));
+  // Another window, or Windows itself, can change it while Settings is open.
+  const syncThemeSelect = (): void => {
+    if (!themeSelect.isConnected) return void window.removeEventListener("devis:theme-applied", syncThemeSelect);
+    themeSelect.value = themePref();
+  };
+  window.addEventListener("devis:theme-applied", syncThemeSelect);
+  themeCard.querySelector<HTMLElement>(".settings-card-control")!.appendChild(themeSelect);
+  appearance.appendChild(themeCard);
+  wrap.appendChild(appearance);
   const setup = el(`<section class="settings-group" aria-labelledby="settingsSetupGroup"></section>`);
   setup.appendChild(el(`<h2 id="settingsSetupGroup">Setup</h2>`));
   setup.appendChild(setupCard(settingsCard));
