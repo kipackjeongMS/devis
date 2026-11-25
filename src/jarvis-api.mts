@@ -1,12 +1,16 @@
 // /api/jarvis/*: the Today dashboard, its tasks and workers, history, and the Lead.
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { BodyTooLargeError, readBody, sendJson } from "./http.mjs";
+import { readFile } from "node:fs/promises";
+import { BodyTooLargeError, readBody, sendBuffer, sendJson } from "./http.mjs";
 import { saveImage, serveImage } from "./chat-images.mjs";
 import { readConfig } from "./config.mjs";
 import { chatMessagesFromEvents } from "./reviewer-session.mjs";
 import {
+    ARTIFACT_IMAGE_MAX,
     JarvisError,
+    artifactFile,
+    artifactImageType,
     artifactsDir,
     asJarvisId,
     deleteArtifact,
@@ -65,7 +69,7 @@ import { ensureOverviewRunner, overviewState, refreshOverview } from "./jarvis-o
 import { ensurePrsRunner, linkFromUser, taskPrsView, unlinkPr } from "./jarvis-prs.mjs";
 import { addTodo, clearDoneTodos, deleteTodo, getQuickNote, listTodos, moveTodo, saveQuickNote, settleNeedTodos, updateTodo } from "./jarvis-notes.mjs";
 import { needKeys } from "./jarvis-needs.mjs";
-import { openFolder } from "./open-folder.mjs";
+import { openFolder, revealFile } from "./open-folder.mjs";
 import {
     addMeetingTodo,
     chatsDigest,
@@ -529,6 +533,32 @@ export async function handleJarvisApi(req: IncomingMessage, res: ServerResponse,
         }
         if (p === "/api/jarvis/artifact" && get) {
             return sendJson(res, 200, { artifact: await readArtifact(requireId(q.get("id")), q.get("name") || "") });
+        }
+        // An image artifact's bytes, for the Artifacts window's preview. Nothing else is served raw, and
+        // the sandbox keeps an SVG opened on its own from running script.
+        if (p === "/api/jarvis/artifact/raw" && get) {
+            const file = await artifactFile(requireId(q.get("id")), q.get("name") || "");
+            const type = artifactImageType(file.name);
+            if (!type) throw new JarvisError(`${file.name} isn't an image.`, 415);
+            if (file.size > ARTIFACT_IMAGE_MAX) throw new JarvisError(`${file.name} is too large to show.`, 413);
+            let bytes: Buffer;
+            try {
+                bytes = await readFile(file.path);
+            } catch {
+                throw new JarvisError(`There is no artifact named ${file.name}.`, 404);
+            }
+            // The page names the version it wants (?v=<modified time and size>), so a cached copy is never stale.
+            return sendBuffer(res, 200, bytes, type, {
+                "Cache-Control": "private, max-age=31536000, immutable",
+                "X-Content-Type-Options": "nosniff",
+                "Content-Security-Policy": "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox",
+            });
+        }
+        if (p === "/api/jarvis/artifact/reveal" && post) {
+            const b = await readBody(req);
+            const file = await artifactFile(requireId(b?.id), b?.name);
+            await revealFile(file.path);
+            return sendJson(res, 200, { ok: true });
         }
         if (p === "/api/jarvis/artifact" && post) {
             const b = await readBody(req);

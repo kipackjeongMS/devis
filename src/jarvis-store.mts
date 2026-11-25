@@ -8,9 +8,9 @@
 // of the repos it needs (see jarvis-codebase.mts).
 
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, type Stats } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { DatabaseSync } from "node:sqlite";
 import { ensureDb } from "./store.mjs";
@@ -783,11 +783,34 @@ export async function deleteTask(id: string, extra?: Record<string, unknown>): P
 export const NOTE_NAME = "note.md";
 /** Written by one of the task's workers when the task is done or removed. */
 export const RECAP_NAME = "recap.md";
+/** The longest text an artifact holds, in characters. */
 export const ARTIFACT_MAX = 200_000;
+/** The most bytes ARTIFACT_MAX characters take as UTF-8, so a larger file is never read to find out. */
+const ARTIFACT_BYTES_MAX = 3 * ARTIFACT_MAX;
+/** The largest image the Artifacts window previews. */
+export const ARTIFACT_IMAGE_MAX = 20 * 1024 * 1024;
 export const ARTIFACTS_PER_TASK = 50;
+/** The names a new artifact can take: text files. Files already there can have any name. */
 const ARTIFACT_NAME = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,78}\.(?:md|markdown|txt|json|ya?ml|csv|log|mmd)$/i;
+/**
+ * A file the folder lists: no path separators, nothing Windows can't name, and no dotfiles, so the
+ * half-written `.<name>.tmp` files of writeFileAtomic stay hidden. It can't start or end with any kind of
+ * space either (isFileName checks the end), so trimming a listed name never makes it another file's.
+ */
+// eslint-disable-next-line no-control-regex
+const FILE_NAME = /^[^.\s\\/:*?"<>|\u0000-\u001f][^\\/:*?"<>|\u0000-\u001f]{0,254}$/;
 // Windows reserves these names whatever the extension.
 const RESERVED_NAME = /^(?:con|prn|aux|nul|com\d|lpt\d)(?:\.|$)/i;
+const IMAGE_TYPES: Record<string, string> = {
+    png: "image/png",
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    gif: "image/gif",
+    webp: "image/webp",
+    bmp: "image/bmp",
+    ico: "image/x-icon",
+    svg: "image/svg+xml",
+};
 
 export interface ArtifactInfo {
     name: string;
@@ -795,9 +818,18 @@ export interface ArtifactInfo {
     modifiedAt: string;
 }
 
+/**
+ * How the Artifacts window shows a file: text (content holds it, and it can be edited), an image
+ * (previewed from /api/jarvis/artifact/raw), or neither, a binary file or one too large to show,
+ * which only gets its size and Show in folder.
+ */
+export type ArtifactKind = "text" | "image" | "binary" | "large";
+
 export interface Artifact extends ArtifactInfo {
+    /** The text, for kind "text"; empty otherwise. */
     content: string;
     path: string;
+    kind: ArtifactKind;
 }
 
 /** The task's own folder; the Artifacts folder sits inside it. */
@@ -819,7 +851,16 @@ function isArtifactName(name: string): boolean {
     return ARTIFACT_NAME.test(name) && !name.includes("..") && !RESERVED_NAME.test(name);
 }
 
-/** A safe file name for an artifact, or an error that says what is allowed. */
+function isFileName(name: string): boolean {
+    return FILE_NAME.test(name) && !/[.\s]$/.test(name) && !RESERVED_NAME.test(name);
+}
+
+/** A name the Artifacts folder lists (and the Artifacts window's URL can name); artifacts-window.mts takes the same. */
+export function isListedArtifactName(name: unknown): name is string {
+    return typeof name === "string" && isFileName(name);
+}
+
+/** A safe file name for a new artifact, or an error that says what is allowed. */
 export function artifactName(value: unknown): string {
     const name = typeof value === "string" ? value.trim() : "";
     if (!isArtifactName(name)) {
@@ -828,6 +869,35 @@ export function artifactName(value: unknown): string {
         );
     }
     return name;
+}
+
+/** The name of any file the folder lists, or of a new artifact; anything else gets artifactName's error. */
+function fileName(value: unknown): string {
+    const name = typeof value === "string" ? value.trim() : "";
+    return isFileName(name) ? name : artifactName(value);
+}
+
+/** The image type a file's name says it is, or null. */
+export function artifactImageType(name: string): string | null {
+    return IMAGE_TYPES[extname(name).slice(1).toLowerCase()] ?? null;
+}
+
+/** UTF-8 text, or null for anything else: a NUL byte or an invalid sequence means it isn't text. */
+function textOf(bytes: Buffer): string | null {
+    if (bytes.includes(0)) return null;
+    try {
+        return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+    } catch {
+        return null;
+    }
+}
+
+function statOf(path: string): Stats | null {
+    try {
+        return statSync(path);
+    } catch {
+        return null;
+    }
 }
 
 /**
@@ -878,14 +948,15 @@ async function requireTask(taskId: string): Promise<JarvisTask> {
 }
 
 const RANK: Record<string, number> = { [NOTE_NAME]: 0, [RECAP_NAME]: 1 };
+const OWN_NOTES = new Set([NOTE_NAME, RECAP_NAME]);
 
-/** note.md first, then recap.md, then the rest, newest first. */
+/** note.md first, then recap.md, then the rest, newest first. Every file is listed, whatever its type. */
 export async function listArtifacts(taskId: string): Promise<ArtifactInfo[]> {
     const task = await requireTask(taskId);
     const dir = ensureArtifacts(task.id);
     const items: ArtifactInfo[] = [];
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
-        if (!entry.isFile() || !isArtifactName(entry.name)) continue;
+        if (!entry.isFile() || !isFileName(entry.name)) continue;
         try {
             const stat = statSync(join(dir, entry.name));
             items.push({ name: entry.name, size: stat.size, modifiedAt: stat.mtime.toISOString() });
@@ -897,31 +968,71 @@ export async function listArtifacts(taskId: string): Promise<ArtifactInfo[]> {
     return items.sort((a, b) => rank(a.name) - rank(b.name) || b.modifiedAt.localeCompare(a.modifiedAt) || a.name.localeCompare(b.name));
 }
 
-function readText(path: string): string | null {
-    try {
-        return readFileSync(path, "utf8");
-    } catch {
-        return null;
-    }
+/** What a file of `size` bytes is, with its text when it's text. Throws when it can't be read. */
+function readKind(path: string, name: string, size: number): { kind: ArtifactKind; content: string } {
+    // The app's own notes are always text, read as they were before other files listed: a stray byte from a
+    // worker's shell (another encoding, or UTF-16) mustn't lock the shared note against appends and edits.
+    if (OWN_NOTES.has(name.toLowerCase())) return { kind: "text", content: readFileSync(path, "utf8") };
+    if (artifactImageType(name)) return { kind: size > ARTIFACT_IMAGE_MAX ? "large" : "image", content: "" };
+    if (size > ARTIFACT_BYTES_MAX) return { kind: "large", content: "" };
+    const text = textOf(readFileSync(path));
+    if (text === null) return { kind: "binary", content: "" };
+    return text.length > ARTIFACT_MAX ? { kind: "large", content: "" } : { kind: "text", content: text };
 }
 
 export async function readArtifact(taskId: string, name: string): Promise<Artifact> {
     const task = await requireTask(taskId);
-    const file = artifactName(name);
+    const file = fileName(name);
     const path = join(ensureArtifacts(task.id), file);
-    const content = readText(path);
-    // The note always exists as far as anyone can tell; an empty one is fine.
-    if (content === null && file.toLowerCase() !== NOTE_NAME) throw new JarvisError(`There is no artifact named ${file}.`, 404);
-    let size = 0;
-    let modifiedAt = task.createdAt;
-    try {
-        const stat = statSync(path);
-        size = stat.size;
-        modifiedAt = stat.mtime.toISOString();
-    } catch {
-        /* the empty note */
+    const stat = statOf(path);
+    if (stat?.isFile()) {
+        try {
+            const { kind, content } = readKind(path, file, stat.size);
+            return { name: file, content, path, size: stat.size, modifiedAt: stat.mtime.toISOString(), kind };
+        } catch {
+            /* removed since */
+        }
     }
-    return { name: file, content: content ?? "", path, size, modifiedAt };
+    // The note always exists as far as anyone can tell; an empty one is fine.
+    if (file.toLowerCase() !== NOTE_NAME) throw new JarvisError(`There is no artifact named ${file}.`, 404);
+    return { name: file, content: "", path, size: 0, modifiedAt: task.createdAt, kind: "text" };
+}
+
+/** An artifact's file on disk, for Show in folder and the image preview. */
+export async function artifactFile(taskId: string, name: unknown): Promise<{ name: string; path: string; size: number }> {
+    const task = await requireTask(taskId);
+    const file = fileName(name);
+    const path = join(ensureArtifacts(task.id), file);
+    const stat = statOf(path);
+    if (!stat?.isFile()) throw new JarvisError(`There is no artifact named ${file}.`, 404);
+    return { name: file, path, size: stat.size };
+}
+
+/**
+ * A file's text before the app changes it, or null when there's no file. Only text is changed:
+ * an image, a binary file or one too large to show is refused.
+ */
+function currentText(path: string, file: string): string | null {
+    const stat = statOf(path);
+    if (!stat) return null;
+    if (!stat.isFile()) throw new JarvisError(`${file} is a folder, not a file.`, 409);
+    let read: { kind: ArtifactKind; content: string };
+    try {
+        read = readKind(path, file, stat.size);
+    } catch {
+        return null;
+    }
+    if (read.kind === "text") return read.content;
+    if (read.kind === "large") throw new JarvisError(`${file} is too large to change here.`, 409);
+    throw new JarvisError(`${file} isn't a text file, so it can't be changed here.`, 409);
+}
+
+/** A file about to be made: it needs a text file's name, and room under the cap. */
+function checkNew(dir: string, file: string): void {
+    artifactName(file);
+    if (listCount(dir) >= ARTIFACTS_PER_TASK) {
+        throw new JarvisError(`This task already has ${ARTIFACTS_PER_TASK} artifacts. Delete one first.`, 409);
+    }
 }
 
 export interface WriteArtifact {
@@ -933,16 +1044,14 @@ export interface WriteArtifact {
 
 export async function writeArtifact(taskId: string, name: string, content: unknown, options: WriteArtifact = {}): Promise<Artifact> {
     const task = await requireTask(taskId);
-    const file = artifactName(name);
+    const file = fileName(name);
     if (typeof content !== "string") throw new JarvisError("The artifact's text is missing.");
     if (content.length > ARTIFACT_MAX) throw new JarvisError(`${file} is too long.`);
     const dir = ensureArtifacts(task.id);
     const path = join(dir, file);
-    const current = readText(path);
-    if (current !== null && options.create) throw new JarvisError(`There is already an artifact named ${file}.`, 409);
-    if (current === null && listCount(dir) >= ARTIFACTS_PER_TASK) {
-        throw new JarvisError(`This task already has ${ARTIFACTS_PER_TASK} artifacts. Delete one first.`, 409);
-    }
+    if (options.create && statOf(path)) throw new JarvisError(`There is already an artifact named ${file}.`, 409);
+    const current = currentText(path, file);
+    if (current === null) checkNew(dir, file);
     if (options.base !== undefined && (current ?? "") !== options.base) {
         throw new JarvisError(`${file} changed while you were editing it.`, 409);
     }
@@ -952,7 +1061,7 @@ export async function writeArtifact(taskId: string, name: string, content: unkno
 
 function listCount(dir: string): number {
     try {
-        return readdirSync(dir, { withFileTypes: true }).filter((e) => e.isFile() && isArtifactName(e.name)).length;
+        return readdirSync(dir, { withFileTypes: true }).filter((e) => e.isFile() && isFileName(e.name)).length;
     } catch {
         return 0;
     }
@@ -961,16 +1070,14 @@ function listCount(dir: string): number {
 /** Add a dated, signed entry to the end of an artifact (note.md by default). */
 export async function appendArtifact(taskId: string, name: string, text: string, author: string): Promise<void> {
     const task = await requireTask(taskId);
-    const file = artifactName(name);
+    const file = fileName(name);
     const body = String(text ?? "").trim();
     if (!body) throw new JarvisError("Nothing to add.");
     const dir = ensureArtifacts(task.id);
     const path = join(dir, file);
     // Read and write with no await between, so two entries never interleave.
-    const current = readText(path);
-    if (current === null && listCount(dir) >= ARTIFACTS_PER_TASK) {
-        throw new JarvisError(`This task already has ${ARTIFACTS_PER_TASK} artifacts. Delete one first.`, 409);
-    }
+    const current = currentText(path, file);
+    if (current === null) checkNew(dir, file);
     const stamp = new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
     const next = `${(current ?? "").replace(/\s*$/, "")}\n\n## ${stamp} · ${author}\n\n${body}\n`.replace(/^\n+/, "");
     if (next.length > ARTIFACT_MAX) throw new JarvisError(`${file} is full. Start a new artifact.`);
@@ -979,10 +1086,10 @@ export async function appendArtifact(taskId: string, name: string, text: string,
 
 export async function deleteArtifact(taskId: string, name: string): Promise<void> {
     const task = await requireTask(taskId);
-    const file = artifactName(name);
+    const file = fileName(name);
     if (file.toLowerCase() === NOTE_NAME) throw new JarvisError("note.md is the task's shared note; clear it instead of deleting it.");
     const path = join(ensureArtifacts(task.id), file);
-    if (readText(path) === null) throw new JarvisError(`There is no artifact named ${file}.`, 404);
+    if (!statOf(path)?.isFile()) throw new JarvisError(`There is no artifact named ${file}.`, 404);
     rmSync(path, { force: true });
 }
 

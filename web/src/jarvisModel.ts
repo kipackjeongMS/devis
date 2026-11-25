@@ -1961,9 +1961,13 @@ export interface ArtifactInfo {
   modifiedAt: string;
 }
 
+/** What a file holds: only text is shown as text and edited; an older service sends no kind, and only text. */
+export type ArtifactKind = "text" | "image" | "binary" | "large";
+
 export interface Artifact extends ArtifactInfo {
   content: string;
   path: string;
+  kind?: ArtifactKind;
 }
 
 export const NOTE_NAME = "note.md";
@@ -1971,11 +1975,22 @@ export const RECAP_NAME = "recap.md";
 
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
-  return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
+  const mb = bytes / (1024 * 1024);
+  return `${mb.toFixed(mb < 10 ? 1 : 0)} MB`;
 }
 
 export function isMarkdownName(name: string): boolean {
   return /\.(md|markdown)$/i.test(name);
+}
+
+/** Pictures the Artifacts window previews; the service decides, this only picks the list icon. */
+export function isImageName(name: string): boolean {
+  return /\.(png|jpe?g|gif|webp|bmp|ico|svg)$/i.test(name);
+}
+
+export function artifactKind(a: Artifact): ArtifactKind {
+  return a.kind || "text";
 }
 
 /** What the special artifacts are for. */

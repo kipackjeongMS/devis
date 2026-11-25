@@ -42,6 +42,7 @@ import {
   agoPhrase,
   artifactRole,
   formatBytes,
+  isImageName,
   mergeStatuses,
   newArtifactText,
   nextArtifactName,
@@ -1276,7 +1277,7 @@ function paintList(task: TodayTask): void {
       .map((i) => {
         const role = artifactRole(i.name);
         return `<li><button type="button" class="tm-art" data-act="art-open" data-name="${esc(i.name)}" title="Open ${esc(i.name)} in the Artifacts window">
-            <span class="tm-art-icon">${svg(sameName(i.name, RECAP_NAME) ? "sparkle" : "file")}</span>
+            <span class="tm-art-icon">${svg(sameName(i.name, RECAP_NAME) ? "sparkle" : isImageName(i.name) ? "image" : "file")}</span>
             <span class="tm-art-name">${esc(i.name)}</span>
             ${role ? `<span class="tm-art-role">${esc(role)}</span>` : ""}
             <span class="tm-art-meta">${esc(formatBytes(i.size))} · ${esc(agoPhrase(i.modifiedAt, now))}</span>

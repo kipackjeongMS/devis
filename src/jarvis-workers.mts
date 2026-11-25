@@ -531,7 +531,9 @@ function taskStatusTool(): Tool<unknown> {
 }
 
 function formatSize(bytes: number): string {
-    return bytes < 1024 ? `${bytes} B` : `${Math.round(bytes / 102.4) / 10} KB`;
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${Math.round(bytes / 102.4) / 10} KB`;
+    return `${Math.round(bytes / (102.4 * 1024)) / 10} MB`;
 }
 
 /**
@@ -553,6 +555,10 @@ export async function runArtifactAction(taskId: string, author: string, args: un
             }
             case "read": {
                 const artifact = await readArtifact(taskId, name);
+                // Only text comes back; anything else says what it is and where, for the worker's own tools.
+                if (artifact.kind === "image") return `${artifact.name} is an image (${formatSize(artifact.size)}). It's at ${artifact.path}.`;
+                if (artifact.kind === "binary") return `${artifact.name} isn't a text file (${formatSize(artifact.size)}). It's at ${artifact.path}.`;
+                if (artifact.kind === "large") return `${artifact.name} is too large to read here (${formatSize(artifact.size)}). It's at ${artifact.path}.`;
                 return artifact.content.trim() ? artifact.content : `(${artifact.name} is empty)`;
             }
             case "append":

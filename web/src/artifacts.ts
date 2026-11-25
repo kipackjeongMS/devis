@@ -15,8 +15,10 @@ import {
   NOTE_NAME,
   RECAP_NAME,
   agoPhrase,
+  artifactKind,
   artifactRole,
   formatBytes,
+  isImageName,
   isMarkdownName,
   newArtifactText,
   nextArtifactName,
@@ -133,6 +135,11 @@ function entries(): ArtifactInfo[] {
   return [{ name: NOTE_NAME, size: 0, modifiedAt: "" }, ...list];
 }
 
+function fileIcon(name: string): "sparkle" | "image" | "file" {
+  if (sameName(name, RECAP_NAME)) return "sparkle";
+  return isImageName(name) ? "image" : "file";
+}
+
 function paintList(): void {
   const filesEl = root.querySelector<HTMLElement>(".aw-files");
   if (!filesEl) return;
@@ -151,7 +158,7 @@ function paintList(): void {
         const current = sameName(i.name, open) ? ' aria-current="true"' : "";
         return (
           `<li data-key="${esc(i.name.toLowerCase())}"><button type="button" class="aw-file" data-act="aw-open" data-name="${esc(i.name)}" title="${esc(i.name)}"${current}>` +
-          `<span class="aw-file-icon">${icon(sameName(i.name, RECAP_NAME) ? "sparkle" : "file")}</span>` +
+          `<span class="aw-file-icon">${icon(fileIcon(i.name))}</span>` +
           `<span class="aw-file-name">${esc(i.name)}</span>` +
           `<span class="aw-file-meta">${esc(meta)}</span>` +
           `</button></li>`
@@ -227,7 +234,8 @@ async function openFile(name: string, edit = false): Promise<void> {
     const res = await getJSON(`/api/jarvis/artifact?id=${encodeURIComponent(taskId)}&name=${encodeURIComponent(name)}`);
     if (token !== fileToken || gone) return;
     file = res.artifact as Artifact;
-    if (edit && mode === "view") startEdit(true);
+    // Only text opens in the editor; a link asking to edit anything else shows it instead.
+    if (edit && mode === "view" && artifactKind(file) === "text") startEdit(true);
     else paintMain();
   } catch (e) {
     if (token !== fileToken || gone) return;
@@ -250,6 +258,7 @@ function paintMain(): void {
   if (!main || mode !== "view") return;
   const name = file?.name || open;
   const isNote = sameName(name, NOTE_NAME);
+  const kind = file ? artifactKind(file) : "text";
   const prevBody = main.querySelector<HTMLElement>(".aw-body");
   const keepScroll = prevBody && main.dataset.file === name.toLowerCase() ? prevBody.scrollTop : 0;
   const bodyFocused = !!prevBody && document.activeElement === prevBody;
@@ -259,6 +268,10 @@ function paintMain(): void {
     body = stateHtml("bad", "warning", `Couldn't read ${name}`, fileError, `<button type="button" class="btn sm ghost" data-act="aw-retry">Try again</button>`);
   } else if (!file) {
     body = `<p class="aw-muted"><span class="spinner"></span> Loading ${esc(name)}…</p>`;
+  } else if (kind === "image") {
+    body = `<div class="aw-img-wrap"><img class="aw-img" src="${esc(imageUrl(file))}" alt="${esc(name)}"></div>`;
+  } else if (kind !== "text") {
+    body = notTextHtml(file);
   } else if (!file.content.trim()) {
     body = `<p class="aw-muted">${isNote ? "Empty. You and the task's workers share this note: decisions, findings, open questions." : "Empty."}</p>`;
   } else if (isMarkdownName(name)) {
@@ -266,11 +279,18 @@ function paintMain(): void {
   } else {
     body = `<pre class="aw-pre">${esc(file.content)}</pre>`;
   }
+  const action = !file
+    ? ""
+    : kind === "text"
+      ? `<button type="button" class="btn sm ghost" data-act="aw-edit">${icon("edit")}<span>Edit</span></button>`
+      : kind === "image"
+        ? revealButton()
+        : "";
   main.dataset.file = name.toLowerCase();
   main.innerHTML = `
     <div class="aw-head">
       <span class="aw-crumb" title="${esc(name)}">${esc(name)}</span>
-      ${file ? `<button type="button" class="btn sm ghost" data-act="aw-edit">${icon("edit")}<span>Edit</span></button>` : ""}
+      ${action}
       ${
         isNote
           ? ""
@@ -284,6 +304,41 @@ function paintMain(): void {
   if (bodyFocused) nextBody.focus({ preventScroll: true });
   else if (focused) main.querySelector<HTMLElement>(`[data-act="${focused}"]`)?.focus();
   void renderMermaid(main.querySelector<HTMLElement>(".aw-md"), true);
+  // A picture that won't load (damaged, or not what its name says) gets the same card as any other file.
+  const img = main.querySelector<HTMLImageElement>(".aw-img");
+  const shown = file;
+  img?.addEventListener("error", () => {
+    if (!img.isConnected || !shown) return;
+    nextBody.innerHTML = stateHtml(
+      "bad",
+      "warning",
+      `Couldn't show ${shown.name}`,
+      `It's ${formatBytes(shown.size)}, but it didn't load as a picture. Show it in its folder to open it with another app.`
+    );
+  });
+}
+
+/** The picture's bytes; ?v= names this version, so a cached copy is never stale. */
+function imageUrl(a: Artifact): string {
+  const v = `${a.modifiedAt}-${a.size}`;
+  return `/api/jarvis/artifact/raw?id=${encodeURIComponent(taskId)}&name=${encodeURIComponent(a.name)}&v=${encodeURIComponent(v)}`;
+}
+
+function revealButton(): string {
+  return `<button type="button" class="btn sm ghost" data-act="aw-reveal" title="Open File Explorer with this file selected">${icon("folder")}<span>Show in folder</span></button>`;
+}
+
+/** A file Devis doesn't show as text: what it is, its size, and the way to it. It's never opened or run from here. */
+function notTextHtml(a: Artifact): string {
+  const size = formatBytes(a.size);
+  const large = artifactKind(a) === "large";
+  return stateHtml(
+    "",
+    "file",
+    large ? `${a.name} is too large to show here` : `${a.name} isn't a text file`,
+    large ? `It's ${size}. Show it in its folder to open it with another app.` : `It's ${size}. Devis shows text and pictures only; show it in its folder to open it with another app.`,
+    revealButton()
+  );
 }
 
 function focusAct(act: string): void {
@@ -315,7 +370,7 @@ function pick(name: string, edit = false): void {
 
 function startEdit(caretAtEnd = false): void {
   const main = mainEl();
-  if (!main || !file || mode !== "view" || gone) return;
+  if (!main || !file || mode !== "view" || gone || artifactKind(file) !== "text") return;
   mode = "edit";
   editBase = file.content;
   editStart = file.content;
@@ -485,6 +540,21 @@ async function openFolder(button: HTMLElement): Promise<void> {
   }
 }
 
+/** File Explorer, on the open file's folder with the file selected. */
+async function revealOpenFile(button: HTMLElement): Promise<void> {
+  const name = file?.name;
+  if (!name || gone) return;
+  if (button instanceof HTMLButtonElement) button.disabled = true;
+  try {
+    await postJSON("/api/jarvis/artifact/reveal", { id: taskId, name });
+  } catch (e) {
+    toast(errorText(e), "err");
+    if ((e as ApiError).status === 404) void loadList();
+  } finally {
+    if (button instanceof HTMLButtonElement) button.disabled = false;
+  }
+}
+
 // ---- events -------------------------------------------------------------------------
 
 root.addEventListener("click", (e) => {
@@ -499,6 +569,8 @@ root.addEventListener("click", (e) => {
       return cancelNew();
     case "aw-folder":
       return void openFolder(node);
+    case "aw-reveal":
+      return void revealOpenFile(node);
     case "aw-edit":
       return startEdit();
     case "aw-cancel":
