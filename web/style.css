@@ -7527,6 +7527,8 @@ html.lean .jv-layer.anim .jv-scrim { animation: fade-in var(--t-fast) linear; }
 .aw-md { max-width: 880px; color: var(--text-1); }
 .aw-md > :first-child { margin-top: 0; }
 .aw-pre { margin: 0; padding: 12px; border-radius: var(--r-control); background: var(--well); color: var(--text-2); font: var(--fs-caption)/19px var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.aw-img-wrap { display: flex; justify-content: center; align-items: flex-start; }
+.aw-img { display: block; max-width: 100%; height: auto; padding: 8px; border: 1px solid var(--divider); border-radius: var(--r-control); background: var(--well); }
 .aw-muted { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--text-3); font-size: var(--fs-label); line-height: 20px; }
 .aw-path { flex: none; margin: 0; padding: 6px 16px 8px; border-top: 1px solid var(--divider); }
 .aw .ask-q.aw-text {

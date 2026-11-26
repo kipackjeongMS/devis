@@ -25,7 +25,7 @@ const {
 const { CASCADE_STEP, codeWindowWorker, isFocusMainUrl } = await import("../code-window.mjs");
 const { prWindowTarget } = await import("../pr-window.mjs");
 const { isTodosWindowUrl } = await import("../todos-window.mjs");
-const { artifactName } = await import("../jarvis-store.mjs");
+const { isListedArtifactName } = await import("../jarvis-store.mjs");
 const { closeDb } = await import("../store.mjs");
 const page = await import("../web/artifactsWindow.js");
 
@@ -75,11 +75,12 @@ try {
     assert.equal(artifactsWindowHash({ file: "design.md" }), "#file=design.md");
     assert.equal(artifactsWindowHash({ file: "design.md", edit: true }), "#file=design.md&edit=1");
     assert.equal(artifactsWindowHash({ file: null, edit: true }), "");
-    assert.equal(artifactsWindowHash({ file: "x.exe" }), "");
+    assert.equal(artifactsWindowHash({ file: "a/b.md" }), "");
+    assert.equal(artifactsWindowHash({ file: "shot.png" }), "#file=shot.png", "any file the folder lists, not only text");
     assert.deepEqual(parseArtifactsHash(""), { file: null, edit: false });
     assert.deepEqual(parseArtifactsHash("#file=a.md&edit=0"), { file: "a.md", edit: false });
     assert.deepEqual(parseArtifactsHash("file=a.md&edit=1"), { file: "a.md", edit: true }, "without the #");
-    for (const name of ["note.md", "recap.md", "my notes.md", "data-more.md", "R_1-2.MARKDOWN", "flow.mmd"]) {
+    for (const name of ["note.md", "recap.md", "my notes.md", "data-more.md", "R_1-2.MARKDOWN", "flow.mmd", "shot.png", "a+b & c#1.bin", "résumé – notes.md"]) {
         for (const edit of [false, true]) {
             const shell = artifactsWindowHash({ file: name, edit });
             assert.equal(page.artifactsHash(name, edit), shell, `the page writes the shell's hash for ${name}`);
@@ -92,19 +93,21 @@ try {
     assert.deepEqual(page.readArtifactsHash("#edit=1"), { file: null, edit: false });
     assert.deepEqual(artifactsWindowTarget(origin + page.artifactsWindowPath(task), origin), { task, file: null, edit: false });
 
-    // ---- file names: the shell takes exactly what the store does ----
-    const storeTakes = (name) => {
-        try {
-            return artifactName(name) === name;
-        } catch {
-            return false;
-        }
-    };
-    const good = ["note.md", "recap.md", "design.md", "My Notes.md", "data.json", "a.yaml", "b.yml", "c.csv", "d.log", "e.mmd", "f.txt", "g.markdown", "X_1-2.MD", "a".repeat(79) + ".md"];
-    const bad = ["", "../x.md", "a/b.md", "a\\b.md", "con.md", "LPT1.txt", "nul", "com1.md", "x.exe", ".hidden.md", "x..md", "a".repeat(80) + ".md", "a".repeat(90) + ".md", " x.md", "x.md ", "x.md\n"];
+    // ---- file names: the shell takes exactly the names the store lists ----
+    const storeTakes = (name) => isListedArtifactName(name);
+    const good = [
+        "note.md", "recap.md", "design.md", "My Notes.md", "data.json", "a.yaml", "f.txt", "X_1-2.MD", "a".repeat(79) + ".md",
+        "shot.png", "x.exe", "x..md", "Makefile", "a+b & c#1.bin", "résumé – notes.md", "图表.svg", "a".repeat(255),
+    ];
+    const bad = [
+        "", "../x.md", "a/b.md", "a\\b.md", "con.md", "LPT1.txt", "nul", "com1.md", ".hidden.md", " x.md", "x.md ", "x.md.", "x.md\n",
+        "a:b.md", 'a"b.md', "a*b.md", "a?.md", "a<b>.md", "a|b.md", "a\u0001.md", "a".repeat(256),
+        "x.md\u00a0", "x.md\u3000", "x.md\ufeff", "x.png\u2028", "\u00a0x.md", "\ufeffx.md",
+    ];
     for (const name of good) {
         assert.equal(isArtifactFileName(name), true, `takes ${JSON.stringify(name)}`);
         assert.equal(storeTakes(name), true, `the store takes ${JSON.stringify(name)}`);
+        assert.equal(name.trim(), name, "a listed name trims to itself, so the store reads the file it names");
     }
     for (const name of bad) {
         assert.equal(isArtifactFileName(name), false, `refuses ${JSON.stringify(name)}`);

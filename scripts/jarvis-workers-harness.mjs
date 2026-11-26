@@ -288,6 +288,15 @@ try {
     assert.equal(await art({ action: "write", name: "design.md", content: "# Design\n\nOption B." }), "Saved design.md.");
     assert.match(await art({ action: "list" }), /^note\.md · .+\ndesign\.md · .+\nFolder: .+artifacts$/);
     assert.equal(await art({ action: "read", name: "design.md" }), "# Design\n\nOption B.");
+    // Anything but text says what it is and where, so the worker can use its own tools on it.
+    writeFileSync(join(store.artifactsDir(task.id), "chart.png"), Buffer.from("89504e470d0a1a0a", "hex"));
+    writeFileSync(join(store.artifactsDir(task.id), "dump.bin"), Buffer.from([1, 0, 2]));
+    assert.equal(await art({ action: "read", name: "chart.png" }), `chart.png is an image (8 B). It's at ${join(store.artifactsDir(task.id), "chart.png")}.`);
+    assert.equal(await art({ action: "read", name: "dump.bin" }), `dump.bin isn't a text file (3 B). It's at ${join(store.artifactsDir(task.id), "dump.bin")}.`);
+    assert.match(await art({ action: "append", name: "dump.bin", content: "x" }), /^Not done: dump\.bin isn't a text file/);
+    assert.match(await art({ action: "list" }), /dump\.bin · 3 B/, "every file is listed");
+    rmSync(join(store.artifactsDir(task.id), "chart.png"));
+    rmSync(join(store.artifactsDir(task.id), "dump.bin"));
     assert.equal(await art({ action: "write", name: "note.md", content: "wipe" }), "note.md is shared: add to it with append instead of replacing it.");
     assert.equal(await art({ action: "write", name: "Recap.md", content: "x" }), "recap.md is written when the task ends.");
     assert.equal(await art({ action: "write", content: "x" }), "Name the artifact to write, like design.md.");

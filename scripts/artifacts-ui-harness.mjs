@@ -1,8 +1,10 @@
 // The Artifacts window (artifacts.html, artifacts.ts) and the task drawer's Artifacts tab that opens it, in hidden
 // Electron windows: the list and the file beside it, files picked here or asked for through the hash, editing and
-// saving (with a worker's write in between), new notes, delete, following a worker's changes, a removed task, and
-// the drawer opening the window, making a note into its editor, and reading its list again on the window's word.
-// Set ADO_PR_OPS_UI_SCREENSHOT to a .png path to save the window at 1080 × 820 (and at 600 × 700, beside it as -narrow.png).
+// saving (with a worker's write in between), new notes, delete, pictures and files that aren't text, following a
+// worker's changes, a removed task, and the drawer opening the window, making a note into its editor, and reading
+// its list again on the window's word.
+// Set ADO_PR_OPS_UI_SCREENSHOT to a .png path to save the window at 1080 × 820 (and at 600 × 700, beside it as -narrow.png),
+// with a picture open (-picture.png) and a file that isn't text (-other.png).
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -13,6 +15,7 @@ import { fileURLToPath } from "node:url";
 
 const TASK = "0f8fad5b-d9cb-469f-a165-70867728950e";
 const web = resolve(dirname(fileURLToPath(import.meta.url)), "..", "web");
+const picture = readFileSync(resolve(web, "..", "assets", "icon.png"));
 const root = mkdtempSync(join(tmpdir(), "artifacts-ui-"));
 const shot = process.env.ADO_PR_OPS_UI_SCREENSHOT ? resolve(process.env.ADO_PR_OPS_UI_SCREENSHOT).replace(/\\/g, "/") : "";
 const electron = (await import("electron")).default;
@@ -32,15 +35,21 @@ function fake(task) {
         createdAt: new Date(clock - 86_400_000).toISOString(),
     };
     const put = (name, content) => S.files.set(name, { name, content, modifiedAt: stamp() });
+    // A file that isn't text: the service sends its kind and size, and no content.
+    const putFile = (name, kind, bytes) => S.files.set(name, { name, content: "", kind, bytes, modifiedAt: stamp() });
     put("data.json", '{ "a": 1 }');
     put("recap.md", "# Recap\n\nAll done.");
     put("note.md", "# Shared note\n\nDecisions go here.");
     put("design.md", "# Design\n\nThe window.\n\n```mermaid\ngraph TD\n  A[Drawer] --> B[Window]\n```\n");
+    if (mode === "mixed") {
+        putFile("build-output.zip", "binary", Math.round(5.4 * 1024 * 1024));
+        putFile("screenshot.png", "image", 48_213);
+    }
     const lower = (s) => String(s || "").toLowerCase();
     const find = (name) => [...S.files.values()].find((f) => lower(f.name) === lower(name)) || null;
-    const size = (f) => new TextEncoder().encode(f.content).length;
+    const size = (f) => f.bytes ?? new TextEncoder().encode(f.content).length;
     const info = (f) => ({ name: f.name, size: size(f), modifiedAt: f.modifiedAt });
-    const artifact = (f) => ({ ...info(f), content: f.content, path: `${dir}\\${f.name}` });
+    const artifact = (f) => ({ ...info(f), content: f.content, path: `${dir}\\${f.name}`, ...(f.kind ? { kind: f.kind } : {}) });
     const rank = (n) => (lower(n) === "note.md" ? 0 : lower(n) === "recap.md" ? 1 : 2);
     const list = () =>
         [...S.files.values()].sort((a, b) => rank(a.name) - rank(b.name) || b.modifiedAt.localeCompare(a.modifiedAt)).map(info);
@@ -64,6 +73,7 @@ function fake(task) {
                 const cur = find(name);
                 if (method === "POST") {
                     if (body.create && cur) return json({ error: `${name} is already in this task's Artifacts.` }, 409);
+                    if (cur?.kind) return json({ error: `${cur.name} isn't a text file, so it can't be changed here.` }, 409);
                     if (typeof body.base === "string" && cur && cur.content !== body.base) {
                         return json({ error: `${cur.name} changed while you were editing it.` }, 409);
                     }
@@ -79,6 +89,8 @@ function fake(task) {
                 return json({ ok: true });
             case "/api/jarvis/artifacts/open-folder":
                 return json({ ok: true });
+            case "/api/jarvis/artifact/reveal":
+                return find(body.name) ? json({ ok: true }) : json({ error: `There is no artifact named ${body.name}.` }, 404);
         }
         return json({ error: "Not found" }, 404);
     };
@@ -92,7 +104,7 @@ function fake(task) {
         errors.push(`console.error: ${args.map(String).join(" ")}`);
         consoleError(...args);
     };
-    window.W = { S, calls, broadcasts, errors, put, find, dir, stamp };
+    window.W = { S, calls, broadcasts, errors, put, putFile, find, dir, stamp };
 }
 
 // ---- the window's checks ---------------------------------------------------------------------------------------------
@@ -303,6 +315,63 @@ function windowSteps(task) {
         $('[data-act="aw-folder"]').click();
         await until("the folder opens", () => calls.some((c) => c.path === "/api/jarvis/artifacts/open-folder" && c.body.id === task));
 
+        // ---- files that aren't text ----
+        const { putFile } = window.W;
+        const pictureIcon = (name) => !!item(name)?.querySelector(".aw-file-icon")?.innerHTML.includes('cx="6" cy="6.25"');
+        const reveals = (name) => calls.filter((c) => c.path === "/api/jarvis/artifact/reveal" && c.body.id === task && c.body.name === name).length;
+        const stateTitle = () => $(".aw-main .cw-state-title")?.textContent || "";
+        putFile("shot.png", "image", 2048);
+        putFile("broken.png", "image", 300);
+        putFile("tool.bin", "binary", Math.round(5.5 * 1024 * 1024));
+        putFile("huge.log", "large", 700 * 1024);
+        window.dispatchEvent(new Event("focus"));
+        await until("every file lists, whatever it is", () => ["shot.png", "broken.png", "tool.bin", "huge.log"].every((n) => item(n)));
+        check("the count takes every file", $(".aw-count").textContent === ` ${names().length}`);
+        check("pictures have the picture icon", pictureIcon("shot.png") && pictureIcon("broken.png") && !pictureIcon("tool.bin") && !pictureIcon("huge.log"));
+        check("the list says how big a file is", item("tool.bin").querySelector(".aw-file-meta").textContent.startsWith("5.5 MB \u00b7 "));
+
+        item("shot.png").click();
+        await shows("shot.png", () => $(".aw-img")?.complete && $(".aw-img").naturalWidth > 0);
+        const src = new URL($(".aw-img").src);
+        check("the picture comes from the service", src.pathname === "/api/jarvis/artifact/raw" && src.searchParams.get("id") === task && src.searchParams.get("name") === "shot.png");
+        check("the picture's address names its version", src.searchParams.get("v") === `${find("shot.png").modifiedAt}-2048`);
+        check("a picture has Show in folder and Delete, but no Edit", !!$('.aw-head [data-act="aw-reveal"]') && !!$('[data-act="aw-delete"]') && !$('[data-act="aw-edit"]'));
+        check("a picture's path shows", $(".aw-path")?.textContent === `${dir}\\shot.png`);
+        $('.aw-head [data-act="aw-reveal"]').click();
+        await until("Show in folder names the picture", () => reveals("shot.png") === 1);
+
+        item("broken.png").click();
+        await shows("broken.png", () => stateTitle() === "Couldn't show broken.png");
+        check("a picture that won't load says how big it is", $(".aw-main .cw-state-text").textContent.includes("300 B"));
+        check("and keeps Show in folder", !!$('.aw-head [data-act="aw-reveal"]'));
+
+        item("tool.bin").click();
+        await shows("tool.bin", () => stateTitle() === "tool.bin isn't a text file");
+        check("it says how big it is", $(".aw-main .cw-state-text").textContent.includes("5.5 MB"));
+        check("it has Delete, but no Edit", !!$('[data-act="aw-delete"]') && !$('[data-act="aw-edit"]') && !$(".aw-main pre, .aw-main .aw-md, .aw-main img"));
+        $('.cw-state-acts [data-act="aw-reveal"]').click();
+        await until("Show in folder names the file", () => reveals("tool.bin") === 1);
+
+        item("huge.log").click();
+        await shows("huge.log", () => stateTitle() === "huge.log is too large to show here");
+        check("a large file says how big it is", $(".aw-main .cw-state-text").textContent.includes("700 KB"));
+
+        location.hash = "#file=tool.bin&edit=1";
+        await shows("tool.bin", () => stateTitle() === "tool.bin isn't a text file");
+        await sleep(60);
+        check("a link to edit a file that isn't text shows it instead", !area() && location.hash === "#file=tool.bin");
+
+        // The file goes before Show in folder is pressed: the list catches up.
+        S.files.delete("tool.bin");
+        clearToast();
+        $('.cw-state-acts [data-act="aw-reveal"]').click();
+        await until("a file that's gone says so", () => toastText().includes("tool.bin"));
+        await until("and leaves the list", () => !names().includes("tool.bin"));
+        await shows("note.md", viewing);
+        for (const name of ["shot.png", "broken.png", "huge.log"]) S.files.delete(name);
+        window.dispatchEvent(new Event("focus"));
+        await until("the others go too", () => !names().some((n) => ["shot.png", "broken.png", "huge.log"].includes(n)));
+
         // ---- the task is removed during an edit ----
         $('[data-act="aw-edit"]').click();
         area().value = "Keep me";
@@ -463,6 +532,12 @@ const server = createServer((req, res) => {
         res.setHeader("Content-Type", "text/html");
         return res.end(artifactsPage());
     }
+    // A picture's bytes come from here, not the fake API, as <img> doesn't fetch. broken.png loads but won't decode:
+    // a 404 would log a console error.
+    if (url.pathname === "/api/jarvis/artifact/raw") {
+        res.setHeader("Content-Type", "image/png");
+        return res.end(url.searchParams.get("name") === "broken.png" ? Buffer.from("not a picture") : picture);
+    }
     const file = resolve(web, "." + decodeURIComponent(url.pathname));
     if (!file.startsWith(web + sep)) {
         res.writeHead(403).end();
@@ -528,6 +603,16 @@ try {
                         const w = await open("/artifacts.html?task=" + task + "#file=design.md", width, height, { offscreen: true });
                         await w.webContents.executeJavaScript(
                             "new Promise((r) => { const t = setInterval(() => { if (document.querySelector('.aw-md .mermaid.rendered svg')) { clearInterval(t); r(); } }, 20); setTimeout(() => { clearInterval(t); r(); }, 8000); })"
+                        );
+                        await wait(500);
+                        require("node:fs").writeFileSync(file, (await w.webContents.capturePage()).toPNG());
+                        w.destroy();
+                    }
+                    // A folder with every kind of file: a picture, and a file that isn't text.
+                    for (const [file, name] of [[shot.replace(/\\.png$/i, "-picture.png"), "screenshot.png"], [shot.replace(/\\.png$/i, "-other.png"), "build-output.zip"]]) {
+                        const w = await open("/artifacts.html?task=" + task + "&fake=mixed#file=" + name, 1080, 820, { offscreen: true });
+                        await w.webContents.executeJavaScript(
+                            "new Promise((r) => { const t = setInterval(() => { const i = document.querySelector('.aw-img'); if ((i && i.complete && i.naturalWidth) || document.querySelector('.aw-main .cw-state-title')) { clearInterval(t); r(); } }, 20); setTimeout(() => { clearInterval(t); r(); }, 8000); })"
                         );
                         await wait(500);
                         require("node:fs").writeFileSync(file, (await w.webContents.capturePage()).toPNG());

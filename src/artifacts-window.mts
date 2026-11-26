@@ -10,8 +10,10 @@ export const ARTIFACTS_WINDOW_SIZE = { width: 1080, height: 820 } as const;
 
 /** Task ids are UUIDs, stored lower case (asJarvisId in jarvis-store.mts). */
 const TASK_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-// The same names jarvis-store.mts accepts (artifactName); the harness checks the two agree.
-const FILE_NAME = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,78}\.(?:md|markdown|txt|json|ya?ml|csv|log|mmd)$/i;
+// The names jarvis-store.mts lists (isListedArtifactName): any file, without path separators, characters Windows
+// can't name, a leading dot or space, or a trailing dot or any kind of space. The harness checks the two agree.
+// eslint-disable-next-line no-control-regex
+const FILE_NAME = /^[^.\s\\/:*?"<>|\u0000-\u001f][^\\/:*?"<>|\u0000-\u001f]{0,254}$/;
 const RESERVED_NAME = /^(?:con|prn|aux|nul|com\d|lpt\d)(?:\.|$)/i;
 
 export interface ArtifactsWindowTarget {
@@ -24,7 +26,7 @@ export interface ArtifactsWindowTarget {
 }
 
 export function isArtifactFileName(name: unknown): name is string {
-    return typeof name === "string" && FILE_NAME.test(name) && !name.includes("..") && !RESERVED_NAME.test(name);
+    return typeof name === "string" && FILE_NAME.test(name) && !/[.\s]$/.test(name) && !RESERVED_NAME.test(name);
 }
 
 function taskOf(value: string | null): string | null {

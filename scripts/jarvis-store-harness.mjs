@@ -59,13 +59,104 @@ try {
     mkdirSync(join(store.artifactsDir(custom.id), "sub.md"));
     const names = (await store.listArtifacts(custom.id)).map((a) => a.name);
     assert.deepEqual(names.slice(0, 2), ["note.md", "recap.md"], "note.md, then recap.md, first");
-    assert.deepEqual(names.slice(2).sort(), ["design.md", "findings.md"], "temp files, other types and folders are left out");
+    assert.deepEqual(names.slice(2).sort(), ["binary.exe", "design.md", "findings.md"], "every file is listed, whatever its type; temp files and folders are left out");
     await assert.rejects(store.readArtifact(custom.id, "missing.md"), /no artifact named missing\.md/);
     await assert.rejects(store.readArtifact(custom.id, "../note.md"), /Name it like/);
     await assert.rejects(store.deleteArtifact(custom.id, "NOTE.md"), /shared note/);
     await store.deleteArtifact(custom.id, "design.md");
     await assert.rejects(store.deleteArtifact(custom.id, "design.md"), /no artifact named design\.md/);
     await assert.rejects(store.listArtifacts("00000000-0000-4000-8000-000000000000"), /Task not found/);
+
+    // ---- any file shows; only text is edited, and a new file still needs a text file's name ----
+    const artsDir = store.artifactsDir(custom.id);
+    const png = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
+    writeFileSync(join(artsDir, "shot.png"), png);
+    writeFileSync(join(artsDir, "tool.bin"), Buffer.from([0x4d, 0x5a, 0x00, 0x01, 0xff]));
+    writeFileSync(join(artsDir, "latin1.txt"), Buffer.from([0x63, 0x61, 0x66, 0xe9]));
+    writeFileSync(join(artsDir, "run.ps1"), "Write-Host hi\n");
+    writeFileSync(join(artsDir, "résumé – notes.md"), "# Ünïcode\n");
+    writeFileSync(join(artsDir, "huge.log"), "x".repeat(store.ARTIFACT_MAX + 1));
+    writeFileSync(join(artsDir, "wide.md"), "é".repeat(store.ARTIFACT_MAX));
+    const kinds = Object.fromEntries((await Promise.all(
+        ["shot.png", "tool.bin", "latin1.txt", "run.ps1", "résumé – notes.md", "huge.log", "wide.md", "binary.exe", "note.md"].map((n) => store.readArtifact(custom.id, n)),
+    )).map((a) => [a.name, a.kind]));
+    assert.deepEqual(kinds, {
+        "shot.png": "image",
+        "tool.bin": "binary",
+        "latin1.txt": "binary",
+        "run.ps1": "text",
+        "résumé – notes.md": "text",
+        "huge.log": "large",
+        "wide.md": "text",
+        "binary.exe": "text",
+        "note.md": "text",
+    }, "a picture, a binary, text that isn't UTF-8, a script, a Unicode name, too long, and long only in bytes");
+    const shot = await store.readArtifact(custom.id, "shot.png");
+    assert.equal(shot.content, "", "only text comes back as content");
+    assert.equal(shot.size, png.length);
+    assert.equal(shot.path, join(artsDir, "shot.png"));
+    assert.equal((await store.readArtifact(custom.id, "résumé – notes.md")).content, "# Ünïcode\n");
+    assert.ok((await store.listArtifacts(custom.id)).some((a) => a.name === "résumé – notes.md"), "a Unicode name is listed");
+    const script = await store.readArtifact(custom.id, "run.ps1");
+    await store.writeArtifact(custom.id, "run.ps1", "Write-Host bye\n", { base: script.content });
+    assert.equal(readFileSync(join(artsDir, "run.ps1"), "utf8"), "Write-Host bye\n", "an existing text file of any type can be edited");
+    await store.appendArtifact(custom.id, "run.ps1", "# added", "me");
+    assert.match(readFileSync(join(artsDir, "run.ps1"), "utf8"), /^Write-Host bye\n\n## .+ · me\n\n# added\n$/);
+    await assert.rejects(store.writeArtifact(custom.id, "new.ps1", "x"), /Name it like design\.md/, "a new file still needs a text file's name");
+    await assert.rejects(store.appendArtifact(custom.id, "new.exe", "x", "me"), /Name it like design\.md/);
+    await assert.rejects(store.writeArtifact(custom.id, "tool.bin", "x"), /tool\.bin isn't a text file/);
+    await assert.rejects(store.writeArtifact(custom.id, "latin1.txt", "x"), /isn't a text file/, "a save can't damage text in another encoding");
+    await assert.rejects(store.appendArtifact(custom.id, "shot.png", "x", "me"), /shot\.png isn't a text file/);
+    await assert.rejects(store.appendArtifact(custom.id, "huge.log", "x", "me"), /huge\.log is too large to change here/);
+    await assert.rejects(store.writeArtifact(custom.id, "shot.png", "x", { create: true }), /already an artifact named shot\.png/);
+    await assert.rejects(store.writeArtifact(custom.id, "sub.md", "x"), /sub\.md is a folder/);
+    assert.equal(readFileSync(join(artsDir, "tool.bin")).length, 5, "a refused write leaves the file alone");
+    assert.deepEqual(await store.artifactFile(custom.id, " tool.bin "), { name: "tool.bin", path: join(artsDir, "tool.bin"), size: 5 });
+    await assert.rejects(store.artifactFile(custom.id, "missing.bin"), /no artifact named missing\.bin/);
+    await assert.rejects(store.artifactFile(custom.id, "sub.md"), /no artifact named sub\.md/);
+    for (const bad of ["../note.md", "..\\note.md", "C:\\x.png", ".hidden", "con.png", "x.png.", "a\u0001.png", 7]) {
+        await assert.rejects(store.artifactFile(custom.id, bad), /Name it like/, `artifactFile rejects ${String(bad)}`);
+    }
+    assert.equal(store.artifactImageType("A.PNG"), "image/png");
+    assert.equal(store.artifactImageType("x.svg"), "image/svg+xml");
+    assert.equal(store.artifactImageType("x.png.exe"), null);
+    for (const n of ["shot.png", "tool.bin", "latin1.txt", "run.ps1", "résumé – notes.md", "huge.log", "wide.md", "binary.exe"]) {
+        await store.deleteArtifact(custom.id, n);
+    }
+    assert.ok(!existsSync(join(artsDir, "tool.bin")), "any file can be deleted");
+    // A name ending in another kind of space isn't listed: trimmed, as names asked for are, it would be another file.
+    const oddNames = ["report.md\u00a0", "report.md\u3000", "report.md\ufeff", "report.md\u2028"];
+    writeFileSync(join(artsDir, "report.md"), "plain");
+    for (const n of oddNames) writeFileSync(join(artsDir, n), "odd");
+    const listedNames = (await store.listArtifacts(custom.id)).map((a) => a.name);
+    assert.deepEqual(listedNames.filter((n) => n.startsWith("report.md")), ["report.md"], "only the plain name is listed");
+    for (const n of listedNames) assert.equal(n.trim(), n, `${JSON.stringify(n)} is listed as it's asked for`);
+    for (const n of oddNames) assert.equal(store.isListedArtifactName(n), false);
+    await store.deleteArtifact(custom.id, "report.md");
+    for (const n of oddNames) {
+        assert.ok(existsSync(join(artsDir, n)), "deleting report.md leaves the odd names alone");
+        rmSync(join(artsDir, n));
+    }
+    // The app's own notes stay text whatever a worker's shell wrote in them (another encoding, UTF-16), so the
+    // shared note never locks: it reads as it did before, and appends and edits go through.
+    const notePathOnDisk = join(artsDir, "note.md");
+    const recapPathOnDisk = join(artsDir, "recap.md");
+    const noteBytes = readFileSync(notePathOnDisk);
+    const recapBytes = existsSync(recapPathOnDisk) ? readFileSync(recapPathOnDisk) : null;
+    writeFileSync(notePathOnDisk, Buffer.concat([Buffer.from("caf"), Buffer.from([0xe9]), Buffer.from(" with a NUL \u0000 here\n")]));
+    const oddNote = await store.readArtifact(custom.id, "NOTE.md");
+    assert.equal(oddNote.kind, "text", "note.md is text, whatever bytes it has");
+    assert.equal(oddNote.content, "caf\ufffd with a NUL \u0000 here\n");
+    await store.appendNote(custom.id, "Still takes entries.", "me");
+    assert.match(await store.readNote(custom.id), /^caf\ufffd with a NUL [^]*## .+ · me\n\nStill takes entries\.\n$/);
+    await store.writeNote(custom.id, "café\n", await store.readNote(custom.id));
+    assert.equal(readFileSync(notePathOnDisk, "utf8"), "café\n", "an edit fixes it");
+    writeFileSync(recapPathOnDisk, Buffer.from([0xff, 0xfe, 0x23, 0x00, 0x0a, 0x00]));
+    assert.equal((await store.readArtifact(custom.id, "recap.md")).kind, "text", "recap.md too");
+    await store.writeArtifact(custom.id, "recap.md", "# Recap\n");
+    writeFileSync(notePathOnDisk, noteBytes);
+    if (recapBytes) writeFileSync(recapPathOnDisk, recapBytes);
+    else rmSync(recapPathOnDisk);
     // A cap per task, so a runaway worker can't fill the disk with files.
     for (let i = (await store.listArtifacts(custom.id)).length; i < store.ARTIFACTS_PER_TASK; i++) {
         await store.writeArtifact(custom.id, `f${i}.md`, "x");
