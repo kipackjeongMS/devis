@@ -19,7 +19,6 @@ colors:
   fill-selected: "rgba(255, 255, 255, .08)"
   neutral-tint: "rgba(255, 255, 255, .06)"
   edge: "rgba(255, 255, 255, .12)"
-  edge-top: "rgba(255, 255, 255, .24)"
   divider: "rgba(255, 255, 255, .07)"
   stroke-input: "rgba(255, 255, 255, .42)"
   text-1: "#f2f2f2"
@@ -195,7 +194,7 @@ The living reference is `web/design-system.html`. It renders the real `web/style
 **Key Characteristics:**
 - Floating glass panes separated by 8px gutters of field, never edge-to-edge chrome.
 - A solid near-black field with no gradient or grid. The field, the glass and the text carry no hue.
-- Luminous hairline edges with a brighter top edge and an inner top sheen, so every pane catches light from above.
+- Flat glass with one even hairline edge all the way around: no white wash, inner top sheen or brighter top edge.
 - One emissive cyan, with glow reserved for selection, focus, running state and the primary command.
 - Cascadia Mono for every readout: IDs, branches, paths, build numbers and zoom levels.
 - One authored motion: an opened pull request rises into the pane.
@@ -210,7 +209,7 @@ The living reference is `web/design-system.html`. It renders the real `web/style
 
 - **The field.** `ink` is a solid neutral near-black, with no light pools or grid over it. Over the Mica backdrop the ink turns 64% opaque so the wallpaper tint comes through it.
 - **Glass.** Tints step up in light: `well` (recessed: diff bodies, code, diagram frames, the pipeline canvas) → `glass` (panes, 60%) → `glass-2` and `glass-3` (raised surfaces inside panes) → `glass-head` (frosted sticky heads, near-opaque so diagrams and code don't ghost through) → `glass-float` (flyouts, menus, toasts, dialogs; near-opaque so they stay legible over anything).
-- **Edges.** `edge` is the luminous hairline around glass; `edge-top` is its brighter top edge. `divider` separates content inside a pane. `gloss` is a faint white wash across the top of each pane, so black glass still catches light.
+- **Edges.** `edge` is the hairline around glass, the same on all four sides. `divider` separates content inside a pane. Glass is a flat tint: no white wash, inner sheen or brighter top edge.
 - **Text.** Neutral whites: `text-1` for primary text, `text-2` for secondary, `text-3` for captions and meta, `text-off` for disabled.
 
 ### Status and severity
@@ -270,9 +269,9 @@ Every font size comes from one ramp of role tokens in `web/style.css`: `--fs-dis
 
 ## Elevation & Depth
 
-Depth is a stack of light, not a stack of grays: the ink field → floating glass panes → raised glass inside panes → frosted heads → frosted floats → dialogs over smoke. Each tier is more opaque than the one below it. Panes read as glass through their tint, edge and sheen; blur is reserved for the small chrome that sits over content.
+Depth is a stack of light, not a stack of grays: the ink field → floating glass panes → raised glass inside panes → frosted heads → frosted floats → dialogs over smoke. Each tier is more opaque than the one below it. Panes read as glass through their tint and edge; blur is reserved for the small chrome that sits over content.
 
-- **Panes** are tinted, not blurred (`glass`), with the `edge` hairline, the `edge-top` top edge, an inner top sheen (`inset 0 1px 0 rgba(255,255,255,.08)`), the `gloss` wash and a soft drop shadow. A pane-sized blur re-blurs the field on every scroll frame and costs about half the frame rate.
+- **Panes** are tinted, not blurred (`glass`), with the `edge` hairline and a soft drop shadow. A pane-sized blur re-blurs the field on every scroll frame and costs about half the frame rate.
 - **Heads** (the detail head and other sticky heads) frost the pane's own content as it scrolls under them (`blur(24px) saturate(160%)`).
 - **Floats** (flyouts, menus, the selection toolbar, toasts and the zoom cluster) use a stronger blur (`blur(32px) saturate(170%)`) and the flyout shadow.
 - **Dialogs** add the deep dialog shadow and sit over a 62% ink scrim, never a blur. The scrim covers the whole window, so a blur there redraws everything under it on every frame anything changes: measured on a machine without a GPU, it held the task sheet at 13–23 fps and about 100ms from a keypress to the screen.
@@ -296,7 +295,7 @@ Motion uses the decelerate curve `cubic-bezier(0,0,0,1)` at 83, 167, 250 and 333
 
 **The Near-Opaque Float Rule.** Anything that opens over content (heads, flyouts, menus, dialogs) is at least 84% opaque. Menus inside the frosted detail head can't blur the content under them, so their opacity is what keeps them legible.
 
-**The Fallback Rule.** Glass must degrade to something solid and clear. Under `prefers-reduced-transparency`, the glass tokens turn opaque, gloss and blur are off and the field is plain ink. In forced-colors mode, blur, the field and pane shadows are removed and system colors take over. Without a window backdrop, the field renders on solid ink.
+**The Fallback Rule.** Glass must degrade to something solid and clear. Under `prefers-reduced-transparency`, the glass tokens turn opaque, blur is off and the field is plain ink. In forced-colors mode, blur, the field and pane shadows are removed and system colors take over. Without a window backdrop, the field renders on solid ink.
 
 **The Lean Rule.** Without GPU compositing (a virtual machine, a remote desktop) Chromium draws every frame on the CPU, so the app draws lean (`html.lean`): nothing frosts (heads and floats turn opaque instead of blurring), and dialogs and the task sheet fade in over 83ms instead of scaling, since a scaling sheet is redrawn whole every frame. The desktop shell picks it from the window's GPU status (`?render=lean`; `ADO_PR_OPS_RENDER=lean|full` overrides it); a browser asks WebGL whether it renders in software. Measured on such a machine, every view then holds the display's full rate, the task sheet included.
 
@@ -359,8 +358,8 @@ Each reviewer is a persona chip: an accent-tinted 24px avatar with initials, plu
 
 ### Flyouts, dialogs and toasts
 
-- Menus, the inbox, the comments drawer, severity flyouts and the selection toolbar are frosted floats: `glass-float`, 10px radius, the luminous edge, the sheen and the flyout shadow, with a fade and a short slide.
-- Dialogs are 14px frosted floats centered over smoke, with a brighter top edge and the dialog shadow. They focus their first field. Esc closes the topmost layer and returns focus to the invoker.
+- Menus, the inbox, the comments drawer, severity flyouts and the selection toolbar are frosted floats: `glass-float`, 10px radius, the hairline edge and the flyout shadow, with a fade and a short slide.
+- Dialogs are 14px frosted floats centered over smoke, with the hairline edge and the dialog shadow. They focus their first field. Esc closes the topmost layer and returns focus to the invoker.
 - Toasts are frosted floats bottom-center with a glowing status dot.
 
 ### Empty state: the scanning reticle
@@ -385,7 +384,7 @@ The Pipelines feature chains Azure DevOps build pipelines on a canvas. Each bloc
 
 #### Blocks
 
-- A block is a 248×88 glass tile with a 10px radius, a hairline edge and a sheen. It shows the pipeline name (15/20 semibold), the project, the branch in mono, a settings glyph with the number of parameters it changes (only when it changes any) and, during a run, a status.
+- A block is a 248×88 glass tile with a 10px radius and a hairline edge. It shows the pipeline name (15/20 semibold), the project, the branch in mono, a settings glyph with the number of parameters it changes (only when it changes any) and, during a run, a status.
 - Tone lives in the border: running is cyan with a cyan underglow, succeeded is mint, partially succeeded is amber, failed is rose, and skipped or cancelled sink to a darker tile with dimmed text. A block that is waiting in a run has a dashed border.
 - A running block shows a 2px glowing indeterminate bar on its bottom edge. Never use a colored side stripe.
 - The output port (a 14px ring on the right edge) appears on hover, focus or selection, and glows on hover. Drag from it onto another block to connect. A valid target turns cyan; a target that would create a cycle or a duplicate arrow turns rose.

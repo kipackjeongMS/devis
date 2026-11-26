@@ -51,8 +51,6 @@
   --card-2: rgba(255, 255, 255, .025);
   /* A card with no stroke (a quote, a table head, a note): a lift on dark, a gray wash on light. */
   --card-flat: rgba(255, 255, 255, .04);
-  /* A faint specular wash across the top of each pane, so black glass still catches light. */
-  --gloss: linear-gradient(168deg, rgba(255, 255, 255, .06), rgba(255, 255, 255, 0) 36%);
   --blur: blur(24px) saturate(160%);
   --blur-float: blur(32px) saturate(170%);
 
@@ -67,8 +65,6 @@
 
   /* Strokes: luminous hairlines */
   --edge: rgba(255, 255, 255, .12);
-  --edge-top: rgba(255, 255, 255, .24);
-  --sheen: inset 0 1px 0 rgba(255, 255, 255, .08);
   --divider: rgba(255, 255, 255, .07);
   --stroke-card: rgba(255, 255, 255, .09);
   --stroke-control: rgba(255, 255, 255, .085);
@@ -186,7 +182,6 @@
   --card: rgba(255, 255, 255, .64);
   --card-2: rgba(255, 255, 255, .42);
   --card-flat: rgba(0, 0, 0, .035);
-  --gloss: linear-gradient(168deg, rgba(255, 255, 255, .6), rgba(255, 255, 255, 0) 36%);
 
   --fill-hover: rgba(0, 0, 0, .045);
   --fill-press: rgba(0, 0, 0, .03);
@@ -197,8 +192,6 @@
   --input-active: #ffffff;
 
   --edge: rgba(0, 0, 0, .1);
-  --edge-top: rgba(0, 0, 0, .07);
-  --sheen: inset 0 1px 0 rgba(255, 255, 255, .75);
   --divider: rgba(0, 0, 0, .08);
   --stroke-card: rgba(0, 0, 0, .08);
   --stroke-control: rgba(0, 0, 0, .1);
@@ -306,10 +299,9 @@ html.glass { --field-base: var(--field-glass); background: transparent; }
 .pipeline-catalog,
 .chain-pane {
   border: 1px solid var(--edge);
-  border-top-color: var(--edge-top);
   border-radius: var(--r-pane);
-  background: var(--gloss), var(--glass);
-  box-shadow: var(--sheen), var(--shadow-pane);
+  background: var(--glass);
+  box-shadow: var(--shadow-pane);
 }
 
 button, input, select, textarea { font: inherit; color: inherit; }
@@ -2280,10 +2272,9 @@ button.thread-loc:focus-visible { outline-offset: -2px; }
   padding: 20px 24px 24px;
   overflow-y: auto;
   border: 1px solid var(--edge);
-  border-top-color: var(--edge-top);
   border-radius: var(--r-pane);
   background: var(--glass-float);
-  box-shadow: var(--sheen), var(--shadow-dialog);
+  box-shadow: var(--shadow-dialog);
   -webkit-backdrop-filter: var(--blur-float);
   backdrop-filter: var(--blur-float);
   animation: dialog-in var(--t-slow) var(--ease);
@@ -2542,7 +2533,6 @@ button.thread-loc:focus-visible { outline-offset: -2px; }
   border: 1px solid rgb(var(--critical-rgb) / .3);
   border-radius: var(--r-surface);
   background: var(--critical-bg);
-  box-shadow: var(--sheen);
   color: var(--text-1);
   font-size: var(--fs-label);
 }
@@ -2584,9 +2574,8 @@ button.thread-loc:focus-visible { outline-offset: -2px; }
 .inbox-flyout,
 .toast {
   border-color: var(--edge);
-  border-top-color: var(--edge-top);
   background: var(--glass-float);
-  box-shadow: var(--sheen), var(--shadow-flyout);
+  box-shadow: var(--shadow-flyout);
   -webkit-backdrop-filter: var(--blur-float);
   backdrop-filter: var(--blur-float);
 }
@@ -3057,7 +3046,7 @@ svg.chain-edges { position: absolute; overflow: visible; pointer-events: none; }
   border-radius: var(--r-surface);
   /* Near-opaque instead of frosted: dozens of blurred blocks re-blur on every pan/drag frame. */
   background: var(--block);
-  box-shadow: var(--sheen), 0 10px 24px -12px rgb(0 0 0 / calc(.65 * var(--shade)));
+  box-shadow: 0 10px 24px -12px rgb(0 0 0 / calc(.65 * var(--shade)));
   color: var(--text-1);
   cursor: grab;
   transition: background var(--t-fast) linear, border-color var(--t-fast) linear, box-shadow var(--t-normal) var(--ease);
@@ -3069,17 +3058,17 @@ svg.chain-edges { position: absolute; overflow: visible; pointer-events: none; }
 .chain-node.tone-bad { border-color: color-mix(in srgb, var(--critical) 60%, transparent); }
 .chain-node.tone-run {
   border-color: color-mix(in srgb, var(--accent) 60%, transparent);
-  box-shadow: var(--sheen), 0 10px 28px -12px rgb(var(--accent-rgb) / .5);
+  box-shadow: 0 10px 28px -12px rgb(var(--accent-rgb) / .5);
 }
 .chain-node.tone-idle { border-style: dashed; border-color: var(--stroke-control-2); }
 .chain-node.tone-off { background: var(--block-off); }
 .chain-node.tone-off :is(.chain-node-name, .chain-node-branch) { color: var(--text-3); }
-.chain-node.selected { z-index: 1; border-color: var(--accent); box-shadow: var(--sheen), 0 0 0 1px var(--accent), 0 0 26px -6px var(--accent-glow); }
+.chain-node.selected { z-index: 1; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 26px -6px var(--accent-glow); }
 .chain-node.connect-source { border-color: var(--accent); }
 .chain-node.drop-ok { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--block-solid)); }
 .chain-node.drop-bad { border-color: var(--critical); background: color-mix(in srgb, var(--critical) 12%, var(--block-solid)); cursor: not-allowed; }
 /* A dragged block is briefly lifted off the canvas, so it borrows the flyout shadow. */
-.chain-node.dragging { z-index: 2; background: var(--block-drag); box-shadow: var(--sheen), var(--shadow-flyout); cursor: grabbing; transition: none; }
+.chain-node.dragging { z-index: 2; background: var(--block-drag); box-shadow: var(--shadow-flyout); cursor: grabbing; transition: none; }
 /* While a run is live, blocks it doesn't include step back until hovered or selected. */
 .chain-node.is-out { opacity: .45; }
 .chain-node.is-out:is(:hover, :focus-visible, .selected) { opacity: 1; }
@@ -3281,7 +3270,7 @@ svg.chain-edges { position: absolute; overflow: visible; pointer-events: none; }
   border: 1px solid var(--edge);
   border-radius: var(--r-surface);
   background: var(--glass-float);
-  box-shadow: var(--sheen), var(--shadow-flyout);
+  box-shadow: var(--shadow-flyout);
   -webkit-backdrop-filter: var(--blur-float);
   backdrop-filter: var(--blur-float);
 }
@@ -3748,7 +3737,7 @@ svg.chain-edges { position: absolute; overflow: visible; pointer-events: none; }
     border-radius: var(--r-surface);
     /* A tall sheet over a live canvas: solid, so it never re-blurs the graph. */
     background: var(--surface-sheet);
-    box-shadow: var(--sheen), var(--shadow-flyout);
+    box-shadow: var(--shadow-flyout);
   }
   .pipelines-view.has-selection .chain-inspector { display: flex; animation: fade-in var(--t-normal) linear; }
 }
@@ -5691,7 +5680,7 @@ body.first-run-on .feature-nav { visibility: hidden; }
   border: 1px solid var(--edge);
   border-radius: var(--r-pane);
   background: var(--glass-float);
-  box-shadow: var(--shadow-dialog), var(--sheen);
+  box-shadow: var(--shadow-dialog);
   animation: fade-in var(--t-slow) var(--ease);
 }
 .fr-rail { display: flex; flex-direction: column; gap: 4px; padding: 20px 14px; border-right: 1px solid var(--divider); background: var(--card-2); }
@@ -6125,11 +6114,10 @@ select.jv-field { width: 100%; }
   min-height: 0;
   overflow: hidden;
   border: 1px solid var(--edge);
-  border-top-color: var(--edge-top);
   border-radius: var(--r-pane);
   /* Opaque: a sheet this large would otherwise show Today through it. */
   background: var(--surface-sheet);
-  box-shadow: var(--sheen), var(--shadow-dialog);
+  box-shadow: var(--shadow-dialog);
   animation: dialog-in var(--t-slow) var(--ease);
 }
 .tm:focus { outline: none; }
@@ -6766,7 +6754,7 @@ textarea.tv-input { min-height: 52px; resize: vertical; }
   transition: opacity var(--t-normal) var(--ease), transform var(--t-normal) var(--ease), border-color var(--t-fast) var(--ease), color var(--t-fast) var(--ease), visibility 0s linear var(--t-normal);
 }
 .chat-jump.is-shown { opacity: 1; visibility: visible; transform: translate(-50%, 0); transition-delay: 0s; }
-.chat-jump:hover { border-color: var(--edge-top); background-image: linear-gradient(var(--fill-hover), var(--fill-hover)); color: var(--text-1); }
+.chat-jump:hover { border-color: var(--stroke-control-2); background-image: linear-gradient(var(--fill-hover), var(--fill-hover)); color: var(--text-1); }
 .chat-jump:active { background-image: linear-gradient(var(--fill-press), var(--fill-press)); }
 .chat-jump:focus-visible { border-radius: 50%; }
 .chat-jump svg.ic { width: 16px; height: 16px; }
@@ -7064,7 +7052,7 @@ textarea.tv-input { min-height: 52px; resize: vertical; }
   cursor: zoom-in;
 }
 .chat-img img { display: block; max-width: 240px; max-height: 180px; object-fit: contain; }
-.chat-img:hover { border-color: var(--edge-top); }
+.chat-img:hover { border-color: var(--stroke-control-2); }
 .chat-img:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .chat-imgs.small .chat-img img { max-width: 72px; max-height: 54px; }
 /* Images waiting to go with the next message, over the box. */
@@ -7240,7 +7228,7 @@ body.layout-stacked .reading-pane {
   z-index: 20;
   display: none;
   background: var(--surface-sheet);
-  box-shadow: var(--sheen), var(--shadow-dialog);
+  box-shadow: var(--shadow-dialog);
 }
 body.layout-stacked .reading-pane.open { display: block; }
 body.layout-stacked { --pane-pad: 16px; }
@@ -7352,7 +7340,6 @@ html.lean .jv-layer.anim .jv-scrim { animation: fade-in var(--t-fast) linear; }
     --well: #0a0a0a;
     --blur: none;
     --blur-float: none;
-    --gloss: none;
     --rt-block: #1c1c1c;
     --rt-block-off: #111111;
     --rt-inspector: #0e0e0e;
@@ -7364,7 +7351,6 @@ html.lean .jv-layer.anim .jv-scrim { animation: fade-in var(--t-fast) linear; }
     --glass-head: #f6f6f6;
     --glass-float: #ffffff;
     --well: #efefef;
-    --gloss: none;
     --rt-block: #ffffff;
     --rt-block-off: #f3f3f3;
     --rt-inspector: #f6f6f6;
@@ -7412,10 +7398,9 @@ html.lean .jv-layer.anim .jv-scrim { animation: fade-in var(--t-fast) linear; }
   margin: 0 var(--gutter) var(--gutter);
   overflow: hidden;
   border: 1px solid var(--edge);
-  border-top-color: var(--edge-top);
   border-radius: var(--r-pane);
-  background: var(--gloss), var(--glass);
-  box-shadow: var(--sheen), var(--shadow-pane);
+  background: var(--glass);
+  box-shadow: var(--shadow-pane);
   font-size: var(--fs-caption);
   line-height: var(--lh-caption);
 }
@@ -7480,10 +7465,9 @@ html.lean .jv-layer.anim .jv-scrim { animation: fade-in var(--t-fast) linear; }
   margin: 0 var(--gutter) var(--gutter);
   overflow: hidden;
   border: 1px solid var(--edge);
-  border-top-color: var(--edge-top);
   border-radius: var(--r-pane);
-  background: var(--gloss), var(--glass);
-  box-shadow: var(--sheen), var(--shadow-pane);
+  background: var(--glass);
+  box-shadow: var(--shadow-pane);
   font-size: var(--fs-caption);
   line-height: var(--lh-caption);
 }
@@ -7559,10 +7543,9 @@ html.lean .jv-layer.anim .jv-scrim { animation: fade-in var(--t-fast) linear; }
   margin: 0 var(--gutter) var(--gutter);
   overflow: hidden;
   border: 1px solid var(--edge);
-  border-top-color: var(--edge-top);
   border-radius: var(--r-pane);
-  background: var(--gloss), var(--glass);
-  box-shadow: var(--sheen), var(--shadow-pane);
+  background: var(--glass);
+  box-shadow: var(--shadow-pane);
   font-size: var(--fs-caption);
   line-height: var(--lh-caption);
 }
@@ -8300,7 +8283,6 @@ html.lean .jv-layer.anim .jv-scrim { animation: fade-in var(--t-fast) linear; }
   width: min(420px, calc(100vw - 24px));
   padding: 10px;
   border: 1px solid var(--edge);
-  border-top-color: var(--edge-top);
   border-radius: var(--r-surface);
   background: var(--glass-float);
   box-shadow: var(--shadow-flyout);
@@ -8364,7 +8346,6 @@ html.lean .jv-layer.anim .jv-scrim { animation: fade-in var(--t-fast) linear; }
     min-height: 48px;
     padding: 6px 6px 6px 14px;
     border: 1px solid var(--edge);
-    border-top-color: var(--edge-top);
     border-radius: var(--r-surface);
     background: var(--glass-float);
     box-shadow: var(--shadow-flyout);
