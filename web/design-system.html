@@ -67,15 +67,15 @@
   /* Foundations */
   .ds-depth { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; padding: 24px; border-radius: var(--r-pane);
     background: repeating-linear-gradient(135deg, rgb(var(--accent-rgb) / .1) 0 2px, transparent 2px 14px), var(--ink); }
-  .ds-tier { display: flex; min-height: 136px; flex-direction: column; justify-content: flex-end; gap: 2px; padding: 12px; border: 1px solid var(--edge); border-top-color: var(--edge-top); border-radius: var(--r-surface); }
+  .ds-tier { display: flex; min-height: 136px; flex-direction: column; justify-content: flex-end; gap: 2px; padding: 12px; border: 1px solid var(--edge); border-radius: var(--r-surface); }
   .ds-tier strong { font-size: var(--fs-label); line-height: 20px; }
   .ds-tier small { color: var(--text-3); font: var(--fs-caption)/var(--lh-caption) var(--mono); }
   .ds-tier.t-field { border-style: dashed; border-color: var(--stroke-control); background: transparent; }
-  .ds-tier.t-pane { background: var(--glass); box-shadow: var(--sheen), var(--shadow-pane); }
+  .ds-tier.t-pane { background: var(--glass); box-shadow: var(--shadow-pane); }
   .ds-tier.t-raised { background: var(--glass-2); }
   .ds-tier.t-head { background: var(--glass-head); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); }
   .ds-tier.t-float { background: var(--glass-float); box-shadow: var(--shadow-flyout); -webkit-backdrop-filter: var(--blur-float); backdrop-filter: var(--blur-float); }
-  .ds-tier.t-dialog { border-radius: var(--r-pane); background: var(--glass-float); box-shadow: var(--sheen), var(--shadow-dialog); }
+  .ds-tier.t-dialog { border-radius: var(--r-pane); background: var(--glass-float); box-shadow: var(--shadow-dialog); }
   .ds-swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); gap: 0 20px; }
   .ds-swatch { display: flex; min-width: 0; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--divider); }
   .ds-chip { flex: none; width: 36px; height: 36px; border: 1px solid var(--stroke-card); border-radius: var(--r-control);
@@ -383,7 +383,7 @@
         <p class="ds-text">One emissive cyan is the only brand color. Glass, edges and text stay neutral black, gray and white; hue is evidence. Chips sit over a checkerboard so translucent tokens show their alpha.</p>
         <div class="glass-pane ds-stage">
           <div class="ds-block"><p class="ds-cap">Field and glass</p><div class="ds-swatches" data-swatches="ink ink-2 ink-3 well glass glass-2 glass-3 glass-head glass-float card card-2 card-flat"></div></div>
-          <div class="ds-block"><p class="ds-cap">Fills and strokes</p><div class="ds-swatches" data-swatches="fill-hover fill-press fill-selected control control-hover control-press input-active edge edge-top divider stroke-card stroke-control stroke-control-2 stroke-input"></div></div>
+          <div class="ds-block"><p class="ds-cap">Fills and strokes</p><div class="ds-swatches" data-swatches="fill-hover fill-press fill-selected control control-hover control-press input-active edge divider stroke-card stroke-control stroke-control-2 stroke-input"></div></div>
           <div class="ds-block"><p class="ds-cap">Text</p><div class="ds-swatches" data-swatches="text-1 text-2 text-3 text-off"></div></div>
           <div class="ds-block"><p class="ds-cap">Accent</p><div class="ds-swatches" data-swatches="accent accent-hover accent-press accent-text accent-tint accent-tint-2 accent-glow on-accent focus"></div></div>
           <div class="ds-block"><p class="ds-cap">Status and diff</p><div class="ds-swatches" data-swatches="success success-tint caution caution-tint critical critical-hover critical-tint critical-bg on-critical neutral-tint add-bg del-bg"></div></div>
